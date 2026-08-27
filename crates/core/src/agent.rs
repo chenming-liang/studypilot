@@ -40,6 +40,8 @@ pub struct Agent {
     tools: Arc<ToolBox>,
     system_prompt: Option<Arc<str>>,
     max_rounds: usize,
+    /// Context 预算（字符）；None = 不裁剪。默认启用 DEFAULT_CONTEXT_BUDGET_CHARS。
+    context_budget: Option<usize>,
 }
 
 impl Agent {
@@ -49,6 +51,7 @@ impl Agent {
             tools: Arc::new(ToolBox::new()),
             system_prompt: None,
             max_rounds: DEFAULT_MAX_ROUNDS,
+            context_budget: Some(crate::context::DEFAULT_CONTEXT_BUDGET_CHARS),
         }
     }
 
@@ -68,6 +71,20 @@ impl Agent {
         self
     }
 
+    /// 自定义上下文字符预算（Context Manager，超限裁掉最老的轮次）。
+    #[must_use]
+    pub fn with_context_budget(mut self, budget_chars: usize) -> Self {
+        self.context_budget = Some(budget_chars);
+        self
+    }
+
+    /// 关闭历史裁剪（全量发送，行为回到旧版）。
+    #[must_use]
+    pub fn without_context_trim(mut self) -> Self {
+        self.context_budget = None;
+        self
+    }
+
     /// 单轮入口（M2 兼容）：从用户输入到最终文本答案。
     pub async fn run(&self, user_input: &str) -> Result<String> {
         let mut msgs: Vec<Message> = Vec::new();
@@ -80,12 +97,28 @@ impl Agent {
     }
 
     /// 多轮入口（M7）：传入已有历史（不含 system prompt），返回完整结果。
+    /// 超预算时先经 Context Manager 裁剪（tool_calls 配对不会被拆散）。
     pub async fn run_messages(&self, history: &[Message]) -> Result<AgentResult> {
+        let trimmed = match self.context_budget {
+            Some(budget) => crate::context::trim_history(history, budget),
+            None => crate::context::TrimmedHistory {
+                messages: history.to_vec(),
+                omitted_rounds: 0,
+                omitted_chars: 0,
+            },
+        };
+        if trimmed.omitted_rounds > 0 {
+            tracing::info!(
+                omitted_rounds = trimmed.omitted_rounds,
+                omitted_chars = trimmed.omitted_chars,
+                "context manager: 早期对话已省略"
+            );
+        }
         let mut msgs: Vec<Message> = Vec::new();
         if let Some(sys) = &self.system_prompt {
             msgs.push(Message::system(sys.to_string()));
         }
-        msgs.extend_from_slice(history);
+        msgs.extend(trimmed.messages);
         self.run_loop(&mut msgs).await
     }
 

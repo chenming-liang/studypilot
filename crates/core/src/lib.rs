@@ -4,6 +4,7 @@
 //! 事件通道与中断属 M4；具体工具实现属 crates/tools（M7）。
 
 pub mod agent;
+pub mod context;
 pub mod message;
 pub mod mock;
 pub mod parse;
@@ -11,6 +12,7 @@ pub mod provider;
 pub mod tool;
 
 pub use agent::{Agent, AgentResult, DEFAULT_MAX_ROUNDS, ToolTraceEntry};
+pub use context::{trim_history, DEFAULT_CONTEXT_BUDGET_CHARS};
 pub use message::{Function, Message, Role, ToolCall};
 pub use mock::MockProvider;
 pub use parse::{first_json_block, trim_code_fence};

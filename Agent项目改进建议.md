@@ -1555,3 +1555,528 @@ Rust workspace
 > **现在就用 Git。**
 
 而且你不需要把 Git 学得很深。对你当前阶段，先真正掌握 **`status / diff / add / commit / log / branch / switch / merge / restore / reset`** 这几个命令，就已经足够覆盖 90% 的单人开发场景。
+
+
+我同意，而且我觉得这是你这个项目目前**比较明显的短板之一**。
+
+从你给我的架构来看，后端其实比前端交互成熟得多：Agent Loop、RAG、成本控制、Session、Review 状态机都已经有比较清晰的设计；但用户面对的还是一套比较传统的 **TUI + slash command** 交互。你的文档里目前明确涉及 `/import`、`/review`、`/outline`、`/delete`、`/move`、`/model`、`/budget`、`/sessions`、`/open` 等命令。
+
+我认为问题不是“命令太少”，而是：
+
+> **用户需要先学习你的内部数据模型，才能自然地使用 Agent。**
+
+这和一个 Study Agent 应该有的交互方式其实是冲突的。
+
+---
+
+# 1. 现在的交互逻辑有一点“工具感”太强
+
+比如你现在实际上有：
+
+```text
+/import <dir> [--course 名>
+/review <课程> [概念] [--n 数量]
+/delete
+/move
+/outline
+/model
+/budget
+/sessions
+/open
+```
+
+这套设计对于**开发者**很合理。
+
+因为开发者会想：
+
+> “我要调用 import。”
+
+> “我要调用 review。”
+
+> “我要切换 model。”
+
+但普通使用时，用户真正想表达的是：
+
+> “把这门课的 PPT 加进来。”
+
+> “帮我复习 CSAPP。”
+
+> “我最近对 Cache 不太熟，考考我。”
+
+> “把我刚才这部分整理成笔记。”
+
+> “我想继续上次关于虚拟内存的讨论。”
+
+这两种思维方式完全不同。
+
+---
+
+# 2. 我觉得你的核心交互应该从“命令中心”变成“意图中心”
+
+你现在更接近：
+
+```text
+用户
+ ↓
+命令
+ ↓
+功能
+```
+
+我更推荐：
+
+```text
+用户
+ ↓
+自然语言意图
+ ↓
+Agent
+ ↓
+能力
+```
+
+比如：
+
+```text
+> 帮我复习 CSAPP 第三章
+
+Agent:
+好的，我先从你的 CSAPP 第三章笔记中找出相关内容，
+然后根据你的薄弱知识点出 5 道题。
+
+[开始复习]
+```
+
+而不是要求用户知道：
+
+```text
+/review CSAPP 3 --n 5
+```
+
+---
+
+# 3. 但我不建议你把 Slash Command 全删掉
+
+这一点非常重要。
+
+**Slash Command 应该留下，但应该变成“高级控制面板”，而不是主要交互方式。**
+
+可以设计成：
+
+```text
+自然语言
+    ↓
+Agent
+    ↓
+普通学习任务
+```
+
+而：
+
+```text
+/
+ ↓
+系统控制命令
+```
+
+例如：
+
+```text
+/help
+/model
+/budget
+/session
+/import
+```
+
+这些仍然存在。
+
+但是：
+
+```text
+“帮我复习 CSAPP”
+```
+
+不应该要求用户输入：
+
+```text
+/review CSAPP
+```
+
+---
+
+# 4. `/review` 是我认为最应该改的一个地方
+
+现在：
+
+```text
+/review <课程> [概念] [--n 数量]
+```
+
+从工程角度很漂亮。
+
+但是从 UX 来说：
+
+```text
+/review CSAPP Cache --n 5
+```
+
+用户必须知道：
+
+1. `/review`
+2. course 是什么
+3. concept 怎么写
+4. `--n` 怎么用
+
+这其实是在暴露内部 API。
+
+我更喜欢：
+
+```text
+> 复习 CSAPP
+```
+
+然后 Agent：
+
+```text
+发现你最近在 Cache 上掌握度较低。
+
+要不要优先复习 Cache？
+```
+
+用户：
+
+```text
+> 好
+```
+
+然后进入 Review Mode。
+
+---
+
+# 5. `/import` 也可以做得更自然
+
+现在是：
+
+```text
+/import <dir> [--course 名>
+```
+
+这其实比较像 CLI。
+
+可以保留这个命令，但增加一个自然入口：
+
+```text
+> 导入我的 CSAPP PPT
+```
+
+Agent/TUI 可以弹：
+
+```text
+选择文件/目录
+```
+
+然后：
+
+```text
+检测到：
+
+CSAPP/
+├── ch01.pptx
+├── ch02.pptx
+├── ch03.pptx
+└── ch04.pptx
+
+是否全部导入？
+
+[Enter] 确认
+```
+
+这样用户完全不需要知道 importer 的内部实现。
+
+---
+
+# 6. 其实你的 TUI 很适合做成“Chat + Command Palette”
+
+我反而不建议你把它变成类似 IDE 那种非常复杂的 UI。
+
+我觉得你的项目非常适合：
+
+```text
+┌─────────────────────────────────────────────┐
+│ mynotes                    CSAPP    $0.23   │
+├─────────────────────────────────────────────┤
+│                                             │
+│ 你：为什么函数调用之后 rsp 会变化？         │
+│                                             │
+│ AI：                                         │
+│ 这是因为 x86-64 的栈帧……                    │
+│                                             │
+│ [1] CSAPP/ch03-stack.md                     │
+│                                             │
+├─────────────────────────────────────────────┤
+│ >                                             │
+└─────────────────────────────────────────────┘
+```
+
+然后按：
+
+```text
+Ctrl+K
+```
+
+或者：
+
+```text
+/
+```
+
+打开 Command Palette：
+
+```text
+┌─────────────────────────────┐
+│ Command                     │
+├─────────────────────────────┤
+│ 🔍 Search notes             │
+│ 📚 Import notes             │
+│ 📝 Review                   │
+│ 📑 Outline                  │
+│ 🗂 Sessions                 │
+│ ⚙ Model                    │
+│ 💰 Budget                   │
+│ ❓ Help                    │
+└─────────────────────────────┘
+```
+
+这会比让用户记住一堆命令舒服很多。
+
+---
+
+# 7. 还有一个非常关键的问题：你的 Agent 应该承担更多“路由”工作
+
+你现在已经明确把：
+
+> 写操作 / 费用敏感操作直连内部函数，只有只读检索工具进入 Agent Loop。
+
+这个架构决策我仍然赞成。
+
+但这里其实可以做一个很漂亮的分层：
+
+```text
+                   User
+                     │
+                     ▼
+              Intent Router
+               /           \
+              /             \
+      System Command       Study Task
+             │                  │
+             ▼                  ▼
+       Direct Handler       Agent Runtime
+                                  │
+                         ┌────────┼────────┐
+                         ▼        ▼        ▼
+                       RAG      Review    Answer
+```
+
+也就是说：
+
+**“自然语言交互”不意味着所有东西都塞进 Agent。**
+
+Router 先判断：
+
+```text
+“帮我复习 CSAPP”
+→ Study Task
+
+“切换到 GLM”
+→ System Command
+
+“导入 ~/notes”
+→ System Command
+
+“总结一下刚才的内容”
+→ Study Task
+```
+
+这会非常适合你的现有架构。
+
+---
+
+# 8. 我还建议你解决一个“状态可见性”问题
+
+你的 App 实际上已经有很多状态：
+
+```text
+普通模式
+复习模式
+/model 弹窗
+选择模式
+请求中
+导入中
+取消
+Session 状态
+```
+
+而且你的按键路由本身就已经按照：
+
+> Review > Model > Selection > Normal
+
+这样的优先级处理。
+
+这说明你的系统实际上已经有一个**隐含的 UI State Machine**。
+
+我的建议是：
+
+> **把这个隐含状态显式化，并让 UI 告诉用户“现在在哪里”。**
+
+例如顶部：
+
+```text
+CSAPP / Chapter 3
+Study Mode · Searching notes...
+```
+
+复习时：
+
+```text
+CSAPP
+Review Mode · Question 2 / 5
+```
+
+导入时：
+
+```text
+Importing · 17 / 42
+ESC Cancel
+```
+
+这样用户不会产生：
+
+> “我现在到底是在聊天、复习还是选择东西？”
+
+---
+
+# 9. `/help` 也不应该只是命令说明书
+
+你现在已经有 `/help`，而且最近还专门清理过过期条目。
+
+我建议未来 `/help` 不要做成：
+
+```text
+/import <dir>
+/review <course>
+/outline
+...
+```
+
+而是：
+
+```text
+What can I do?
+
+学习
+  “解释一下虚拟内存”
+  “帮我复习 CSAPP”
+  “我不懂这里，换一种方式讲”
+  
+知识库
+  “导入我的 Rust 笔记”
+  “找一下我关于 ownership 的笔记”
+  
+复习
+  “考我一下 Cache”
+  “根据我最近错的题再考我一次”
+
+系统
+  /model
+  /budget
+  /sessions
+```
+
+这更符合**用户思维**。
+
+---
+
+# 10. 我甚至建议你暂时不要做太多 UI
+
+这里和我刚才说的“做减法”是一致的。
+
+不要现在开始：
+
+* 做鼠标 UI
+* 做复杂 dashboard
+* 做网页
+* 做动画
+* 做几十个快捷键
+* 做 Vim 模式
+* 做复杂 command system
+
+你真正应该做的是：
+
+### 第一层：自然语言
+
+```text
+> 为什么这里要用 Box？
+```
+
+### 第二层：少量核心命令
+
+```text
+/help
+/import
+/review
+/sessions
+/model
+```
+
+### 第三层：Command Palette
+
+```text
+/
+```
+
+### 第四层：上下文感知 UI
+
+```text
+Study Mode
+Review Mode
+Importing
+Searching
+```
+
+做到这四层，你的 UX 就会有很明显的提升。
+
+---
+
+# 我对你这个项目的最终判断
+
+你的后端目前是：
+
+> **工程思维比较强。**
+
+你的前端交互目前是：
+
+> **工程师思维比较强。**
+
+这两者不是一回事。
+
+你现在最大的一次 UX 升级，不是增加更多命令，而是把：
+
+```text
+“我应该输入什么命令？”
+```
+
+变成：
+
+```text
+“我想学习什么？”
+```
+
+所以我会把你下一阶段的目标定成：
+
+> **Slash Command → Intent-driven Study Agent**
+
+同时保留命令作为 power-user interface。
+
+这其实和你前面问的“项目是不是应该做减法”是连在一起的：**不是继续增加功能，而是让现有的 Import → Knowledge Base → RAG → Agent → Study 这条主链对用户变得更自然。**
