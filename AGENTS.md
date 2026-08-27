@@ -32,6 +32,17 @@ data/              运行时生成的 sqlite 文件（gitignore）
 - **安全红线**：删除笔记只删知识库数据，绝不修改/删除磁盘原文件
 - **数据库变更**：schema 以 `规划.md` 第四章 DDL 为准；需要改表先更新 DDL 再写迁移，不允许各处散落 CREATE TABLE
 
+## Git 工作流（AI 改代码的默认纪律）
+
+- 会话开始：`git status` + `git log --oneline -5`；工作区有未提交改动先向用户确认处置
+- 小改（bug 修复/单模块）：直接在 main 改，收工三项全绿 + 文档同步后提交
+- 大改/实验（跨 crate 重构、schema 变更、架构试验）：`git switch -c refactor|experiment/<名>` 分支进行，全绿后合回 main，失败丢弃分支
+- 提交前必查 `git status` / `git diff`：config.toml、密钥、data/ 绝不入库
+- 提交粒度 = 一个逻辑改动；信息一行中文说清（做什么 + 为什么）
+- 代码改动与 `docs/核心代码逻辑.md` 对应更新放**同一个 commit**
+- 改崩可回退：小范围 `git restore <file>`，整体 `git reset --hard`（执行前告知用户）
+- 不 push、不 force-push、不改写历史（本地仓，保持线性历史）
+
 ## 每会话收工必跑
 
 ```bash
