@@ -2,7 +2,7 @@
 //! session roundtrip（含 tool_calls 原样还原）、删除级联。
 
 use agent_core::{Message, Role, ToolCall};
-use storage::{InsertOutcome, NewNote, Store};
+use storage::{InsertOutcome, NewChunk, NewNote, Store};
 
 fn store() -> Store {
     Store::open_in_memory().unwrap()
@@ -245,4 +245,60 @@ fn session_rename_persists() {
         .find(|s| s.id == id)
         .and_then(|s| s.title);
     assert_eq!(title.as_deref(), Some("新标题"));
+}
+
+/// 噪声笔记（plan/README/索引类）降权：内容同质时正常笔记必须排在前面。
+/// 对应评测基线的 miss 归因（plan/README 污染排序）。
+#[test]
+fn noise_sources_ranked_below_real_notes() {
+    let store = Store::open_in_memory().unwrap();
+    let cid = store.get_or_create_course("c").unwrap();
+
+    // 同样的关键内容 + 各自差异化文字（否则 content_hash 幂等去重会吞掉第二篇）
+    for (path, title, extra) in [
+        ("course/plan/ch6-plan.md", "课程计划", "本周学习安排与目标"),
+        (
+            "course/notes/第6章-存储器层级.md",
+            "第6章-存储器层级",
+            "存储器山与缓存映射机制详解",
+        ),
+    ] {
+        let outcome = store
+            .insert_note(NewNote {
+                course_id: Some(cid),
+                title,
+                source_path: Some(path),
+                content: &format!("cache 命中率 由局部性决定 {extra}"),
+                fts_content: None,
+            })
+            .unwrap();
+        let note = match outcome {
+            InsertOutcome::Created(n) => n,
+            InsertOutcome::Duplicate { .. } => panic!("不应去重"),
+        };
+        store
+            .insert_chunks(
+                note.id,
+                &[NewChunk {
+                    heading: "cache",
+                    content: &format!(
+                        "cache 命中率 由局部性决定 时间局部性 空间局部性 {extra}"
+                    ),
+                    fts_extra: None,
+                }],
+            )
+            .unwrap();
+    }
+
+    let hits = store.search_chunks("cache 命中率 局部性", None, 2).unwrap();
+    assert_eq!(hits.len(), 2);
+    assert!(
+        hits[0].note_title.contains("第6章"),
+        "正常笔记应排第一，实际: {}",
+        hits[0].note_title
+    );
+    assert!(
+        hits[1].note_title.contains("课程计划"),
+        "噪声应被降权到第二"
+    );
 }
