@@ -1,4 +1,4 @@
-//! config.toml 解析（R3 定稿格式，见 规划.md 第四章示例）。
+//! config.toml 解析（provider 定义格式见本文件 ProviderConfig 字段）。
 
 use std::path::Path;
 

@@ -1,4 +1,4 @@
--- mynotes-agent 数据库 schema —— 唯一事实源：规划.md 第四章 DDL 定稿基线。
+-- mynotes-agent 数据库 schema —— 本文件即唯一事实源（改表先改这里再写迁移）。
 -- 本文件与其保持一致；改表先改规划再改这里，禁止各处散落 CREATE TABLE。
 
 -- all 区不是一行记录：course_id IS NULL 即未归类/all，查询不过滤课程即为 all
