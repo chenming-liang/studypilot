@@ -281,9 +281,7 @@ fn noise_sources_ranked_below_real_notes() {
                 note.id,
                 &[NewChunk {
                     heading: "cache",
-                    content: &format!(
-                        "cache 命中率 由局部性决定 时间局部性 空间局部性 {extra}"
-                    ),
+                    content: &format!("cache 命中率 由局部性决定 时间局部性 空间局部性 {extra}"),
                     fts_extra: None,
                 }],
             )

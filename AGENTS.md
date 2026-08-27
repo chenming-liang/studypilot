@@ -86,3 +86,4 @@ cargo test --workspace
 - [x] 打磨：集成串测、README、Windows 抽查、Demo 演练
 - [x] 收口会话①：代码审查修复十项（R6 成本对账闭环、markdown 样式链路修复、D4 降级条件收窄、错误可见化、客户端超时等）+ 导出 `docs/核心代码逻辑.md` + Git 纪律入库
 - [x] 收口会话②：事实源切换（规划.md 退役）+ ToolResult 错误类别 + ContextManager 历史裁剪 + 检索评测框架（31 题 BM25 基线 top3=84%，结论：噪声降权优先于 hybrid）
+- [x] 收口会话③：检索噪声降权（rank1 58%→71%，top3 87%）+ 评测 --llm 模式（回答质量与检索 rank 强相关 7.2 vs 3.6，0 幻觉；低分主因语料缺口 → 下一步补语料优先于 hybrid）
