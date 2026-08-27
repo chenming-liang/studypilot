@@ -9,7 +9,7 @@ mynotes-agent：Rust TUI 个人知识库 Agent（导入 → 学习 → 复习三
 ## Workspace 布局
 
 ```
-crates/core        Agent Loop、Tool trait、Provider trait、事件总线
+crates/core        Agent Loop、Tool trait、Provider trait、事件总线（包名 agent-core：`core` 与 Rust 内建 crate 冲突，会劫持集成测试与宏展开的 ::core:: 路径）
 crates/providers   OpenAI-compatible LLM 客户端（reqwest + SSE）
 crates/tools       agent 工具：search_notes / list_courses / generate_outline
 crates/storage     rusqlite 存储（同步 API）+ FTS5(jieba 预分词)
@@ -21,6 +21,7 @@ data/              运行时生成的 sqlite 文件（gitignore）
 
 ## 编码约定
 
+- **文档同步（强制）**：每次修改代码后，必须同步更新 `docs/核心代码逻辑.md` 中受影响的章节——改了哪条数据流/机制/决策落点，就更新对应小节；新增机制补新小节。禁止出现"代码已改、文档还是旧逻辑"的状态。
 - **错误处理**：库 crate 用 `thiserror` 定义错误枚举；bin/TUI 层用 `anyhow` 透传
 - **异步纪律**：禁止在 async 上下文直接调 rusqlite 或等待子进程——一律 `tokio::task::spawn_blocking`（决策 D2）
 - **LLM 调用**：全部经 `Provider` trait；测试一律用 `MockProvider` + 录制的 JSON fixture，**绝不真调外部 API**
@@ -62,13 +63,13 @@ cargo test --workspace
 
 ## 当前进度（每会话收工时更新）
 
-- [ ] M0 风险前置验证（pymupdf 子进程 / FTS5+jieba 实验 / 流式响应字段实测）
-- [ ] M1 项目骨架：workspace + config 解析 + Provider trait + 客户端
-- [ ] M2 Agent Loop：Tool trait + tool call 循环
-- [ ] M3 Storage：SQLite schema + FTS5(jieba)
-- [ ] M4 TUI v1 + mpsc 事件通道 + 中断
-- [ ] M5 基础要求 R1-R6 收口（/model、导出、成本统计）
-- [ ] M6 定制点①：导入流水线 + 课程归类
-- [ ] M7 检索 RAG + generate_outline
-- [ ] M8 定制点②：复习模式 + 掌握度闭环
-- [ ] 打磨：集成串测、README、Windows 抽查、Demo 演练
+- [x] M0 风险前置验证（pymupdf 子进程 / FTS5+jieba 实验 / 流式响应字段实测）——结论见规划.md 附录 A D1/D3/D7
+- [x] M1 项目骨架：workspace + config 解析 + Provider trait + 客户端
+- [x] M2 Agent Loop：Tool trait + tool call 循环
+- [x] M3 Storage：SQLite schema + FTS5(jieba)
+- [x] M4 TUI v1 + mpsc 事件通道 + 中断
+- [x] M5 基础要求 R1-R6 收口
+- [x] M6 定制点①：导入流水线 + 课程归类
+- [x] M7 检索 RAG + generate_outline
+- [x] M8 定制点②：复习模式 + 掌握度闭环
+- [x] 打磨：集成串测、README、Windows 抽查、Demo 演练

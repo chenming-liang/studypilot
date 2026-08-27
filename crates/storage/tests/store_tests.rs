@@ -1,0 +1,248 @@
+//! M3 storage 验收测试：schema、幂等去重、中文检索（范围/降级排序）、
+//! session roundtrip（含 tool_calls 原样还原）、删除级联。
+
+use agent_core::{Message, Role, ToolCall};
+use storage::{InsertOutcome, NewNote, Store};
+
+fn store() -> Store {
+    Store::open_in_memory().unwrap()
+}
+
+fn insert(store: &Store, course: Option<i64>, title: &str, content: &str) -> i64 {
+    match store
+        .insert_note(NewNote {
+            course_id: course,
+            title,
+            source_path: Some(&format!("/fake/{title}.md")),
+            content,
+            fts_content: None,
+        })
+        .unwrap()
+    {
+        InsertOutcome::Created(n) => n.id,
+        InsertOutcome::Duplicate { existing_id } => existing_id,
+    }
+}
+
+#[test]
+fn schema_creates_all_tables() {
+    let path = std::env::temp_dir().join(format!(
+        "m3-schema-{}-{}.db",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    {
+        let _store = Store::open(&path).unwrap();
+        // 迁移在 open 时执行；drop 释放连接后用独立只读连接检查 sqlite_master
+    }
+    let conn =
+        rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
+    let mut stmt = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type IN ('table','virtual table')")
+        .unwrap();
+    let names: Vec<String> = stmt
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .flatten()
+        .collect();
+
+    for expected in [
+        "courses",
+        "notes",
+        "notes_fts",
+        "concepts",
+        "note_concepts",
+        "quizzes",
+        "questions",
+        "attempts",
+        "concept_mastery",
+        "sessions",
+        "messages",
+        "usage_log",
+    ] {
+        assert!(
+            names.iter().any(|n| n == expected),
+            "表 {expected} 应存在，实际: {names:?}"
+        );
+    }
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn note_dedup_by_content_hash() {
+    let store = store();
+    let rust = store.get_or_create_course("rust").unwrap();
+
+    let n1 = insert(&store, Some(rust), "第一篇", "虚拟内存是操作系统的核心机制");
+    match store
+        .insert_note(NewNote {
+            course_id: None,
+            title: "不同标题但相同内容",
+            source_path: None,
+            content: "虚拟内存是操作系统的核心机制",
+            fts_content: None,
+        })
+        .unwrap()
+    {
+        InsertOutcome::Duplicate { existing_id } => assert_eq!(existing_id, n1),
+        InsertOutcome::Created(_) => panic!("相同内容应被去重"),
+    }
+
+    let got = store.get_note(n1).unwrap().unwrap();
+    assert_eq!(got.content_hash.len(), 16);
+    assert_eq!(got.course_id, Some(rust));
+}
+
+#[test]
+fn search_scope_is_course_union_all() {
+    let store = store();
+    let rust = store.get_or_create_course("rust").unwrap();
+    let os = store.get_or_create_course("os").unwrap();
+
+    insert(
+        &store,
+        Some(rust),
+        "r1",
+        "Rust 的所有权与借用检查保证内存安全",
+    );
+    insert(
+        &store,
+        Some(os),
+        "o1",
+        "操作系统虚拟内存通过页面置换管理物理内存",
+    );
+    insert(&store, None, "unclassified", "内存安全随笔：悬垂指针的成因");
+
+    // rust 分区：命中课程内 + all 区未归类，不命中 os
+    let hits = store
+        .search_notes("内存安全 所有权", Some(rust), 10)
+        .unwrap();
+    let titles: Vec<&str> = hits.iter().map(|h| h.title.as_str()).collect();
+    assert!(
+        titles.contains(&"r1") && titles.contains(&"unclassified"),
+        "{titles:?}"
+    );
+    assert!(!titles.contains(&"o1"), "{titles:?}");
+
+    // all 区：不过滤，三门全可命中
+    let hits = store.search_notes("内存", None, 10).unwrap();
+    assert_eq!(hits.len(), 3);
+}
+
+#[test]
+fn and_falls_back_to_or_ranked_by_hit_terms() {
+    let store = store();
+    insert(&store, None, "a", "所有权 移动语义 借用检查");
+    insert(&store, None, "b", "虚拟内存 页面置换 物理内存");
+    insert(&store, None, "c", "虚拟内存 与 所有权 模型对比"); // 两词都命中
+    insert(&store, None, "d", "完全无关的内容");
+
+    // AND 零命中（无文档同时含两词）→ OR 降级
+    let hits = store.search_notes("所有权 虚拟内存", None, 10).unwrap();
+
+    assert_eq!(hits[0].title, "c");
+    assert_eq!(hits[0].hit_terms, 2);
+    assert_eq!(hits.len(), 3, "无关文档不应出现");
+    assert!(hits[1..].iter().all(|h| h.hit_terms == 1));
+    // 同命中数按 bm25 升序
+    for w in hits[1..].windows(2) {
+        assert!(w[0].rank <= w[1].rank);
+    }
+}
+
+#[test]
+fn session_roundtrip_preserves_tool_calls_verbatim() {
+    let store = store();
+    let rust = store.get_or_create_course("rust").unwrap();
+    let session = store.create_session(Some("测试会话"), Some(rust)).unwrap();
+
+    let msgs = vec![
+        Message::system("你是知识库助手"),
+        Message::user("什么是所有权？"),
+        Message::assistant_tool_calls(vec![ToolCall::function(
+            "call_1",
+            "search_notes",
+            r#"{"query":"所有权"}"#,
+        )]),
+        Message::tool_result("call_1", r#"{"hits":[{"note":"02-所有权"}]}"#),
+        Message::assistant("所有权是……[1]"),
+    ];
+    for m in &msgs {
+        store.append_message(session, m).unwrap();
+    }
+    // seq 自动递增且有序；乱序 append 也应按写入顺序还原
+    let loaded = store.load_session_messages(session).unwrap();
+    assert_eq!(loaded, msgs, "含 tool_calls/tool_call_id 的消息应原样还原");
+
+    let sessions = store.list_sessions().unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].course_id, Some(rust));
+}
+
+#[test]
+fn role_values_satisfy_db_check_constraint() {
+    let store = store();
+    let session = store.create_session(None, None).unwrap();
+    for role in [Role::System, Role::User, Role::Assistant, Role::Tool] {
+        let msg = match role {
+            Role::System => Message::system("s"),
+            Role::User => Message::user("u"),
+            Role::Assistant => Message::assistant("a"),
+            Role::Tool => Message::tool_result("t", "r"),
+        };
+        store.append_message(session, &msg).unwrap(); // CHECK 违反会在此报错
+    }
+    assert_eq!(store.load_session_messages(session).unwrap().len(), 4);
+}
+
+#[test]
+fn delete_note_cascades_fts_index() {
+    let store = store();
+    let id = insert(&store, None, "待删", "页面置换算法详解 LRU 与 Clock");
+    assert!(store.search_notes("页面置换", None, 5).unwrap().len() == 1);
+
+    assert!(store.delete_note(id).unwrap());
+    assert!(!store.delete_note(id).unwrap(), "重复删除应返回 false");
+    assert!(store.get_note(id).unwrap().is_none());
+    assert!(
+        store.search_notes("页面置换", None, 5).unwrap().is_empty(),
+        "FTS 索引行必须随笔记一起清理"
+    );
+}
+
+#[test]
+fn usage_log_records_and_sums_cost() {
+    let store = store();
+    store
+        .append_usage("deepseek", "deepseek-reasoner", "chat", 98, 188, 0.001_092)
+        .unwrap();
+    store
+        .append_usage("deepseek", "deepseek-chat", "vision", 11, 1, 0.000_012)
+        .unwrap();
+
+    // 累计值近似相等（f64 求和）
+    let total = store.total_recorded_cost().unwrap();
+    assert!((total - 0.001_104).abs() < 1e-9, "{total}");
+}
+
+#[test]
+fn session_rename_persists() {
+    let store = store();
+    let id = store.create_session(Some("旧标题"), None).unwrap();
+    assert!(store.set_session_title(id, "新标题").unwrap());
+    assert!(
+        !store.set_session_title(999, "x").unwrap(),
+        "不存在应返回 false"
+    );
+    let title: Option<String> = store
+        .list_sessions()
+        .unwrap()
+        .into_iter()
+        .find(|s| s.id == id)
+        .and_then(|s| s.title);
+    assert_eq!(title.as_deref(), Some("新标题"));
+}

@@ -1,6 +1,9 @@
 /target
 Cargo.lock
 config.toml
+.env
+.env.*
+*.log
 *:Zone.Identifier
 Thumbs.db
 .DS_Store

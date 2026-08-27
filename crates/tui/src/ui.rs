@@ -1,0 +1,378 @@
+//! ratatui 绘制：状态栏 + 课程侧栏 + 聊天流 + 输入框。
+
+use ratatui::Frame;
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+use unicode_width::UnicodeWidthChar;
+
+use crate::app::{App, Entry, ModelPicker};
+use crate::markdown;
+
+const ACCENT: Color = Color::Cyan;
+const DIM: Color = Color::DarkGray;
+const USER: Color = Color::Yellow;
+const ERROR: Color = Color::Red;
+
+/// Braille spinner 字符（8 帧）。
+const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+fn spinner_char(tick: usize) -> &'static str {
+    SPINNER[tick % SPINNER.len()]
+}
+
+pub fn draw(f: &mut Frame, app: &mut App) {
+    let root = f.area();
+    let [header, main_area, input_area] = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(3),
+        Constraint::Length(3),
+    ])
+    .areas(root);
+    let [sidebar, chat] =
+        Layout::horizontal([Constraint::Length(22), Constraint::Min(20)]).areas(main_area);
+
+    draw_header(f, header, app);
+    draw_sidebar(f, sidebar, app);
+    draw_chat(f, chat, app);
+    draw_input(f, input_area, app);
+
+    if let Some(picker) = &app.model_picker {
+        draw_model_picker(f, picker, &app.provider_cfg.name);
+    }
+}
+
+fn draw_header(f: &mut Frame, area: Rect, app: &App) {
+    // 状态颜色：空闲=绿、思考=黄
+    let (status_text, status_color) = if app.is_inflight() {
+        ("思考中", Color::Yellow)
+    } else {
+        ("就绪", Color::Green)
+    };
+
+    let line = Line::from(vec![
+        Span::styled(
+            " mynotes-agent",
+            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" │ "),
+        Span::styled(app.course.to_string(), Style::new().fg(Color::Cyan)),
+        Span::raw(" │ "),
+        Span::styled(&app.provider_cfg.model, Style::new().fg(Color::Magenta)),
+        Span::raw(format!(
+            " · {}",
+            if app.provider_cfg.thinking {
+                "思考"
+            } else {
+                "快速"
+            }
+        )),
+        Span::raw(" │ "),
+        Span::styled(
+            format!("¥{:.2}/{:.0}", app.total_cost, app.max_cost),
+            Style::new().fg(if app.total_cost > app.max_cost * 0.8 {
+                Color::Red
+            } else {
+                Color::Gray
+            }),
+        ),
+        Span::raw(" │ "),
+        Span::styled(
+            status_text.to_string(),
+            Style::new().fg(status_color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            if app.selection_mode {
+                " │ 选择模式"
+            } else {
+                ""
+            },
+            Style::new().fg(DIM),
+        ),
+    ]);
+    f.render_widget(
+        Paragraph::new(line).block(Block::new().borders(Borders::ALL)),
+        area,
+    );
+}
+
+fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
+    let mut items: Vec<ListItem> = Vec::new();
+    items.push(ListItem::new(Line::from(Span::styled(
+        "📚 Courses",
+        Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
+    ))));
+    items.push(ListItem::new(Line::from(Span::styled(
+        "  all",
+        sidebar_style("all", &app.course),
+    ))));
+
+    for (id, name) in &app.courses {
+        let style = sidebar_style(name, &app.course);
+        items.push(ListItem::new(Line::from(Span::styled(
+            format!("  {name}"),
+            style,
+        ))));
+        if let Some((notes, concepts)) = app.sidebar_course_stats.get(id) {
+            // 紧凑一行，适配窄侧栏
+            items.push(ListItem::new(Line::from(Span::styled(
+                format!("    {notes}n · {concepts}c"),
+                Style::new().fg(DIM),
+            ))));
+        }
+    }
+
+    items.push(ListItem::new(Line::default())); // 空行
+    items.push(ListItem::new(Line::from(Span::styled(
+        "Recent",
+        Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
+    ))));
+    for s in app.sidebar_sessions.iter().take(6) {
+        let title = s.title.as_deref().unwrap_or("(未命名)");
+        let short: String = title.chars().take(14).collect();
+        let suffix = if title.chars().count() > 14 {
+            "…"
+        } else {
+            ""
+        };
+        items.push(ListItem::new(Line::from(Span::styled(
+            format!(" #{} {}{}", s.id, short, suffix),
+            Style::new(),
+        ))));
+    }
+
+    f.render_widget(List::new(items), area);
+}
+
+fn sidebar_style(name: &str, current: &str) -> Style {
+    if name == current {
+        Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+    } else {
+        Style::new()
+    }
+}
+
+/// 聊天流：手动折行 + 选中高亮 + 存储文本行供复制提取。
+fn draw_chat(f: &mut Frame, area: Rect, app: &mut App) {
+    let inner_width = area.width.saturating_sub(2) as usize;
+    let viewport = area.height.saturating_sub(2) as usize;
+
+    let mut lines: Vec<Line> = Vec::new();
+    let mut text_lines: Vec<String> = Vec::new();
+    if inner_width > 0 && viewport > 0 {
+        for entry in &app.entries {
+            let before = lines.len();
+            append_entry_lines(entry, inner_width, &mut lines);
+            for line in &lines[before..] {
+                let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                text_lines.push(text);
+            }
+        }
+        // inflight 时追加 spinner 行
+        if app.is_inflight() {
+            let spinner = spinner_char(app.tick);
+            lines.push(Line::from(vec![
+                Span::styled(format!("{spinner} "), Style::new().fg(Color::Yellow)),
+                Span::styled("思考中…", Style::new().fg(DIM)),
+            ]));
+            text_lines.push(format!("{spinner} 思考中…"));
+        }
+    }
+
+    let max_offset = lines.len().saturating_sub(viewport);
+    let top = max_offset.saturating_sub(app.scroll_up as usize);
+
+    // 存储供 handle_mouse 使用
+    app.chat_lines = text_lines;
+    app.chat_rect = area;
+
+    // 高亮选中行
+    let sel = app.text_selection;
+    let visible: Vec<Line> = lines
+        .into_iter()
+        .enumerate()
+        .skip(top)
+        .take(viewport.max(1))
+        .map(|(i, mut line)| {
+            if let Some((start, end)) = sel
+                && i >= start
+                && i <= end
+            {
+                // 蓝底高亮：所有终端上都醒目可见
+                for span in &mut line.spans {
+                    span.style = span.style.fg(Color::White).bg(Color::Blue);
+                }
+            }
+            line
+        })
+        .collect();
+
+    f.render_widget(Paragraph::new(visible), area);
+}
+
+fn append_entry_lines(entry: &Entry, width: usize, out: &mut Vec<Line<'static>>) {
+    match entry {
+        Entry::Info(text) => push_styled_wrapped(out, format!("· {text}"), width, Some(DIM), None),
+        Entry::User(text) => {
+            push_styled_wrapped(out, format!("你 › {text}"), width, Some(USER), None)
+        }
+        Entry::Assistant {
+            content,
+            reasoning_chars,
+        } => {
+            if let Some(n) = reasoning_chars {
+                out.push(Line::from(Span::styled(
+                    format!("  (已思考 {n} 字符)").to_owned(),
+                    Style::new().fg(DIM),
+                )));
+            }
+            // Answer 标识（符号+空行，不用横线框）
+            out.push(Line::from(Span::styled(
+                "✦ Answer".to_owned(),
+                Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            )));
+            out.push(Line::default()); // 空行呼吸
+            // Markdown 渲染
+            let md_lines = markdown::render_markdown(content, width);
+            out.extend(md_lines);
+            out.push(Line::default()); // 空行呼吸
+        }
+        Entry::Error(text) => {
+            push_styled_wrapped(out, format!("✗ {text}"), width, Some(ERROR), None)
+        }
+    }
+}
+
+/// 带样式折行：首行与续行同色；`suffix_note` 追加在末尾（未用）。
+fn push_styled_wrapped(
+    out: &mut Vec<Line<'static>>,
+    text: String,
+    width: usize,
+    color: Option<Color>,
+    _unused: Option<()>,
+) {
+    for l in wrap(&text, width) {
+        let style = Style::new().fg(color.unwrap_or(Color::Reset));
+        out.push(Line::from(Span::styled(l, style)));
+    }
+}
+
+/// 按 unicode 显示宽度折行（CJK 宽 2），处理 \n。
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for raw in text.split('\n') {
+        if width == 0 {
+            out.push(raw.to_owned());
+            continue;
+        }
+        let mut cur = String::new();
+        let mut w = 0usize;
+        for ch in raw.chars() {
+            let cw = UnicodeWidthChar::width(ch).unwrap_or(1);
+            if w + cw > width && w > 0 {
+                out.push(std::mem::take(&mut cur));
+                w = 0;
+            }
+            cur.push(ch);
+            w += cw;
+        }
+        out.push(cur);
+    }
+    out
+}
+
+fn draw_input(f: &mut Frame, area: Rect, app: &App) {
+    let hint = if app.selection_mode {
+        "选择模式: 鼠标拖选复制 · v/Esc 退出"
+    } else if app.is_inflight() {
+        "Ctrl+C/Esc 中断请求"
+    } else {
+        "Enter 发送 · v 拖选 · Ctrl+C 退出"
+    };
+
+    // placeholder：输入为空时显示灰色提示
+    let display_input = if app.input.is_empty() && !app.is_inflight() {
+        let ph = format!("Ask {}...", app.course);
+        vec![
+            Span::styled("> ", Style::new().fg(ACCENT)),
+            Span::styled(ph, Style::new().fg(DIM)),
+        ]
+    } else {
+        vec![
+            Span::styled("> ", Style::new().fg(ACCENT)),
+            Span::raw(app.input.clone()),
+        ]
+    };
+
+    // 底线样式：上边一条分隔线，无框
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(hint.to_owned(), Style::new().fg(DIM))),
+            Line::from(display_input),
+        ]),
+        area,
+    );
+
+    // 光标定位：第 2 行（hint 下方），边框(0) + "> "(2)
+    let prefix_width: usize = app
+        .input
+        .chars()
+        .take(app.cursor_pos)
+        .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
+        .sum();
+    let x = area.x + 2 + prefix_width as u16;
+    if x < area.right() - 1 && area.height > 1 {
+        f.set_cursor_position((x, area.y + 1));
+    }
+}
+
+/// /model 弹窗：居中覆盖层，当前 provider 打 →，选中项高亮。
+fn draw_model_picker(f: &mut Frame, picker: &ModelPicker, current: &str) {
+    let area = f.area();
+    let height = (picker.options.len() + 4).min(area.height as usize) as u16;
+    let width = 52u16.min(area.width);
+    let x = area.x + (area.width - width) / 2;
+    let y = area.y + (area.height - height) / 2;
+    let pop = Rect::new(x, y, width, height);
+
+    // 清除背景
+    f.render_widget(ratatui::widgets::Clear, pop);
+
+    let items: Vec<ListItem> = picker
+        .options
+        .iter()
+        .enumerate()
+        .map(|(i, pc)| {
+            let mark = if pc.name == current {
+                "→"
+            } else if i == picker.selected {
+                "▸"
+            } else {
+                " "
+            };
+            let label = format!(
+                " {} {:<14} {:<18} {}",
+                mark,
+                pc.name,
+                pc.model,
+                if pc.thinking { "思考" } else { "" }
+            );
+            let style = if i == picker.selected {
+                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+            } else {
+                Style::new()
+            };
+            ListItem::new(Span::styled(label, style))
+        })
+        .collect();
+
+    let title = " 选择模型 (↑↓ 移动 · 数字直选 · Enter 确认 · Esc 取消) ";
+    f.render_widget(
+        List::new(items).block(
+            Block::new()
+                .borders(Borders::ALL)
+                .title(Span::styled(title, Style::new().fg(DIM))),
+        ),
+        pop,
+    );
+}
