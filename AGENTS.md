@@ -85,3 +85,4 @@ cargo test --workspace
 - [x] M8 定制点②：复习模式 + 掌握度闭环
 - [x] 打磨：集成串测、README、Windows 抽查、Demo 演练
 - [x] 收口会话①：代码审查修复十项（R6 成本对账闭环、markdown 样式链路修复、D4 降级条件收窄、错误可见化、客户端超时等）+ 导出 `docs/核心代码逻辑.md` + Git 纪律入库
+- [x] 收口会话②：事实源切换（规划.md 退役）+ ToolResult 错误类别 + ContextManager 历史裁剪 + 检索评测框架（31 题 BM25 基线 top3=84%，结论：噪声降权优先于 hybrid）

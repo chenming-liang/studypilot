@@ -55,7 +55,10 @@ fn split_rounds(history: &[Message]) -> Vec<&[Message]> {
 #[must_use]
 pub fn trim_history(history: &[Message], budget_chars: usize) -> TrimmedHistory {
     let rounds = split_rounds(history);
-    let round_lens: Vec<usize> = rounds.iter().map(|r| r.iter().map(message_len).sum()).collect();
+    let round_lens: Vec<usize> = rounds
+        .iter()
+        .map(|r| r.iter().map(message_len).sum())
+        .collect();
 
     // 从最新轮往回累计预算
     let mut kept_from = rounds.len();
@@ -127,7 +130,10 @@ mod tests {
             h.extend(round(&format!("问题{i}"), "q", &format!("答{i}")));
         }
         let t = trim_history(&h, 2_000); // 每轮约 530+ 字，2k 只装得下 ~3 轮
-        assert!(t.omitted_rounds >= 1 && t.omitted_rounds <= 3, "omitted={t:?}");
+        assert!(
+            t.omitted_rounds >= 1 && t.omitted_rounds <= 3,
+            "omitted={t:?}"
+        );
         // 最新轮完整保留
         assert_eq!(
             t.messages.last().and_then(|m| m.content.as_deref()),

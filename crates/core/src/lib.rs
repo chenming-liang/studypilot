@@ -12,7 +12,7 @@ pub mod provider;
 pub mod tool;
 
 pub use agent::{Agent, AgentResult, DEFAULT_MAX_ROUNDS, ToolTraceEntry};
-pub use context::{trim_history, DEFAULT_CONTEXT_BUDGET_CHARS};
+pub use context::{DEFAULT_CONTEXT_BUDGET_CHARS, trim_history};
 pub use message::{Function, Message, Role, ToolCall};
 pub use mock::MockProvider;
 pub use parse::{first_json_block, trim_code_fence};
