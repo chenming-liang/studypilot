@@ -143,12 +143,12 @@ async fn main() -> anyhow::Result<()> {
         // LLM 模式：完整 RAG 回答 + judge 评分
         if let Some((client, pc)) = &llm {
             eprintln!("[{}/{}] {} …", rows.len() + 1, questions.len(), q.q);
-            match run_llm_eval(client, pc, q, &hits).await {
+            match run_llm_eval(client, q, &hits).await {
                 Ok((answer, cited, usage)) => {
                     row.answer = Some(answer.clone());
                     row.cited_sources = cited;
                     row.cost += estimate_cost(pc, &usage);
-                    match judge_answer(client, pc, q, &answer).await {
+                    match judge_answer(client, q, &answer).await {
                         Ok((score, hallucination, reason, usage)) => {
                             row.score = Some(score);
                             row.hallucination = Some(hallucination);
@@ -280,7 +280,6 @@ async fn main() -> anyhow::Result<()> {
 /// LLM 模式单题：RAG 回答（top 片段为上下文）→ 解析回答中的 [n] 引用。
 async fn run_llm_eval(
     client: &OpenAiClient,
-    pc: &agent_providers::ProviderConfig,
     q: &Question,
     hits: &[storage::ChunkHit],
 ) -> anyhow::Result<(String, Vec<String>, agent_core::Usage)> {
@@ -316,7 +315,6 @@ async fn run_llm_eval(
 /// judge：问题 + 回答 → score 0-10 / 幻觉判定 / 一句话理由。
 async fn judge_answer(
     client: &OpenAiClient,
-    pc: &agent_providers::ProviderConfig,
     q: &Question,
     answer: &str,
 ) -> anyhow::Result<(i64, bool, String, agent_core::Usage)> {
