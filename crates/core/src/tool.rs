@@ -80,6 +80,29 @@ pub fn tool_output_to_string(v: &Value) -> String {
 }
 
 /// 统一把执行期错误转成文本（喂回模型而非中断循环）。
+///
+/// 格式：`TOOL_ERROR [{category}]: {message}`。category 机器可读，
+/// 模型可据此决定换参数重试（parse/unknown）、换工具或直接作答（api/transport）。
 pub fn tool_error_text(err: &Error) -> String {
-    format!("TOOL_ERROR: {err}")
+    format!("TOOL_ERROR [{}]: {err}", err.category())
+}
+
+impl Error {
+    /// 机器可读错误类别（ToolResult 协议的轻量版：先走文本通道，不改 trait 签名）。
+    #[must_use]
+    pub fn category(&self) -> &'static str {
+        match self {
+            Error::Transport(_) => "transport",
+            Error::Api { status, .. } => {
+                if (500..600).contains(status) {
+                    "api_server"
+                } else {
+                    "api"
+                }
+            }
+            Error::Storage(_) => "storage",
+            Error::Config(_) => "config",
+            Error::Parse(_) => "parse",
+        }
+    }
 }

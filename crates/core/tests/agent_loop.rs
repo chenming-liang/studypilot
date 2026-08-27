@@ -242,3 +242,14 @@ fn duplicate_tool_name_replaced() {
     assert_eq!(tools.schemas().len(), 1);
     assert_eq!(tools.get("add").unwrap().description(), "假的");
 }
+
+#[test]
+fn tool_error_text_carries_category() {
+    use agent_core::tool::tool_error_text;
+    let e = Error::Parse("缺 a".into());
+    assert!(tool_error_text(&e).starts_with("TOOL_ERROR [parse]: "), "{}", e);
+    let e = Error::Storage("db down".into());
+    assert!(tool_error_text(&e).starts_with("TOOL_ERROR [storage]: "), "{}", e);
+    let e = Error::Api { status: 502, message: "bad gateway".into() };
+    assert!(tool_error_text(&e).starts_with("TOOL_ERROR [api_server]: "), "{}", e);
+}
