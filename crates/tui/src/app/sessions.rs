@@ -741,9 +741,9 @@ impl App {
                     .filter(|n| *n > 0)
                     .unwrap_or(5);
                 let scope = if concept.is_empty() {
-                    course_name.clone()
+                    None
                 } else {
-                    format!("{course_name} {concept}")
+                    Some(concept.trim().to_owned())
                 };
                 // all（course_id=None）= 全部笔记出题，同样合法
                 self.run_review(course_id, course_name, scope, n);

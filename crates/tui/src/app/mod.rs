@@ -540,6 +540,7 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
             }
             AppEvent::ReviewReady(result) => app.on_review_ready(result),
             AppEvent::ReviewGraded(idx, result) => app.on_review_graded(idx, result),
+            AppEvent::ReviewAdvice(text) => app.on_review_advice(text),
         }
     }
     Ok(())

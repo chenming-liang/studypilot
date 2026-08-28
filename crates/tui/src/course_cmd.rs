@@ -202,8 +202,8 @@ mod tests {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ReviewSpec {
     pub course: String,
-    /// 概念关键词（空 = 课程名本身）
-    pub scope: String,
+    /// 用户指定的自由文本范围（--concept）；None = 随机范围（按掌握度加权随机抽概念）
+    pub scope: Option<String>,
     pub n: usize,
 }
 
@@ -244,8 +244,8 @@ pub(crate) fn parse_review_action(arg: &str, known: &[String]) -> Result<ReviewS
         ));
     }
     let scope = match concept {
-        Some(c) if !c.trim().is_empty() => c.trim().to_owned(),
-        _ => course.clone(),
+        Some(c) if !c.trim().is_empty() => Some(c.trim().to_owned()),
+        _ => None,
     };
     Ok(ReviewSpec { course, scope, n })
 }
@@ -283,7 +283,7 @@ mod review_tests {
     fn full_flag_form() {
         let s = parse_review_action("--course rust --concept ownership --n 3", &known()).unwrap();
         assert_eq!(s.course, "rust");
-        assert_eq!(s.scope, "ownership");
+        assert_eq!(s.scope.as_deref(), Some("ownership"));
         assert_eq!(s.n, 3);
     }
 
@@ -291,14 +291,14 @@ mod review_tests {
     fn multi_word_course_in_flag() {
         let s = parse_review_action("--course 程序设计训练（Rust 语言） --n 5", &known()).unwrap();
         assert_eq!(s.course, "程序设计训练（Rust 语言）");
-        assert_eq!(s.scope, "程序设计训练（Rust 语言）"); // 无概念 → 课程名
+        assert_eq!(s.scope, None); // 无概念 → 随机范围
     }
 
     #[test]
     fn concept_with_spaces() {
         let s = parse_review_action("--course rust --concept ownership and borrowing", &known())
             .unwrap();
-        assert_eq!(s.scope, "ownership and borrowing");
+        assert_eq!(s.scope.as_deref(), Some("ownership and borrowing"));
     }
 
     #[test]

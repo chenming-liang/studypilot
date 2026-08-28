@@ -243,7 +243,7 @@ impl App {
         &mut self,
         course_id: Option<i64>,
         course_name: String,
-        scope: String,
+        scope: Option<String>,
         n: usize,
     ) {
         if self.review.is_some() {
@@ -258,8 +258,12 @@ impl App {
         let cancel = CancellationToken::new();
         self.inflight = Some(cancel.clone());
 
+        let scope_disp = scope
+            .as_deref()
+            .map(|s| s.to_owned())
+            .unwrap_or_else(|| "随机范围（薄弱优先）".into());
         self.push_entry(Entry::Info(format!(
-            "开始出题: 《{course_name}》范围「{scope}」，{n} 题"
+            "开始出题: 《{course_name}》范围「{scope_disp}」，{n} 题"
         )));
 
         tokio::spawn(async move {

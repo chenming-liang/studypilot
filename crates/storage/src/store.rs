@@ -744,6 +744,67 @@ impl Store {
     }
 
     /// 获取测验的全部题目。
+    /// 按 id 批量查概念名（复习小结/掌握度可视化用）。
+    pub fn concept_names(&self, ids: &[i64]) -> Result<std::collections::HashMap<i64, String>> {
+        if ids.is_empty() {
+            return Ok(Default::default());
+        }
+        let conn = self.conn.lock().unwrap();
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!("SELECT id, name FROM concepts WHERE id IN ({placeholders})");
+        let params: Vec<&dyn rusqlite::ToSql> =
+            ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })?;
+        let mut map = std::collections::HashMap::new();
+        for (id, name) in rows.flatten() {
+            map.insert(id, name);
+        }
+        Ok(map)
+    }
+
+    /// 只返回「有关联笔记片段」的概念（随机范围出题用——避免抽中无素材概念退回大杂烩）。
+    pub fn concepts_with_material(&self, course_id: Option<i64>) -> Result<Vec<ConceptMastery>> {
+        let conn = self.conn.lock().unwrap();
+        let (sql, cid): (&str, Option<i64>) = match course_id {
+            Some(_) => (
+                "SELECT c.id, c.name, COALESCE(cm.attempts, 0), COALESCE(cm.correct, 0)
+                 FROM concepts c
+                 JOIN note_concepts nc ON nc.concept_id = c.id
+                 JOIN note_chunks ch ON ch.note_id = nc.note_id
+                 LEFT JOIN concept_mastery cm ON cm.concept_id = c.id
+                 WHERE c.course_id = ?1
+                 GROUP BY c.id",
+                course_id,
+            ),
+            None => (
+                "SELECT c.id, c.name, COALESCE(cm.attempts, 0), COALESCE(cm.correct, 0)
+                 FROM concepts c
+                 JOIN note_concepts nc ON nc.concept_id = c.id
+                 JOIN note_chunks ch ON ch.note_id = nc.note_id
+                 LEFT JOIN concept_mastery cm ON cm.concept_id = c.id
+                 GROUP BY c.id",
+                None,
+            ),
+        };
+        let mut stmt = conn.prepare(sql)?;
+        let map_row = |r: &rusqlite::Row<'_>| {
+            Ok(ConceptMastery {
+                concept_id: r.get(0)?,
+                name: r.get(1)?,
+                attempts: r.get(2)?,
+                correct: r.get(3)?,
+            })
+        };
+        let rows = match cid {
+            Some(id) => stmt.query_map([id], map_row)?,
+            None => stmt.query_map([], map_row)?,
+        };
+        Ok(rows.flatten().collect())
+    }
+
     pub fn get_quiz_questions(&self, quiz_id: i64) -> Result<Vec<QuestionRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -849,6 +910,62 @@ impl Store {
             },
         )?;
         Ok(rows.flatten().collect())
+    }
+
+    /// 按概念取笔记片段（随机范围出题用）：返回 (concept_id, chunk) 对，
+    /// 每个概念只取前 `per_concept` 段（同一概念跨笔记按 position 顺序）。
+    pub fn chunks_by_concepts(
+        &self,
+        concept_ids: &[i64],
+        per_concept: usize,
+    ) -> Result<Vec<(i64, ChunkHit)>> {
+        if concept_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock().unwrap();
+        let placeholders = concept_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT nc.concept_id, c.id, c.note_id, n.title, c.heading, c.content
+             FROM note_concepts nc
+             JOIN note_chunks c ON c.note_id = nc.note_id
+             JOIN notes n ON n.id = c.note_id
+             WHERE nc.concept_id IN ({placeholders})
+             ORDER BY nc.concept_id, c.note_id, c.position"
+        );
+        let params: Vec<&dyn rusqlite::ToSql> = concept_ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::ToSql)
+            .collect();
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                ChunkHit {
+                    chunk_id: r.get(1)?,
+                    note_id: r.get(2)?,
+                    note_title: r.get(3)?,
+                    heading: r.get(4)?,
+                    content: r.get(5)?,
+                    rank: 0.0,
+                },
+            ))
+        })?;
+        // 每个概念只留前 per_concept 段
+        let mut counts = std::collections::HashMap::<i64, usize>::new();
+        let mut out = Vec::new();
+        for pair in rows.flatten() {
+            let (cid, hit) = pair;
+            let c = counts.entry(cid).or_insert(0);
+            if *c < per_concept {
+                *c += 1;
+                out.push((cid, hit));
+            }
+        }
+        Ok(out)
     }
 
     /// 按笔记 id 列表批量删除（NoteBrowser 批量动作）。事务内完成，
