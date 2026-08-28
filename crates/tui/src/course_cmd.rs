@@ -1,7 +1,6 @@
 //! `/course` 命令解析（纯函数，可离线单测）。
 //!
 //! 语法：`/course [-list | <课程|all> | -new <名> | -delete <名>]`
-
 /// parse_course_action 的结果。
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CourseAction {
@@ -25,27 +24,28 @@ pub(crate) fn parse_course_action(arg: &str, known: &[String]) -> CourseAction {
 
     let tokens: Vec<&str> = arg.split_whitespace().collect();
     match tokens.as_slice() {
-        ["-new", name] => CourseAction::Create((*name).to_owned()),
+        // -new / -delete：旗标后的全部 token 重新拼接为课程名（允许多词）
+        ["-new", rest @ ..] if !rest.is_empty() => CourseAction::Create(rest.join(" ")),
         ["-new"] => CourseAction::Invalid("用法: /course -new <课程名>".into()),
-        ["-new", rest @ ..] => CourseAction::Invalid(format!(
-            "课程名不能含空格：『{}』被解析为多段。试试 /course -new {}",
-            rest.join(" "),
-            rest.join("-")
-        )),
-        ["-delete", name] => {
-            if *name == "all" {
+        ["-delete", rest @ ..] if !rest.is_empty() => {
+            let name = rest.join(" ");
+            if name == "all" {
                 CourseAction::Invalid("all 是全局分区，不能删除".into())
-            } else if known.iter().any(|k| k == name) {
-                CourseAction::Delete((*name).to_owned())
+            } else if known.iter().any(|k| k == &name) {
+                CourseAction::Delete(name)
             } else {
                 CourseAction::Invalid(format!("未知课程 `{name}`，无法删除"))
             }
         }
         ["-delete"] => CourseAction::Invalid("用法: /course -delete <课程名>".into()),
-        [name] if *name == "all" => CourseAction::Switch("all".into()),
-        [name] => {
-            if known.iter().any(|k| k == name) {
-                CourseAction::Switch((*name).to_owned())
+        // 切换：整段 join 后精确匹配已知列表（或 all）——多词课程名如
+        // "程序设计训练（Rust 语言）" 靠 known 列表消歧
+        _ => {
+            let name = tokens.join(" ");
+            if name == "all" {
+                CourseAction::Switch("all".into())
+            } else if known.iter().any(|k| k == &name) {
+                CourseAction::Switch(name)
             } else {
                 let names: Vec<&str> = std::iter::once("all")
                     .chain(known.iter().map(String::as_str))
@@ -53,19 +53,6 @@ pub(crate) fn parse_course_action(arg: &str, known: &[String]) -> CourseAction {
                 CourseAction::Invalid(format!(
                     "未知课程 `{name}`。可用: {}，或 /course -new <名> 新建",
                     names.join(", ")
-                ))
-            }
-        }
-        _ => {
-            // 多词参数：区分带旗标与不带旗标的提示
-            if tokens[0].starts_with('-') {
-                CourseAction::Invalid(format!(
-                    "`{}` 后的课程名不能含空格（被解析为多段）",
-                    tokens[0]
-                ))
-            } else {
-                CourseAction::Invalid(format!(
-                    "无法识别 `/course {arg}`：课程名不能含空格。查看全部用 /course -list"
                 ))
             }
         }
@@ -115,14 +102,29 @@ mod tests {
         );
     }
 
-    /// 回归：多词课程名应给出明确用法错误并建议连字符形式。
+    /// 多词课程名合法（真实语料如"程序设计训练（Rust 语言）"含空格）。
     #[test]
-    fn multi_word_new_gets_clear_usage_error() {
-        match parse_course_action("-new machine learning", &known()) {
-            CourseAction::Invalid(msg) => {
-                assert!(msg.contains("不能含空格"), "{msg}");
-                assert!(msg.contains("machine-learning"), "应给出连字符建议: {msg}");
-            }
+    fn multi_word_names_are_accepted() {
+        let mut k = known();
+        k.push("程序设计训练（Rust 语言）".into());
+        // 切换多词课程
+        assert_eq!(
+            parse_course_action("程序设计训练（Rust 语言）", &k),
+            CourseAction::Switch("程序设计训练（Rust 语言）".into())
+        );
+        // -new 多词
+        assert_eq!(
+            parse_course_action("-new machine learning", &known()),
+            CourseAction::Create("machine learning".into())
+        );
+        // -delete 多词
+        assert_eq!(
+            parse_course_action("-delete 程序设计训练（Rust 语言）", &k),
+            CourseAction::Delete("程序设计训练（Rust 语言）".into())
+        );
+        // 多词但不在 known → 明确报"未知课程"（拼错或未建）
+        match parse_course_action("程序设计训练 Rust", &k) {
+            CourseAction::Invalid(msg) => assert!(msg.contains("未知课程"), "{msg}"),
             other => panic!("应为 Invalid，实际 {other:?}"),
         }
     }
