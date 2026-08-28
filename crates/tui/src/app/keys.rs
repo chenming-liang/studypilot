@@ -378,6 +378,18 @@ impl App {
         };
         match b.mode {
             BrowserMode::Search => match key.code {
+                KeyCode::Up => {
+                    if let Some(b) = &mut self.note_browser {
+                        b.scroll_preview(-3, crate::note_browser::LIST_VISIBLE.saturating_sub(3));
+                    }
+                    true
+                }
+                KeyCode::Down => {
+                    if let Some(b) = &mut self.note_browser {
+                        b.scroll_preview(3, crate::note_browser::LIST_VISIBLE.saturating_sub(3));
+                    }
+                    true
+                }
                 KeyCode::Esc => {
                     self.note_browser = None;
                     self.restore_input_backup();

@@ -53,11 +53,15 @@ pub struct NoteBrowser {
     pub move_target_label: String,
     /// 异步搜索序号：乱序到达的旧结果丢弃
     pub search_seq: u64,
+    /// 结果列表滚动起点（Search 预览与 Select 光标共用）
+    pub scroll: usize,
     pub loading: bool,
 }
 
 /// 强确认阈值：删除篇数超过它需输入 DELETE
 pub const STRONG_CONFIRM_THRESHOLD: usize = 10;
+/// 弹窗内列表可视行数（height 18 - 边框 2 - 提示余量）
+pub const LIST_VISIBLE: usize = 14;
 
 impl NoteBrowser {
     pub fn new(scope_course: Option<i64>, scope_label: String) -> Self {
@@ -73,6 +77,7 @@ impl NoteBrowser {
             pick_cursor: 0,
             move_target_label: String::new(),
             search_seq: 0,
+            scroll: 0,
             loading: true,
         }
     }
@@ -110,6 +115,28 @@ impl NoteBrowser {
         }
     }
 
+    /// 滚动起点随光标对齐（经典 listbox 逻辑）：保证 cursor 行落在视口内。
+    pub fn ensure_cursor_visible(&mut self, visible: usize) {
+        if visible == 0 {
+            return;
+        }
+        if self.cursor < self.scroll {
+            self.scroll = self.cursor;
+        } else if self.cursor >= self.scroll + visible {
+            self.scroll = self.cursor + 1 - visible;
+        }
+        let max_scroll = self.results.len().saturating_sub(visible);
+        self.scroll = self.scroll.min(max_scroll);
+    }
+
+    /// Search 模式的结果预览滚动（无光标，按页 ±3）。
+    pub fn scroll_preview(&mut self, delta: isize, visible: usize) {
+        let total = self.results.len();
+        let max_scroll = total.saturating_sub(visible);
+        let cur = self.scroll as isize + delta;
+        self.scroll = cur.clamp(0, max_scroll as isize) as usize;
+    }
+
     /// 光标随结果集收缩钳制。
     pub(crate) fn clamp_cursor(&mut self) {
         if self.results.is_empty() {
@@ -140,7 +167,7 @@ impl NoteBrowser {
 mod tests {
     use super::*;
 
-    fn summary(id: i64, title: &str) -> NoteSummary {
+    pub(super) fn summary(id: i64, title: &str) -> NoteSummary {
         NoteSummary {
             id,
             course_id: Some(1),
@@ -204,5 +231,56 @@ mod tests {
         let mut b = NoteBrowser::new(Some(1), "rust".into());
         b.mode = BrowserMode::Select;
         assert!(b.action_targets().0.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::super::tests::summary;
+    use super::*;
+
+    fn b_with(n: usize) -> NoteBrowser {
+        let mut b = NoteBrowser::new(Some(1), "rust".into());
+        b.results = (0..n)
+            .map(|i| summary(i as i64, &format!("t{i}")))
+            .collect();
+        b
+    }
+
+    #[test]
+    fn cursor_below_window_pulls_scroll_up() {
+        let mut b = b_with(30);
+        b.scroll = 10;
+        b.cursor = 2;
+        b.ensure_cursor_visible(crate::note_browser::LIST_VISIBLE);
+        assert_eq!(b.scroll, 2);
+    }
+
+    #[test]
+    fn cursor_beyond_window_pushes_scroll_down() {
+        let mut b = b_with(30);
+        b.cursor = 20;
+        b.ensure_cursor_visible(crate::note_browser::LIST_VISIBLE);
+        assert_eq!(b.scroll, 20 + 1 - crate::note_browser::LIST_VISIBLE);
+    }
+
+    #[test]
+    fn scroll_clamps_to_total() {
+        let mut b = b_with(5);
+        b.scroll_preview(100, crate::note_browser::LIST_VISIBLE);
+        assert_eq!(b.scroll, 0, "总数小于视口时滚动封底");
+        let mut b = b_with(30);
+        b.scroll_preview(100, 5);
+        assert_eq!(b.scroll, 25);
+        b.scroll_preview(-100, 5);
+        assert_eq!(b.scroll, 0);
+    }
+
+    #[test]
+    fn small_result_no_scroll() {
+        let mut b = b_with(3);
+        b.cursor = 2;
+        b.ensure_cursor_visible(crate::note_browser::LIST_VISIBLE);
+        assert_eq!(b.scroll, 0);
     }
 }
