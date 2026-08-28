@@ -25,5 +25,7 @@ pub const SUCCESS: Color = Color::Rgb(0x98, 0xC3, 0x79);
 pub const REFERENCE: Color = Color::Rgb(0x56, 0xB6, 0xC2);
 /// 错误（红）
 pub const ERROR: Color = Color::Rgb(0xE0, 0x6C, 0x75);
-/// 代码块前景（暖白）
+/// 代码块前景（syntect 主题接管，此值仅兜底）
 pub const CODE_FG: Color = Color::Rgb(0xE5, 0xC0, 0x7B);
+/// 行内代码（One Dark 橙，无背景——黑底上 DarkGray 打底刺眼）
+pub const CODE_INLINE: Color = Color::Rgb(0xD1, 0x9A, 0x66);

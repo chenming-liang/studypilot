@@ -122,7 +122,8 @@ pub fn render_markdown(text: &str, width: usize) -> Vec<Line<'static>> {
                 };
             }
             Event::Code(code_text) => {
-                current.push_style(Style::new().fg(CODE).bg(Color::DarkGray));
+                // 行内代码：无背景、纯 fg 染色（Orange）——DarkGray 打底在黑底上突兀
+                current.push_style(Style::new().fg(theme::CODE_INLINE));
                 current.push_str(&code_text);
                 current.pop_style();
             }
@@ -419,14 +420,18 @@ mod tests {
     }
 
     #[test]
-    fn inline_code_keeps_bg_style() {
+    #[test]
+    fn inline_code_gets_dedicated_fg_no_bg() {
+        // 行内代码：无背景 + One Dark 橙前景（DarkGray 打底在黑底终端上刺眼，已移除）
         let lines = render_markdown("使用 `let x = 1;` 声明", 60);
         let code_styled = lines.iter().any(|l| {
-            l.spans
-                .iter()
-                .any(|s| s.content.contains("let x") && s.style.bg == Some(Color::DarkGray))
+            l.spans.iter().any(|s| {
+                s.content.contains("let x")
+                    && s.style.fg == Some(theme::CODE_INLINE)
+                    && s.style.bg.is_none()
+            })
         });
-        assert!(code_styled, "行内代码底色丢失: {lines:?}");
+        assert!(code_styled, "行内代码应无背景且橙色前景: {lines:?}");
     }
 
     #[test]
