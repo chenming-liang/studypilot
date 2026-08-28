@@ -20,7 +20,7 @@ fn insert(store: &Store, course: Option<i64>, title: &str, content: &str) -> i64
         .unwrap()
     {
         InsertOutcome::Created(n) => n.id,
-        InsertOutcome::Duplicate { existing_id } => existing_id,
+        InsertOutcome::Duplicate { existing_id, .. } => existing_id,
     }
 }
 
@@ -88,7 +88,15 @@ fn note_dedup_by_content_hash() {
         })
         .unwrap()
     {
-        InsertOutcome::Duplicate { existing_id } => assert_eq!(existing_id, n1),
+        InsertOutcome::Duplicate {
+            existing_id,
+            existing_title,
+            ..
+        } => {
+            assert_eq!(existing_id, n1);
+            // 现有标题应是第一篇的（内容相同、标题不同也命中全局去重）
+            assert_eq!(existing_title, "第一篇");
+        }
         InsertOutcome::Created(_) => panic!("相同内容应被去重"),
     }
 

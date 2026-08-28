@@ -86,9 +86,14 @@ impl App {
             FileDone { name, concepts } => {
                 self.push_entry(Entry::Info(format!("  ✓ {name} → {} 个概念", concepts)));
             }
-            FileSkipped { name } => {
-                self.push_entry(Entry::Info(format!("  ⊘ {name}（已存在，跳过）")));
-            }
+            FileSkipped { name, at } => match at {
+                Some(detail) => {
+                    self.push_entry(Entry::Info(format!("  ⊘ {name}（{detail}）")));
+                }
+                None => {
+                    self.push_entry(Entry::Info(format!("  ⊘ {name}（已存在，跳过）")));
+                }
+            },
             ChunkFail { name, err } => {
                 self.push_entry(Entry::Error(format!(
                     "  ⚠ {name}: 切片入库失败，该笔记暂不可检索: {err}"

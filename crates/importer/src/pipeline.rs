@@ -88,7 +88,17 @@ pub async fn import_directory(
             }
             Ok(ProcessOutcome::Skipped) => {
                 skipped += 1;
-                let _ = tx.send(ImportEvent::FileSkipped { name: name.clone() });
+                let _ = tx.send(ImportEvent::FileSkipped {
+                    name: name.clone(),
+                    at: None,
+                });
+            }
+            Ok(ProcessOutcome::SkippedWith(at)) => {
+                skipped += 1;
+                let _ = tx.send(ImportEvent::FileSkipped {
+                    name: name.clone(),
+                    at: Some(at),
+                });
             }
             Err(e) => {
                 fail += 1;
@@ -107,6 +117,8 @@ pub async fn import_directory(
 enum ProcessOutcome {
     Created(usize),
     Skipped,
+    /// 去重跳过，附存活位置描述
+    SkippedWith(String),
 }
 
 async fn process_one(
@@ -185,7 +197,26 @@ async fn process_one(
             .map_err(|e| e.to_string())?;
 
         match outcome {
-            InsertOutcome::Duplicate { .. } => Ok(ProcessOutcome::Skipped),
+            InsertOutcome::Duplicate {
+                existing_id,
+                existing_title,
+                existing_course_id,
+            } => {
+                // 透明化：全局 content_hash 去重下，用户需要知道存活位置才能删干净再导
+                let at = existing_course_id.and_then(|cid| {
+                    store
+                        .list_courses()
+                        .ok()?
+                        .into_iter()
+                        .find(|(i, _)| *i == cid)
+                        .map(|(_, name)| name)
+                });
+                let detail = match at {
+                    Some(name) => format!("已存在：{name}#{existing_id} {existing_title}"),
+                    None => format!("已存在：all#{existing_id} {existing_title}"),
+                };
+                Ok(ProcessOutcome::SkippedWith(detail))
+            }
             InsertOutcome::Created(note) => {
                 // 概念关联（失败要有痕：该概念将游离于检索 boosting/掌握度闭环之外）
                 for concept_name in &concepts {

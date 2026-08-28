@@ -83,11 +83,16 @@ pub struct NewNote<'a> {
     pub fts_content: Option<&'a str>,
 }
 
-/// 幂等去重结果：同 content_hash 重复导入返回已存在笔记 id。
+/// 幂等去重结果：同 content_hash 重复导入返回已存在笔记信息
+/// （含位置，供上层提示"已存在：课程#id 标题"——全局去重下用户需要知道去哪删）。
 #[derive(Debug)]
 pub enum InsertOutcome {
     Created(Note),
-    Duplicate { existing_id: i64 },
+    Duplicate {
+        existing_id: i64,
+        existing_title: String,
+        existing_course_id: Option<i64>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -218,7 +223,16 @@ impl Store {
             )
             .optional()?;
         if let Some(existing_id) = existing {
-            return Ok(InsertOutcome::Duplicate { existing_id });
+            let (existing_title, existing_course_id) = tx.query_row(
+                "SELECT title, course_id FROM notes WHERE id = ?1",
+                [existing_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            return Ok(InsertOutcome::Duplicate {
+                existing_id,
+                existing_title,
+                existing_course_id,
+            });
         }
 
         tx.execute(
