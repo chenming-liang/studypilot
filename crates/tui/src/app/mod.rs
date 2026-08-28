@@ -111,6 +111,15 @@ pub struct App {
     rx: UnboundedReceiver<AppEvent>,
 }
 
+/// 命令参数规范化：剥掉照抄文档产生的 `<...>` 占位符 token（约定：占位符
+/// 在任何命令参数里都无合法语义）。仅作用于斜杠命令参数，普通聊天文本不经过此路径。
+pub(crate) fn strip_placeholder_tokens(arg: &str) -> String {
+    arg.split_whitespace()
+        .filter(|t| !(t.starts_with('<') && t.ends_with('>')))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 impl App {
     /// 课程列表+统计刷新（D2）：导入流水线可能在 DB 里新建课程，
     /// 内存列表与侧栏统计需要与库对齐。
@@ -291,6 +300,25 @@ impl App {
             let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
             self.push_entry(Entry::Info("已退出选择模式，滚轮恢复".into()));
         }
+    }
+}
+
+#[cfg(test)]
+mod strip_tokens_tests {
+    use super::strip_placeholder_tokens;
+
+    #[test]
+    fn strips_placeholder_tokens_only() {
+        assert_eq!(strip_placeholder_tokens("<标题> my rust"), "my rust");
+        assert_eq!(strip_placeholder_tokens("rust"), "rust");
+        assert_eq!(
+            strip_placeholder_tokens("-delete <名> rust"),
+            "-delete rust"
+        );
+        // 全是占位符 → 空（上层按"参数缺失"报用法错误）
+        assert_eq!(strip_placeholder_tokens("<标题>"), "");
+        // 纯文本聊天不经此路径，但函数本身不破坏非占位符内容
+        assert_eq!(strip_placeholder_tokens("a <b c"), "a <b c");
     }
 }
 

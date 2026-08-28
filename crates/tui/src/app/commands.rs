@@ -53,7 +53,7 @@ impl App {
 
         let mut parts = text.split_whitespace();
         let cmd = parts.next().unwrap_or("").to_ascii_lowercase();
-        let arg = parts.collect::<Vec<_>>().join(" ");
+        let arg = super::strip_placeholder_tokens(&parts.collect::<Vec<_>>().join(" "));
 
         // inflight 门控：会话切换/替换类命令在请求进行中拒绝，
         // 防止 Done 事件把上一个会话的消息写入新会话（跨会话数据混写）
