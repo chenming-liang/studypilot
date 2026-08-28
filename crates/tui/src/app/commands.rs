@@ -92,7 +92,7 @@ impl App {
                     "  /export /load 会话导出导入 · /course -new/-delete 分区管理",
                     "",
                     "快捷键: Ctrl+K 查看全部命令（支持过滤与参数向导）",
-                    "        v 选择模式 · Ctrl+C 中断/退出 · Ctrl+Q 强退",
+                    "        鼠标拖选复制 · Ctrl+C 中断/退出 · Ctrl+Q 强退",
                 ] {
                     self.push_entry(Entry::Info(l.into()));
                 }

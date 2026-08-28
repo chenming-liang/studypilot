@@ -56,6 +56,48 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.session_browser.is_some() {
         draw_session_browser(f, app);
     }
+    if app.toast.is_some() {
+        draw_toast(f, app);
+    }
+}
+
+/// 右上角临时通知：复制成功/失败等一次性反馈，2.5s（错误 4s）自动消失。
+fn draw_toast(f: &mut Frame, app: &App) {
+    use std::time::Instant;
+    let Some(toast) = &app.toast else { return };
+    let area = f.area();
+    let msg_w = display_width(&toast.message) as u16;
+    let width = (msg_w + 4).min(area.width.saturating_sub(2));
+    let height = 3u16; // 边框 + 一行文本
+    let x = area.x + area.width.saturating_sub(width + 1);
+    let y = area.y + 4; // header 之下，贴右上
+    let pop = Rect::new(x, y, width, height);
+    f.render_widget(ratatui::widgets::Clear, pop);
+    let color = if toast.error { ERROR } else { Color::Green };
+    let remaining = toast
+        .expires_at
+        .saturating_duration_since(Instant::now())
+        .as_secs();
+    let title = if toast.error {
+        " ⚠ 复制失败 "
+    } else {
+        " ✓ 已复制 "
+    };
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            display_truncate(&toast.message, (width - 2) as usize),
+            Style::new().fg(color),
+        )))
+        .block(
+            Block::new()
+                .borders(Borders::ALL)
+                .border_style(Style::new().fg(color))
+                .title(Span::styled(title, Style::new().fg(color))),
+        ),
+        pop,
+    );
+    // 剩余秒数提示（可选调试信息，保持简洁不渲染）
+    let _ = remaining;
 }
 
 fn draw_header(f: &mut Frame, area: Rect, app: &App) {
@@ -321,12 +363,10 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
 }
 
 fn draw_input(f: &mut Frame, area: Rect, app: &App) {
-    let hint = if app.selection_mode {
-        "选择模式: 鼠标拖选复制 · v/Esc 退出"
-    } else if app.is_inflight() {
+    let hint = if app.is_inflight() {
         "Ctrl+C/Esc 中断请求"
     } else {
-        "Enter 发送 · v 拖选 · Ctrl+C 退出"
+        "Enter 发送 · Ctrl+K 命令面板 · Ctrl+C 退出"
     };
 
     // placeholder：输入为空时显示灰色提示

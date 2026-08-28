@@ -60,17 +60,6 @@ impl App {
             self.palette = Some(CommandPalette::new());
             return;
         }
-        // v 键切换选择模式（覆盖层打开时 v 是过滤字符，不触发）
-        if let KeyCode::Char('v') = key.code
-            && !key.modifiers.contains(KeyModifiers::CONTROL)
-            && self.palette.is_none()
-            && self.wizard.is_none()
-            && self.note_browser.is_none()
-            && self.session_browser.is_none()
-        {
-            self.toggle_selection_mode();
-            return;
-        }
         match key.code {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.interrupt_or_quit();
@@ -78,13 +67,7 @@ impl App {
             KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.quit_now();
             }
-            KeyCode::Esc => {
-                if self.selection_mode {
-                    self.toggle_selection_mode();
-                } else {
-                    self.interrupt_or_quit();
-                }
-            }
+            KeyCode::Esc => self.interrupt_or_quit(),
             KeyCode::Enter => self.submit(),
             KeyCode::Left => {
                 self.cursor_pos = self.cursor_pos.saturating_sub(1);
@@ -245,13 +228,10 @@ impl App {
             .await
             .unwrap_or_else(|e| Err(format!("任务错误: {e}")));
 
+        // 复制反馈走右上角 toast（不插入聊天流）
         match result {
-            Ok(()) => {
-                // 直接写 entries，保留当前滚动位置（push_entry 会回到底部）
-                self.entries
-                    .push(Entry::Info(format!("已复制 {count} 行到剪贴板")));
-            }
-            Err(e) => self.entries.push(Entry::Error(format!("复制失败: {e}"))),
+            Ok(()) => self.set_toast(format!("已复制 {count} 行到剪贴板"), false),
+            Err(e) => self.set_toast(format!("复制失败: {e}"), true),
         }
     }
 

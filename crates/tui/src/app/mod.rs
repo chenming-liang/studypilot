@@ -82,8 +82,6 @@ pub struct App {
     pub review: Option<review::ReviewState>,
     /// 简答题批改进行中（防并发提交错位）
     review_grading: bool,
-    /// 选择模式：临时关闭鼠标捕获，允许终端原生文本选中复制
-    pub selection_mode: bool,
     /// 鼠标拖选状态：(起始行, 结束行) 在渲染行列表中的索引
     pub text_selection: Option<(usize, usize)>,
     /// 拖选锚点（左键按下时的行；Drag 期间不随方向漂移）
@@ -108,6 +106,8 @@ pub struct App {
     pub note_browser: Option<crate::note_browser::NoteBrowser>,
     /// 会话浏览器；Some 时按键路由给会话浏览器
     pub session_browser: Option<crate::session_browser::SessionBrowser>,
+    /// 右上角临时通知（复制反馈等），到时自动消失
+    pub toast: Option<Toast>,
     /// `/sessions` 显式请求后的刷新回调时要打印列表到聊天区（侧栏静默刷新不打印）
     pending_sessions_print: bool,
     should_quit: bool,
@@ -123,6 +123,40 @@ pub(crate) fn strip_placeholder_tokens(arg: &str) -> String {
         .filter(|t| !(t.starts_with('<') && t.ends_with('>')))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// 右上角临时通知。
+#[derive(Debug, Clone)]
+pub struct Toast {
+    pub message: String,
+    /// 错误类通知用红色并停留更久
+    pub error: bool,
+    pub expires_at: std::time::Instant,
+}
+
+impl Toast {
+    const DURATION: std::time::Duration = std::time::Duration::from_millis(2500);
+    const ERROR_DURATION: std::time::Duration = std::time::Duration::from_millis(4000);
+
+    fn info(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            error: false,
+            expires_at: std::time::Instant::now() + Self::DURATION,
+        }
+    }
+
+    fn error(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            error: true,
+            expires_at: std::time::Instant::now() + Self::ERROR_DURATION,
+        }
+    }
+
+    fn expired(&self) -> bool {
+        std::time::Instant::now() >= self.expires_at
+    }
 }
 
 impl App {
@@ -153,6 +187,22 @@ impl App {
                 let _ = tx.send(AppEvent::CoursesRefreshed(list, stats));
             }
         });
+    }
+
+    /// 弹出右上角临时通知（Tick 时自动过期清除）。
+    pub(crate) fn set_toast(&mut self, message: impl Into<String>, error: bool) {
+        self.toast = Some(if error {
+            Toast::error(message)
+        } else {
+            Toast::info(message)
+        });
+    }
+
+    /// 清除已过期的 toast（主循环 Tick 调用）。
+    pub(crate) fn expire_toast(&mut self) {
+        if self.toast.as_ref().is_some_and(Toast::expired) {
+            self.toast = None;
+        }
     }
 
     /// 覆盖层接管聊天框输入：备份原内容并清空（fzf 风格——覆盖层与聊天框共享同一缓冲）。
@@ -210,7 +260,6 @@ impl App {
             import_cancel: None,
             review: None,
             review_grading: false,
-            selection_mode: false,
             text_selection: None,
             selection_anchor: None,
             chat_lines: Vec::new(),
@@ -223,6 +272,7 @@ impl App {
             list_picker: None,
             note_browser: None,
             session_browser: None,
+            toast: None,
             pending_sessions_print: false,
             should_quit: false,
             tx,
@@ -264,9 +314,6 @@ impl App {
         if self.is_inflight() {
             return ("思考中…".into(), Color::Yellow);
         }
-        if self.selection_mode {
-            return ("选择模式".into(), Color::Cyan);
-        }
         ("就绪".into(), Color::Green)
     }
 
@@ -297,20 +344,6 @@ impl App {
             token.cancel();
         }
         self.should_quit = true;
-    }
-
-    /// 切换选择模式：关闭/恢复鼠标捕获，允许终端原生文本选中复制。
-    pub(crate) fn toggle_selection_mode(&mut self) {
-        self.selection_mode = !self.selection_mode;
-        if self.selection_mode {
-            let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
-            self.push_entry(Entry::Info(
-                "选择模式: 鼠标拖选文本即可复制（v 或 Esc 退出）".into(),
-            ));
-        } else {
-            let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
-            self.push_entry(Entry::Info("已退出选择模式，滚轮恢复".into()));
-        }
     }
 }
 
@@ -359,6 +392,7 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
                 if app.is_inflight() {
                     app.tick += 1;
                 }
+                app.expire_toast();
             }
             AppEvent::Agent(ae) => app.handle_agent_event(ae),
             AppEvent::CourseManaged(outcome) => app.on_course_managed(outcome),
