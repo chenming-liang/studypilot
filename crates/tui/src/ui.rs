@@ -315,7 +315,7 @@ fn append_entry_lines(entry: &Entry, width: usize, out: &mut Vec<Line<'static>>)
             for l in lines {
                 let mut spans: Vec<Span<'static>> =
                     vec![Span::styled("▎ ", Style::new().fg(theme::SECONDARY))];
-                spans.extend(l.spans.into_iter());
+                spans.extend(l.spans);
                 out.push(Line::from(spans));
             }
         }
