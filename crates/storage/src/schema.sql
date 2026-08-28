@@ -47,7 +47,7 @@ CREATE VIRTUAL TABLE note_chunks_fts USING fts5(content);
 
 CREATE TABLE quizzes(
   id         INTEGER PRIMARY KEY,
-  course_id  INTEGER REFERENCES courses(id),
+  course_id  INTEGER REFERENCES courses(id) ON DELETE SET NULL,  -- 出题课程（删课回落 NULL，历史保留）
   scope      TEXT NOT NULL,               -- 出题范围描述，如 "rust 所有权"
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -83,7 +83,7 @@ CREATE TABLE concept_mastery(
 CREATE TABLE sessions(
   id         INTEGER PRIMARY KEY,
   title      TEXT,
-  course_id  INTEGER REFERENCES courses(id),  -- 会话发生时的分区，恢复时还原
+  course_id  INTEGER REFERENCES courses(id) ON DELETE SET NULL,  -- 会话发生时的分区，恢复时还原（删课回落 NULL）
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

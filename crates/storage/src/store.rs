@@ -131,7 +131,7 @@ impl Store {
     /// 迁移：以 PRAGMA user_version 为版本号，逐版升级。
     fn migrate(self) -> Result<Self> {
         {
-            let conn = self.conn.lock().unwrap();
+            let mut conn = self.conn.lock().unwrap();
             let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
             if version < 1 {
                 conn.execute_batch(schema_sql())?;
@@ -149,6 +149,37 @@ impl Store {
                      );
                      CREATE VIRTUAL TABLE IF NOT EXISTS note_chunks_fts USING fts5(content);",
                 )?;
+            }
+            // v3：quizzes/sessions.course_id 补 ON DELETE SET NULL（原为 NO ACTION，
+            // 出过题或开过会话的删除课程会撞 FOREIGN KEY constraint failed）。
+            // SQLite 不能 ALTER 外键，需建新表拷数据。PRAGMA foreign_keys 须在事务外切换。
+            if version < 3 {
+                conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+                let tx = conn.transaction()?;
+                tx.execute_batch(
+                    "CREATE TABLE quizzes_new(
+                       id         INTEGER PRIMARY KEY,
+                       course_id  INTEGER REFERENCES courses(id) ON DELETE SET NULL,
+                       scope      TEXT NOT NULL,
+                       created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                     );
+                     INSERT INTO quizzes_new(id, course_id, scope, created_at)
+                         SELECT id, course_id, scope, created_at FROM quizzes;
+                     DROP TABLE quizzes;
+                     ALTER TABLE quizzes_new RENAME TO quizzes;
+                     CREATE TABLE sessions_new(
+                       id         INTEGER PRIMARY KEY,
+                       title      TEXT,
+                       course_id  INTEGER REFERENCES courses(id) ON DELETE SET NULL,
+                       created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                     );
+                     INSERT INTO sessions_new(id, title, course_id, created_at)
+                         SELECT id, title, course_id, created_at FROM sessions;
+                     DROP TABLE sessions;
+                     ALTER TABLE sessions_new RENAME TO sessions;",
+                )?;
+                tx.commit()?;
+                conn.execute_batch("PRAGMA foreign_keys = ON;")?;
             }
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
@@ -712,4 +743,39 @@ pub fn content_hash(content: &str) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(content.as_bytes());
     digest[..8].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(test)]
+mod schema_v3_tests {
+    use super::*;
+
+    /// 回归（schema v3）：出过题/开过会话的课程删除后，quizzes/sessions 记录保留
+    /// 且 course_id 回落 NULL——此前 NO ACTION 外键会让删除撞 FOREIGN KEY 约束。
+    #[test]
+    fn delete_course_set_nulls_quiz_and_session() {
+        let store = Store::open_in_memory().unwrap();
+        let cid = store.get_or_create_course("rust").unwrap();
+
+        let quiz = store.create_quiz(Some(cid), "rust").unwrap();
+        let session = store.create_session(Some("测试会话"), Some(cid)).unwrap();
+
+        store.delete_course("rust").unwrap();
+
+        assert!(store.find_course("rust").unwrap().is_none());
+        let conn = store.conn.lock().unwrap();
+        let quiz_course: Option<i64> = conn
+            .query_row("SELECT course_id FROM quizzes WHERE id = ?1", [quiz], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let session_course: Option<i64> = conn
+            .query_row(
+                "SELECT course_id FROM sessions WHERE id = ?1",
+                [session],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(quiz_course, None);
+        assert_eq!(session_course, None);
+    }
 }

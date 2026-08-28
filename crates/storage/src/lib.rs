@@ -15,7 +15,7 @@ pub use store::{
 };
 
 /// 当前 schema 版本（user_version）。追加迁移时 +1 并在 migrate() 补分支。
-pub const SCHEMA_VERSION: i32 = 2;
+pub const SCHEMA_VERSION: i32 = 3;
 
 /// DDL 单点存放。
 pub fn schema_sql() -> &'static str {
