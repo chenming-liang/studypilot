@@ -91,3 +91,4 @@ cargo test --workspace
 - [x] 收口会话⑤：TUI 交互打磨（header 状态可见性 status_label、Ctrl+K 命令面板 19 条、/help 能力化文案）
 - [x] 收口会话⑥：命令面板三修（动态宽度/显示宽度对齐/选中项详情行）+ 参数向导（/review /import 文本步向导，课程取当前分区，Tab 保留文本模式）+ header 左右分区
 - [x] 收口会话⑦：app.rs 拆分重构（14 模块）+ 交互补全（PaletteAction 绑条目、ListPicker 选择器 /course /open、单步向导 /rename /load /course -new、光标编辑、outline --export 直执行）
+- [x] 收口会话⑧：Review workspace 半成品修复（GLM 崩溃遗留：编译错误/进度点颜色丢失/废函数清理/解析丢失回补），主区聊天流隔离为独立答题场 + 反馈停留态 + 简答输入区加高；改进建议.md 新设计版作后续基线（Sources 区/workspace 内 Summary/专属底部栏未做）

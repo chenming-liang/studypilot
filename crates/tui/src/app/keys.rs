@@ -235,8 +235,11 @@ impl App {
         }
     }
 
-    /// 复习模式按键处理：选择题 1-4 / 简答题 Enter 提交 / Esc 退出。
+    /// Review workspace 按键：
+    /// Answering：↑↓ 移选项光标、A-D 直接作答、Enter 提交当前光标、字符进答案（简答）
+    /// Feedback：Enter 下一题
     pub(crate) fn handle_review_key(&mut self, key: KeyEvent) {
+        use crate::review::QType;
         if key.kind != KeyEventKind::Press {
             return;
         }
@@ -247,126 +250,141 @@ impl App {
             }
             return;
         }
+        let Some(rs) = &self.review else { return };
+        let awaiting = rs.awaiting_feedback();
+        let is_choice = rs
+            .questions
+            .get(rs.current)
+            .map(|q| q.q_type == QType::Choice)
+            .unwrap_or(false);
+
+        if awaiting {
+            // 反馈停留态：Enter 下一题
+            match key.code {
+                KeyCode::Enter => self.advance_review(),
+                KeyCode::Esc => self.exit_review("已退出复习模式"),
+                _ => {}
+            }
+            return;
+        }
 
         match key.code {
-            KeyCode::Esc => {
-                self.exit_review("已退出复习模式");
+            KeyCode::Esc => self.exit_review("已退出复习模式"),
+            KeyCode::Up | KeyCode::Down if is_choice => {
+                let len = self
+                    .review
+                    .as_ref()
+                    .and_then(|rs| rs.questions.get(rs.current))
+                    .map(|q| q.options.len())
+                    .unwrap_or(0);
+                if len == 0 {
+                    return;
+                }
+                let cur = self
+                    .review
+                    .as_ref()
+                    .and_then(|rs| rs.selected_option)
+                    .unwrap_or(0);
+                let next = match key.code {
+                    KeyCode::Up => cur.saturating_sub(1),
+                    _ => (cur + 1).min(len - 1),
+                };
+                if let Some(rs) = &mut self.review {
+                    rs.selected_option = Some(next);
+                }
             }
             KeyCode::Enter => {
-                // 简答题提交：先提取数据，避免 borrow 冲突
-                let (idx, q_clone) = match &self.review {
-                    Some(rs) => match rs.questions.get(rs.current) {
-                        Some(q) if q.q_type == review::QType::ShortAnswer => {
-                            (rs.current, q.clone())
-                        }
-                        _ => return,
-                    },
-                    None => return,
-                };
-                let answer = self.input.trim().to_owned();
-                self.input.clear();
-                self.cursor_pos = 0;
-                if answer.is_empty() {
-                    return;
-                }
-                // 防止并发批改：同题多任务会错位污染 attempts/mastery
-                self.review_grading = true;
-                self.push_entry(Entry::User(format!("答: {answer}")));
-                self.push_entry(Entry::Info("批改中…".into()));
-                let provider = self.provider.clone();
-                let provider_cfg = self.provider_cfg.clone();
-                let store = Arc::clone(&self.store);
-                let tx = self.tx.clone();
-                tokio::spawn(async move {
-                    review::grade_short_answer(
-                        provider,
-                        provider_cfg,
-                        store,
-                        &q_clone,
-                        &answer,
-                        tx,
-                        idx,
-                    )
-                    .await;
-                });
-            }
-            KeyCode::Char(c @ '1'..='9') => {
-                // 选择题作答：先提取数据
-                let (q_clone, _current) = match &self.review {
-                    Some(rs) => match rs.questions.get(rs.current) {
-                        Some(q) if q.q_type == review::QType::Choice => (q.clone(), rs.current),
-                        _ => return,
-                    },
-                    None => return,
-                };
-                let choice = (c as u8 - b'1') as usize;
-                if choice >= q_clone.options.len() {
-                    return;
-                }
-                let user_letter = (b'A' + choice as u8) as char;
-
-                // answer 缺失或越界（LLM 输出不可控）：不计分，提示后跳过
-                let Some(correct_idx) = q_clone.answer else {
-                    self.push_entry(Entry::User(format!("选 {user_letter}")));
-                    self.push_entry(Entry::Error(
-                        "该题缺少标准答案（LLM 未生成），无法判分，跳过此题".into(),
-                    ));
-                    self.finish_review_question(false, None, "答案缺失跳过", &[]);
-                    return;
-                };
-                if correct_idx < 0 || correct_idx as usize >= q_clone.options.len() {
-                    self.push_entry(Entry::User(format!("选 {user_letter}")));
-                    self.push_entry(Entry::Error(format!(
-                        "该题答案下标非法 ({correct_idx})，无法判分，跳过此题"
-                    )));
-                    self.finish_review_question(false, None, "答案非法跳过", &[]);
-                    return;
-                }
-
-                let is_correct = choice as i64 == correct_idx;
-                let correct_letter = (b'A' + correct_idx as u8) as char;
-                let feedback = if is_correct {
-                    format!("✓ 正确（选 {user_letter}）")
+                if is_choice {
+                    let (q, sel) = {
+                        let rs = self.review.as_ref().unwrap();
+                        (rs.questions.get(rs.current).cloned(), rs.selected_option)
+                    };
+                    if let Some(q) = q {
+                        self.submit_choice(&q, sel.unwrap_or(0));
+                    }
                 } else {
-                    format!("✗ 错误（选 {user_letter}，正确答案: {correct_letter}）")
-                };
-                self.push_entry(Entry::User(format!("选 {user_letter}")));
-                self.push_entry(Entry::Info(feedback.clone()));
-                if let Some(exp) = &q_clone.explanation {
-                    self.push_entry(Entry::Info(format!("解析: {exp}")));
+                    // 简答题提交批改
+                    let answer = self.input.trim().to_owned();
+                    if answer.is_empty() {
+                        return;
+                    }
+                    let (idx, q_clone) = {
+                        let rs = self.review.as_ref().unwrap();
+                        (rs.current, rs.questions.get(rs.current).cloned())
+                    };
+                    let Some(q_clone) = q_clone else { return };
+                    self.review_grading = true;
+                    self.input.clear();
+                    self.cursor_pos = 0;
+                    self.push_entry(Entry::Info("◌ Grading…".into()));
+                    let provider = self.provider.clone();
+                    let provider_cfg = self.provider_cfg.clone();
+                    let store = Arc::clone(&self.store);
+                    let tx = self.tx.clone();
+                    tokio::spawn(async move {
+                        review::grade_short_answer(
+                            provider,
+                            provider_cfg,
+                            store,
+                            &q_clone,
+                            &answer,
+                            tx,
+                            idx,
+                        )
+                        .await;
+                    });
                 }
-                self.finish_review_question(is_correct, None, &feedback, &[]);
             }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let is_short = self
+            KeyCode::Char(c @ 'a'..='d') | KeyCode::Char(c @ 'A'..='D')
+                if is_choice && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                let idx = (c.to_ascii_lowercase() as u8 - b'a') as usize;
+                let q_opt = self
                     .review
                     .as_ref()
                     .and_then(|rs| rs.questions.get(rs.current))
-                    .map(|q| q.q_type == review::QType::ShortAnswer)
-                    .unwrap_or(false);
-                if is_short {
-                    self.cursor_pos = insert_char(&mut self.input, self.cursor_pos, c);
+                    .cloned();
+                let Some(q) = q_opt else { return };
+                if idx < q.options.len() {
+                    self.submit_choice(&q, idx);
                 }
             }
-            KeyCode::Backspace => {
-                let is_short = self
-                    .review
-                    .as_ref()
-                    .and_then(|rs| rs.questions.get(rs.current))
-                    .map(|q| q.q_type == review::QType::ShortAnswer)
-                    .unwrap_or(false);
-                if is_short {
-                    self.cursor_pos = delete_before(&mut self.input, self.cursor_pos);
-                }
+            KeyCode::Char(c) if !is_choice && !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.cursor_pos = insert_char(&mut self.input, self.cursor_pos, c);
             }
-            KeyCode::Left => {
-                self.cursor_pos = self.cursor_pos.saturating_sub(1);
-            }
-            KeyCode::Right => {
-                self.cursor_pos = (self.cursor_pos + 1).min(self.input.chars().count());
+            KeyCode::Backspace if !is_choice => {
+                self.cursor_pos = delete_before(&mut self.input, self.cursor_pos);
             }
             _ => {}
         }
+    }
+
+    /// 选择题提交判分（workspace：记录 + 反馈停留态）。
+    fn submit_choice(&mut self, q: &crate::review::ReviewQuestion, choice: usize) {
+        if choice >= q.options.len() {
+            return;
+        }
+        let user_letter = (b'A' + choice as u8) as char;
+        let Some(correct_idx) = q.answer else {
+            self.push_entry(Entry::Error("该题缺少标准答案（LLM 未生成），跳过".into()));
+            self.finish_review_question(false, None, "答案缺失跳过", &[]);
+            return;
+        };
+        if correct_idx < 0 || correct_idx as usize >= q.options.len() {
+            self.push_entry(Entry::Error(format!(
+                "该题答案下标非法 ({correct_idx})，跳过"
+            )));
+            self.finish_review_question(false, None, "答案非法跳过", &[]);
+            return;
+        }
+        let is_correct = choice as i64 == correct_idx;
+        let correct_letter = (b'A' + correct_idx as u8) as char;
+        let feedback = if is_correct {
+            format!("✓ 正确（选 {user_letter}）")
+        } else {
+            format!("✗ 错误（选 {user_letter}，正确答案: {correct_letter}）")
+        };
+        self.finish_review_question(is_correct, None, &feedback, &[]);
     }
 
     /// 浏览器按键：返回 true 表示已消费（导航/动作键）；

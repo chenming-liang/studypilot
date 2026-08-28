@@ -28,10 +28,21 @@ fn spinner_char(tick: usize) -> &'static str {
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let root = f.area();
+    // Review workspace：简答题需要更大的答案输入区
+    let input_h = if app.review.as_ref().is_some_and(|rs| {
+        rs.questions
+            .get(rs.current)
+            .map(|q| q.q_type == crate::review::QType::ShortAnswer)
+            .unwrap_or(false)
+    }) {
+        6
+    } else {
+        3
+    };
     let [header, main_area, input_area] = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(3),
-        Constraint::Length(3),
+        Constraint::Length(input_h),
     ])
     .areas(root);
     let [sidebar, chat] =
@@ -39,7 +50,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     draw_header(f, header, app);
     draw_sidebar(f, sidebar, app);
-    draw_chat(f, chat, app);
+    if app.review.is_some() {
+        draw_review_workspace(f, chat, app);
+    } else {
+        draw_chat(f, chat, app);
+    }
     draw_input(f, input_area, app);
 
     if let Some(picker) = &app.model_picker {
@@ -63,6 +78,183 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.toast.is_some() {
         draw_toast(f, app);
     }
+}
+
+/// Review workspace：进度点 → 标签 → 题干 → 选项/反馈 → Sources。
+/// 交互状态语义：蓝=可选项、黄=当前/题目、绿=正确、红=错误、灰=非重点。
+fn draw_review_workspace(f: &mut Frame, area: Rect, app: &App) {
+    use crate::review::QType;
+    let Some(rs) = app.review.as_ref() else {
+        return;
+    };
+    let Some(q) = rs.questions.get(rs.current) else {
+        return;
+    };
+    let inner_w = area.width.saturating_sub(4) as usize;
+    let awaiting = rs.awaiting_feedback();
+
+    // ① 进度圆点：✓ 绿 ✗ 红 ● 黄 ○ 暗灰（每颗独立染色，直接拼进行）
+    let total = rs.questions.len();
+    let mut dots: Vec<Span<'static>> = Vec::new();
+    for (i, r) in rs.results.iter().enumerate() {
+        dots.push(Span::styled(
+            if r.correct { "✓" } else { "✗" },
+            Style::new().fg(if r.correct { theme::SUCCESS } else { ERROR }),
+        ));
+        if i + 1 < total {
+            dots.push(Span::raw(" "));
+        }
+    }
+    for i in rs.results.len()..total {
+        dots.push(Span::styled(
+            if i == rs.current { "●" } else { "○" },
+            Style::new().fg(if i == rs.current {
+                theme::USER
+            } else {
+                theme::MUTED
+            }),
+        ));
+        if i + 1 < total {
+            dots.push(Span::raw(" "));
+        }
+    }
+    // ② 标签行
+    let type_str = if q.q_type == QType::Choice {
+        "选择题"
+    } else {
+        "简答题"
+    };
+    let tags = vec![
+        Span::styled(
+            format!("Question {}/{}", rs.current + 1, total),
+            Style::new().fg(theme::USER).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  ·  ", Style::new().fg(theme::MUTED)),
+        Span::styled(type_str, Style::new().fg(theme::SECONDARY)),
+    ];
+    // ③ 题干
+    let mut body: Vec<Line<'static>> = Vec::new();
+    let mut dots_line = vec![Span::raw("  ")];
+    dots_line.extend(dots);
+    body.push(Line::from(dots_line));
+    body.push(Line::default());
+    body.push(Line::from(tags));
+    body.push(Line::default());
+    for seg in wrap(&q.question, inner_w) {
+        body.push(Line::from(Span::styled(
+            format!("  {seg}"),
+            Style::new().fg(theme::FG),
+        )));
+    }
+    body.push(Line::default());
+
+    if awaiting {
+        // ④ 反馈卡
+        if let Some(r) = rs.results.get(rs.current) {
+            let mark = if r.correct {
+                "✓ Correct"
+            } else {
+                "✗ Incorrect"
+            };
+            let color = if r.correct { theme::SUCCESS } else { ERROR };
+            // feedback 自带 ✓/✗ 前缀时去掉，避免与 mark 重复
+            let detail = r
+                .feedback
+                .strip_prefix("✓ ")
+                .or_else(|| r.feedback.strip_prefix("✗ "))
+                .unwrap_or(&r.feedback);
+            body.push(Line::from(Span::styled(
+                format!("  {mark}  {detail}"),
+                Style::new().fg(color).add_modifier(Modifier::BOLD),
+            )));
+            if let Some(s) = r.score {
+                body.push(Line::from(Span::styled(
+                    format!("  得分 {s}/100"),
+                    Style::new().fg(color),
+                )));
+            }
+            if let Some(exp) = &q.explanation {
+                for seg in wrap(&format!("  解析: {exp}"), inner_w) {
+                    body.push(Line::from(Span::styled(seg, Style::new().fg(theme::MUTED))));
+                }
+            }
+            if !r.missing.is_empty() {
+                body.push(Line::from(Span::styled(
+                    "  缺失要点：",
+                    Style::new().fg(theme::USER),
+                )));
+                for m in &r.missing {
+                    body.push(Line::from(Span::styled(
+                        format!("  ● {m}"),
+                        Style::new().fg(theme::SUCCESS),
+                    )));
+                }
+            }
+        }
+        body.push(Line::default());
+        body.push(Line::from(Span::styled(
+            "  Enter 下一题 · Esc 退出复习",
+            Style::new().fg(theme::MUTED),
+        )));
+    } else if q.q_type == QType::Choice {
+        // ⑤ 选项列表：字母蓝、文字浅灰、当前 ❯ 黄
+        for (i, opt) in q.options.iter().enumerate() {
+            let letter = (b'A' + i as u8) as char;
+            let is_cursor = rs.selected_option.unwrap_or(0) == i;
+            let mark = if is_cursor { "❯ " } else { "  " };
+            let letter_style = Style::new().fg(if is_cursor { theme::USER } else { ACCENT });
+            let text_style = if is_cursor {
+                Style::new().fg(theme::FG)
+            } else {
+                Style::new().fg(theme::MUTED)
+            };
+            body.push(Line::from(vec![
+                Span::styled(
+                    format!("  {mark}"),
+                    Style::new().fg(if is_cursor { theme::USER } else { theme::MUTED }),
+                ),
+                Span::styled(format!("{letter}  "), letter_style),
+                Span::styled(opt.clone(), text_style),
+            ]));
+        }
+        body.push(Line::default());
+        body.push(Line::from(Span::styled(
+            "  ↑↓ 选择 · A-D 作答 · Esc 退出复习",
+            Style::new().fg(theme::MUTED),
+        )));
+    } else {
+        // 简答题：答案输入缓冲提示
+        let shown: String = app
+            .input
+            .chars()
+            .enumerate()
+            .flat_map(|(i, ch)| {
+                if i == app.cursor_pos {
+                    vec!['▍', ch]
+                } else {
+                    vec![ch]
+                }
+            })
+            .chain(
+                std::iter::once('▍').take(if app.cursor_pos >= app.input.chars().count() {
+                    1
+                } else {
+                    0
+                }),
+            )
+            .collect();
+        body.push(Line::from(Span::styled(
+            format!("  你的答案 > {shown}"),
+            Style::new().fg(theme::FG),
+        )));
+        body.push(Line::default());
+        body.push(Line::from(Span::styled(
+            "  Enter 提交批改 · Esc 退出复习",
+            Style::new().fg(theme::MUTED),
+        )));
+    }
+
+    f.render_widget(Paragraph::new(body), area);
 }
 
 /// 右上角临时通知：复制成功/失败等一次性反馈，2.5s（错误 4s）自动消失。

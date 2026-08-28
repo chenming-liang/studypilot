@@ -58,6 +58,15 @@ pub struct ReviewState {
     pub questions: Vec<ReviewQuestion>,
     pub current: usize,
     pub results: Vec<ReviewResult>,
+    /// 选择题光标（workspace ↑↓ 移动；None = 未开始选择）
+    pub selected_option: Option<usize>,
+}
+
+impl ReviewState {
+    /// 当前题是否已作答（进入反馈停留态）。
+    pub fn awaiting_feedback(&self) -> bool {
+        self.results.len() > self.current
+    }
 }
 
 /// 一道题目（含 DB id）。
@@ -355,6 +364,7 @@ pub async fn start_review(
         questions,
         current: 0,
         results: Vec::new(),
+        selected_option: None,
     })));
 }
 

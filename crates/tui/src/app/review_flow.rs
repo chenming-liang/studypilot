@@ -7,7 +7,8 @@ use tokio::task::spawn_blocking;
 use super::{App, AppEvent, Entry};
 use crate::review;
 impl App {
-    /// 完成一道题：记录 attempt + 更新掌握度 + 推进到下一题。
+    /// 完成一道题：记录 attempt + 更新掌握度 + 进入反馈停留态。
+    /// （Workspace 渲染直接读 ReviewState；不再向聊天流逐题输出）
     pub(crate) fn finish_review_question(
         &mut self,
         correct: bool,
@@ -48,84 +49,30 @@ impl App {
             })
             .await
             .unwrap_or_else(|e| Err(format!("任务错误: {e}")));
-            // attempts/mastery 是掌握度闭环的数据源，静默丢失会让复习质量悄悄劣化
             if let Err(msg) = result {
                 let _ = tx.send(AppEvent::DatabaseFailed(msg));
             }
         });
 
-        // ③ 更新 review 状态
-        let advance = if let Some(rs) = &mut self.review {
+        // ③ 记录结果 → 进入反馈停留态（渲染由 workspace 依 results.len()>current 判定）
+        if let Some(rs) = &mut self.review {
             rs.results.push(review::ReviewResult {
                 correct,
                 score,
                 feedback: feedback.to_owned(),
                 missing: missing.to_vec(),
             });
-            rs.current += 1;
-            rs.current >= rs.questions.len()
-        } else {
-            false
-        };
-
-        // ④ 渲染下一题或结束
-        if advance {
-            self.finish_review();
-        } else {
-            self.render_current_question();
+            rs.selected_option = None;
         }
     }
 
-    pub(crate) fn render_current_question(&mut self) {
-        // 提取数据，避免借用冲突
-        let info = self.review.as_ref().and_then(|rs| {
-            rs.questions
-                .get(rs.current)
-                .map(|q| (rs.current, rs.questions.len(), q.clone()))
-        });
-        let Some((current, total, q)) = info else {
-            return;
-        };
-
-        // 进度圆点：✓ 答对 · ✗ 答错 · ● 当前 · ○ 未到（Review 进度感）
-        let mut dots = String::new();
-        let answered = self
-            .review
-            .as_ref()
-            .map(|rs| rs.results.clone())
-            .unwrap_or_default();
-        for r in &answered {
-            if !dots.is_empty() {
-                dots.push(' ');
-            }
-            dots.push(if r.correct { '✓' } else { '✗' });
-        }
-        for i in answered.len()..total {
-            if !dots.is_empty() {
-                dots.push(' ');
-            }
-            dots.push(if i == current { '●' } else { '○' });
-        }
-        self.push_entry(Entry::Info(format!("Review · {dots}")));
-        let type_str = if q.q_type == review::QType::Choice {
-            "选择题"
-        } else {
-            "简答题"
-        };
-        self.push_entry(Entry::Info(format!(
-            "Question {}/{} · {type_str}",
-            current + 1,
-            total
-        )));
-        // 题干用 USER 暖黄（Review 模式语义色）
-        self.entries.push(Entry::User(q.question.clone()));
-        if q.q_type == review::QType::Choice {
-            for (i, opt) in q.options.iter().enumerate() {
-                self.push_entry(Entry::Info(format!("  {}. {opt}", i + 1)));
-            }
-            self.push_entry(Entry::Info("数字键 1-9 作答".into()));
-        } else {
-            self.push_entry(Entry::Info("输入答案后 Enter 提交（Esc 退出复习）".into()));
+    /// 反馈停留态按 Enter：推进到下一题或完成复习（Summary 卡回聊天流）。
+    pub(crate) fn advance_review(&mut self) {
+        let Some(rs) = &mut self.review else { return };
+        rs.current += 1;
+        rs.selected_option = None;
+        if rs.current >= rs.questions.len() {
+            self.finish_review();
         }
     }
 
@@ -135,37 +82,55 @@ impl App {
 
         let total = rs.questions.len();
         let correct_count = rs.results.iter().filter(|r| r.correct).count();
-        self.push_entry(Entry::Info(format!(
-            "=== 复习完成: {correct_count}/{total} 正确 ==="
-        )));
-        let missed: Vec<&str> = rs
-            .results
-            .iter()
-            .filter(|r| !r.correct)
-            .map(|r| r.feedback.as_str())
-            .collect();
-        if !missed.is_empty() {
-            self.push_entry(Entry::Info("薄弱点:".into()));
-            for m in &missed {
-                self.push_entry(Entry::Info(format!("  • {m}")));
+        self.push_entry(Entry::Info("══ Review Complete ══".into()));
+        self.push_entry(Entry::Info(format!("正确 {correct_count}/{total}")));
+        for (i, (q, r)) in rs.questions.iter().zip(rs.results.iter()).enumerate() {
+            let mark = if r.correct { "✓" } else { "✗" };
+            let score = r.score.map(|s| format!(" · {s}/100")).unwrap_or_default();
+            self.push_entry(Entry::Info(format!(
+                "{mark} Q{} · {}{score}",
+                i + 1,
+                q.question.chars().take(24).collect::<String>()
+            )));
+            if !r.missing.is_empty() {
+                self.push_entry(Entry::Info(format!("   缺失: {}", r.missing.join("；"))));
             }
         }
+        self.push_entry(Entry::Info(format!(
+            "正确率 {:.0}%",
+            if total > 0 {
+                correct_count as f64 * 100.0 / total as f64
+            } else {
+                0.0
+            }
+        )));
     }
 
     pub(crate) fn exit_review(&mut self, msg: &str) {
+        // 中途退出：若有进度，同样出摘要卡（部分完成）
+        let has_progress = self
+            .review
+            .as_ref()
+            .map(|rs| !rs.results.is_empty())
+            .unwrap_or(false);
         self.review = None;
+        if has_progress {
+            self.finish_review();
+        }
         self.push_entry(Entry::Info(msg.to_owned()));
     }
+}
 
+impl App {
+    /// 出题完成（或失败）：清 inflight + 进 Review workspace 渲染。
     pub(crate) fn on_review_ready(&mut self, result: Result<review::ReviewState, String>) {
         self.inflight = None; // 出题/取消完成
         self.request_cost_sync();
         match result {
             Ok(rs) => {
                 let count = rs.questions.len();
-                self.push_entry(Entry::Info(format!("复习开始: 共 {count} 题（Esc 退出）")));
                 self.review = Some(rs);
-                self.render_current_question();
+                self.push_entry(Entry::Info(format!("· Review started · {count} questions")));
             }
             Err(e) => {
                 self.push_entry(Entry::Error(format!("出题失败: {e}")));
@@ -173,6 +138,7 @@ impl App {
         }
     }
 
+    /// 简答题批改回流：校验索引 → 记录 → 反馈停留态。
     pub(crate) fn on_review_graded(
         &mut self,
         question_index: usize,
@@ -201,10 +167,6 @@ impl App {
                         String::new()
                     }
                 );
-                self.push_entry(Entry::Info(feedback.clone()));
-                if !missing.is_empty() {
-                    self.push_entry(Entry::Info(format!("缺失要点: {}", missing.join("；"))));
-                }
                 self.finish_review_question(correct, Some(score), &feedback, &missing);
             }
             Err(e) => {
