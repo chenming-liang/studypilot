@@ -603,3 +603,54 @@ mod course_delete_tests {
         assert_eq!(app.course, "csapp", "删除其他课程不应改变当前分区");
     }
 }
+
+#[cfg(test)]
+mod selection_mapping_tests {
+    use super::*;
+    use crate::app::AppEvent;
+
+    fn test_app() -> App {
+        let cfg = agent_providers::ProviderConfig {
+            name: "test".into(),
+            endpoint: "http://localhost".into(),
+            api_key: Some("k".into()),
+            api_key_env: None,
+            model: "m".into(),
+            price_prompt: 0.0,
+            price_completion: 0.0,
+            context_length: 1000,
+            thinking: false,
+        };
+        let store = Arc::new(Store::open_in_memory().unwrap());
+        let client = Arc::new(OpenAiClient::new(cfg.clone()).unwrap());
+        App::new(client, store, cfg.clone(), vec![cfg], 5.0, Vec::new())
+    }
+
+    /// 回归：拖选行号映射与渲染同系（聊天区无边框）。
+    /// 屏幕第 k 行（row = area.y + k）必须映射到渲染行 scroll_top + k。
+    #[test]
+    fn selection_maps_to_rendered_row() {
+        let mut app = test_app();
+        // chat 区：y=3, h=20（主区中下的典型布局），无滚动（贴底）
+        app.chat_rect = ratatui::layout::Rect::new(22, 3, 60, 20);
+        app.chat_lines = (0..100).map(|i| format!("line {i}")).collect();
+        app.scroll_up = 0;
+        // 渲染端：viewport=20，top = max_offset(80) - 0 = 80 → 屏幕首行=lines[80]
+        // 点屏幕 y=3+7=10（第 8 行）→ 应映射 lines[87]
+        app.update_text_selection(10, 30, true);
+        assert_eq!(app.selection_anchor, Some(87), "必须与渲染行一致");
+        assert_eq!(app.text_selection, Some((87, 87)));
+    }
+
+    /// 单行聊天流（无滚动）：row 直接对应行号。
+    #[test]
+    fn selection_without_scroll() {
+        let mut app = test_app();
+        app.chat_rect = ratatui::layout::Rect::new(22, 3, 60, 20);
+        app.chat_lines = (0..10).map(|i| format!("line {i}")).collect();
+        app.update_text_selection(3, 30, true); // 首行
+        assert_eq!(app.selection_anchor, Some(0));
+        app.update_text_selection(9, 30, true); // 第 7 行
+        assert_eq!(app.selection_anchor, Some(6));
+    }
+}

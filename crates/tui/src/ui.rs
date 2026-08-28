@@ -173,8 +173,9 @@ fn sidebar_style(name: &str, current: &str) -> Style {
 
 /// 聊天流：手动折行 + 选中高亮 + 存储文本行供复制提取。
 fn draw_chat(f: &mut Frame, area: Rect, app: &mut App) {
+    // 聊天区无边框：内容区 = 整个 area（拖选坐标映射与此同系）
     let inner_width = area.width.saturating_sub(2) as usize;
-    let viewport = area.height.saturating_sub(2) as usize;
+    let viewport = area.height as usize;
 
     let mut lines: Vec<Line> = Vec::new();
     let mut text_lines: Vec<String> = Vec::new();

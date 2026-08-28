@@ -157,15 +157,18 @@ impl App {
 
     /// 根据鼠标位置更新文本选区（仅限聊天区内）+ 边缘自动翻页。
     pub(crate) fn update_text_selection(&mut self, row: u16, col: u16, is_down: bool) {
-        let inner = self.chat_rect.inner(ratatui::layout::Margin::new(1, 1));
+        // 聊天区无边框：chat_rect 即内容区（渲染从 area.y 画第一行），
+        // 坐标映射必须与渲染端完全同系——此前误用 inner(Margin 1,1)，
+        // 导致选中恒偏上一行。
+        let inner = self.chat_rect;
         if !inner.contains(ratatui::layout::Position { x: col, y: row }) {
             return;
         }
 
         // 自动翻页：贴近视口上下边缘时滚动（拖选超出可视范围时跟随）
         let max_offset = self.chat_lines.len().saturating_sub(inner.height as usize);
-        let near_top = row <= inner.y.saturating_add(1);
-        let near_bottom = row >= inner.bottom().saturating_sub(2);
+        let near_top = row <= inner.y;
+        let near_bottom = row >= inner.bottom().saturating_sub(1);
         if near_top && max_offset > 0 {
             self.scroll_up = (self.scroll_up + 3).min(max_offset as u16);
         } else if near_bottom {
