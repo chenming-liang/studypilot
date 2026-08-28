@@ -157,9 +157,10 @@ pub async fn start_review(
                     Ok((directive, chunks, concepts))
                 }
                 None => {
-                    // 随机范围：掌握度加权随机抽概念（正确率低/未测过权重高）
+                    // 随机范围：只从「有素材的概念」里按掌握度加权随机抽（正确率低/未测过权重高）
+                    let with_material_concepts = store_clone.concepts_with_material(course_id)?;
                     let mut rng = Prng::from_clock();
-                    let weights: Vec<f64> = concepts
+                    let weights: Vec<f64> = with_material_concepts
                         .iter()
                         .map(|c| {
                             let acc = if c.attempts > 0 {
@@ -170,10 +171,16 @@ pub async fn start_review(
                             1.0 + (1.0 - acc) * 3.0
                         })
                         .collect();
-                    let pick_k = n.min(concepts.len()).max(1);
+                    let pick_k = n.min(with_material_concepts.len()).max(1);
                     let chosen = weighted_sample(&weights, pick_k, &mut rng);
-                    let ids: Vec<i64> = chosen.iter().map(|&i| concepts[i].concept_id).collect();
-                    let names: Vec<&str> = chosen.iter().map(|&i| concepts[i].name.as_str()).collect();
+                    let ids: Vec<i64> = chosen
+                        .iter()
+                        .map(|&i| with_material_concepts[i].concept_id)
+                        .collect();
+                    let names: Vec<&str> = chosen
+                        .iter()
+                        .map(|&i| with_material_concepts[i].name.as_str())
+                        .collect();
                     let directive = format!("本次复习覆盖以下概念：{}。请只在这些概念范围内出题，每题绑定一个概念。", names.join("、"));
                     let with_material = store_clone.chunks_by_concepts(&ids, 3)?;
                     let chunks = if with_material.is_empty() {

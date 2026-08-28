@@ -765,6 +765,46 @@ impl Store {
         Ok(map)
     }
 
+    /// 只返回「有关联笔记片段」的概念（随机范围出题用——避免抽中无素材概念退回大杂烩）。
+    pub fn concepts_with_material(&self, course_id: Option<i64>) -> Result<Vec<ConceptMastery>> {
+        let conn = self.conn.lock().unwrap();
+        let (sql, cid): (&str, Option<i64>) = match course_id {
+            Some(_) => (
+                "SELECT c.id, c.name, COALESCE(cm.attempts, 0), COALESCE(cm.correct, 0)
+                 FROM concepts c
+                 JOIN note_concepts nc ON nc.concept_id = c.id
+                 JOIN note_chunks ch ON ch.note_id = nc.note_id
+                 LEFT JOIN concept_mastery cm ON cm.concept_id = c.id
+                 WHERE c.course_id = ?1
+                 GROUP BY c.id",
+                course_id,
+            ),
+            None => (
+                "SELECT c.id, c.name, COALESCE(cm.attempts, 0), COALESCE(cm.correct, 0)
+                 FROM concepts c
+                 JOIN note_concepts nc ON nc.concept_id = c.id
+                 JOIN note_chunks ch ON ch.note_id = nc.note_id
+                 LEFT JOIN concept_mastery cm ON cm.concept_id = c.id
+                 GROUP BY c.id",
+                None,
+            ),
+        };
+        let mut stmt = conn.prepare(sql)?;
+        let map_row = |r: &rusqlite::Row<'_>| {
+            Ok(ConceptMastery {
+                concept_id: r.get(0)?,
+                name: r.get(1)?,
+                attempts: r.get(2)?,
+                correct: r.get(3)?,
+            })
+        };
+        let rows = match cid {
+            Some(id) => stmt.query_map([id], map_row)?,
+            None => stmt.query_map([], map_row)?,
+        };
+        Ok(rows.flatten().collect())
+    }
+
     pub fn get_quiz_questions(&self, quiz_id: i64) -> Result<Vec<QuestionRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
