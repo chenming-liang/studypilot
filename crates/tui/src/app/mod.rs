@@ -355,26 +355,26 @@ impl App {
     /// header 状态标签：与按键路由同源的覆盖层状态推导（复习 > 导入 > 请求中 > 选择 > 就绪）。
     /// 让用户随时知道"我现在在哪"，替代隐含状态机。
     pub(crate) fn status_label(&self) -> (String, ratatui::style::Color) {
-        use ratatui::style::Color;
+        use crate::theme;
         if let Some(rs) = &self.review {
             let grading = if self.review_grading {
-                " · 批改中…"
+                " · Grading…"
             } else {
                 ""
             };
             let cur = (rs.current + 1).min(rs.questions.len());
             return (
-                format!("复习 {cur}/{} 题{grading}", rs.questions.len()),
-                Color::Magenta,
+                format!("◌ Review {cur}/{}{grading}", rs.questions.len()),
+                theme::USER,
             );
         }
         if self.import_cancel.is_some() {
-            return ("导入中 (Ctrl+C 中断)".into(), Color::Yellow);
+            return ("◌ Importing…".into(), theme::USER);
         }
         if self.is_inflight() {
-            return ("思考中…".into(), Color::Yellow);
+            return ("◌ Thinking…".into(), theme::USER);
         }
-        ("就绪".into(), Color::Green)
+        ("● Ready".into(), theme::SUCCESS)
     }
 
     pub(crate) fn push_entry(&mut self, e: Entry) {

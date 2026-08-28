@@ -105,22 +105,14 @@ fn draw_toast(f: &mut Frame, app: &App) {
 }
 
 fn draw_header(f: &mut Frame, area: Rect, app: &App) {
-    // 状态由覆盖层状态推导（复习/导入/思考中/选择/就绪），颜色随状态变化
+    // 状态由覆盖层状态推导（复习/导入/思考中/就绪），符号+语义色（◌ 进行中 / ● 就绪）
     let (status_text, status_color) = app.status_label();
 
-    // 左侧 = 学习位置（我是谁、在哪门课）；右侧 = 系统状态（模型/费用/状态）
+    // 左侧 = 学习位置（我是谁、在哪门课）；右侧 = 模型 + 费用 + 状态
     let left = format!(" StudyPilot │ {}", app.course);
     let right = format!(
-        "{} · {} │ ¥{:.2}/{:.0} │ {} ",
-        app.provider_cfg.model,
-        if app.provider_cfg.thinking {
-            "思考"
-        } else {
-            "快速"
-        },
-        app.total_cost,
-        app.max_cost,
-        status_text,
+        "{} │ ¥{:.2}/{:.0} │ {} ",
+        app.provider_cfg.model, app.total_cost, app.max_cost, status_text,
     );
     let left_w = display_width(&left);
     let right_w = display_width(&right);
@@ -130,26 +122,15 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         Span::styled(left, Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
         Span::raw(" ".repeat(pad)),
         Span::styled(
-            format!("{} · ", app.provider_cfg.model),
-            Style::new().fg(theme::SECONDARY_DIM),
-        ),
-        Span::styled(
-            format!(
-                "{} │ ",
-                if app.provider_cfg.thinking {
-                    "思考"
-                } else {
-                    "快速"
-                }
-            ),
+            format!("{} │ ", app.provider_cfg.model),
             Style::new().fg(theme::SECONDARY_DIM),
         ),
         Span::styled(
             format!("¥{:.2}/{:.0} │ ", app.total_cost, app.max_cost),
             Style::new().fg(if app.total_cost > app.max_cost * 0.8 {
-                Color::Red
+                ERROR
             } else {
-                Color::Gray
+                theme::MUTED
             }),
         ),
         Span::styled(
