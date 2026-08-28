@@ -286,7 +286,8 @@ fn append_entry_lines(entry: &Entry, width: usize, out: &mut Vec<Line<'static>>)
     match entry {
         Entry::Info(text) => push_prefixed_wrapped(out, "· ", DIM, text, theme::MUTED, width, None),
         Entry::User(text) => {
-            push_prefixed_wrapped(out, "你 › ", USER, text, theme::FG, w, Some(USER))
+            push_prefixed_wrapped(out, "你 › ", USER, text, theme::FG, w, Some(USER));
+            out.push(Line::default()); // 块间空行：黄条与下一条消息隔开
         }
         Entry::Assistant {
             content,
@@ -318,6 +319,7 @@ fn append_entry_lines(entry: &Entry, width: usize, out: &mut Vec<Line<'static>>)
                 spans.extend(l.spans);
                 out.push(Line::from(spans));
             }
+            out.push(Line::default()); // 块间空行：紫条与下一条消息隔开
         }
         Entry::Citation(text) => {
             // RAG 品牌色：引用来源行整体 Reference 青（同属 AI 块色条）
