@@ -544,12 +544,20 @@ fn draw_note_browser(f: &mut Frame, app: &mut App) {
             " 输入过滤 · Enter 进入选择 · Esc 关闭 ".into()
         }
         BrowserMode::Select => {
+            // 光标可见性对齐滚动窗口
+            browser.ensure_cursor_visible(crate::note_browser::LIST_VISIBLE);
             title.push_str(&format!(
                 "· 结果 {} · 已选 {}",
                 browser.results.len(),
                 browser.selected_count()
             ));
-            for (i, n) in browser.results.iter().enumerate() {
+            for (i, n) in browser
+                .results
+                .iter()
+                .enumerate()
+                .skip(browser.scroll)
+                .take(crate::note_browser::LIST_VISIBLE)
+            {
                 let mark = if i == browser.cursor { "▸ " } else { "  " };
                 let check = if browser.selected.contains(&n.id) {
                     "[✓] "
