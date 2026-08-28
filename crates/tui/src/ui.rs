@@ -162,8 +162,16 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
         } else {
             ""
         };
+        // 当前打开的会话高亮（与侧栏当前课程同风格）
+        let is_current = app.current_session_id() == Some(s.id);
+        let title_style = if is_current {
+            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+        } else {
+            Style::new()
+        };
+        let mark = if is_current { "▸" } else { " " };
         items.push(ListItem::new(Line::from(vec![
-            Span::styled(format!("{prefix}{short}{ellipsis}"), Style::new()),
+            Span::styled(format!("{mark}{prefix}{short}{ellipsis}"), title_style),
             Span::styled(suffix, Style::new().fg(DIM)),
         ])));
     }

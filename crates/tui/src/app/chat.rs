@@ -8,7 +8,7 @@ use tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
 use tools::{ListCoursesTool, SearchNotesTool};
 
-use super::{AgentEvent, App, AppEvent, Entry};
+use super::{AgentEvent, App, AppEvent, Entry, SessionState};
 use storage::Store;
 
 impl App {
@@ -60,6 +60,14 @@ impl App {
     }
 
     /// 当前课程分区对应的 course_id（all = None = 不过滤）。
+    /// 当前会话 id（仅已持久化的 Ready 态有值；未建会话/创建中为 None）。
+    pub(crate) fn current_session_id(&self) -> Option<i64> {
+        match &self.session_state {
+            SessionState::Ready { id, .. } => Some(*id),
+            _ => None,
+        }
+    }
+
     /// 会话归属课程的显示名（course_id None = all 区）。
     pub(crate) fn course_label(&self, course_id: Option<i64>) -> String {
         match course_id {
