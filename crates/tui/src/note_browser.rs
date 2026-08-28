@@ -236,7 +236,7 @@ mod tests {
 
 #[cfg(test)]
 mod scroll_tests {
-    use super::super::tests::summary;
+    use super::tests::summary;
     use super::*;
 
     fn b_with(n: usize) -> NoteBrowser {
