@@ -508,7 +508,7 @@ impl App {
 
     /// r：进入重命名子状态（搜索词暂存，输入缓冲腾给新标题）。
     pub(crate) fn session_browser_begin_rename(&mut self) {
-        let (id, _old_title) = {
+        let (id, old_title) = {
             let Some(b) = &self.session_browser else {
                 return;
             };
