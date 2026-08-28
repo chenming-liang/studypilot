@@ -28,19 +28,20 @@ fn spinner_char(tick: usize) -> &'static str {
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let root = f.area();
-    // Review workspace：简答题作答中需要更大的答案输入区（反馈停留态收窄回 3）
-    let input_h = if app.review.as_ref().is_some_and(|rs| {
+    // 输入区高度：随输入折行数动态增长（长答案/长问题自动换行不被截断）。
+    // 简答题作答中加高（答案框主视觉）；反馈停留态收窄回 3。
+    let input_w = (root.width.saturating_sub(2)).max(4) as usize;
+    let wrapped_lines = wrap(&app.input, input_w).len();
+    let review_short = app.review.as_ref().is_some_and(|rs| {
         !rs.awaiting_feedback()
             && rs
                 .questions
                 .get(rs.current)
                 .map(|q| q.q_type == crate::review::QType::ShortAnswer)
                 .unwrap_or(false)
-    }) {
-        6
-    } else {
-        3
-    };
+    });
+    let floor = if review_short { 6 } else { 3 };
+    let input_h = (wrapped_lines + 1).clamp(floor, 8) as u16;
     let [header, main_area, input_area] = Layout::vertical([
         Constraint::Length(3),
         Constraint::Min(3),
@@ -619,6 +620,39 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
     out
 }
 
+/// 输入按显示宽度折行 + 光标定位：返回 (每行文本, 光标所在行, 光标在行内显示宽度)。
+/// 光标边界 = 字符索引 `cursor`（位于前字符之后、下字符之前）。折行规则与 `wrap` 一致。
+fn wrap_input_with_cursor(input: &str, cursor: usize, width: usize) -> (Vec<String>, usize, usize) {
+    let mut vis_lines: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut w = 0usize;
+    let mut idx = 0usize;
+    let mut cursor_line = 0usize;
+    let mut cursor_col = 0usize;
+    let mut placed = false;
+    for ch in input.chars() {
+        if idx == cursor && !placed {
+            cursor_line = vis_lines.len();
+            cursor_col = w;
+            placed = true;
+        }
+        let cw = UnicodeWidthChar::width(ch).unwrap_or(1);
+        if width > 0 && w + cw > width && w > 0 {
+            vis_lines.push(std::mem::take(&mut cur));
+            w = 0;
+        }
+        cur.push(ch);
+        w += cw;
+        idx += 1;
+    }
+    if idx == cursor && !placed {
+        cursor_line = vis_lines.len();
+        cursor_col = w;
+    }
+    vis_lines.push(cur);
+    (vis_lines, cursor_line, cursor_col)
+}
+
 fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     // Review 模式：底部状态栏专属化，只显示当前答题动作的提示，简答时输入行即答案框
     let (hint, show_input) = match &app.review {
@@ -647,45 +681,53 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
         }
     };
 
-    // placeholder：输入为空时显示灰色提示
-    let display_input = if app.input.is_empty() && app.review.is_some() && show_input {
-        vec![
-            Span::styled("› ", Style::new().fg(ACCENT)),
-            Span::styled("输入你的答案…", Style::new().fg(DIM)),
-        ]
-    } else if app.input.is_empty() && !app.is_inflight() {
-        vec![
-            Span::styled("› ", Style::new().fg(ACCENT)),
-            Span::styled(format!("Ask {}...", app.course), Style::new().fg(DIM)),
-        ]
-    } else {
-        vec![
-            Span::styled("› ", Style::new().fg(ACCENT)),
-            Span::raw(app.input.clone()),
-        ]
-    };
-
-    // 底线样式：上边一条分隔线，无框
+    // 底线样式：上边一条分隔线，无框；输入过长按显示宽度折行（多行渲染 + 光标跟随）
+    let input_w = (area.width.saturating_sub(2)).max(4) as usize;
     let mut lines = vec![Line::from(Span::styled(
         hint.to_owned(),
         Style::new().fg(DIM),
     ))];
+    let mut cursor_line = 0usize;
+    let mut cursor_col = 0usize;
     if show_input {
-        lines.push(Line::from(display_input));
+        let (vis_lines, cl, cc) = wrap_input_with_cursor(&app.input, app.cursor_pos, input_w);
+        cursor_line = cl;
+        cursor_col = cc;
+        if app.input.is_empty() {
+            let ph = if app.review.is_some() {
+                "输入你的答案…".to_owned()
+            } else if app.is_inflight() {
+                String::new()
+            } else {
+                format!("Ask {}...", app.course)
+            };
+            if !ph.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled("› ", Style::new().fg(ACCENT)),
+                    Span::styled(ph, Style::new().fg(DIM)),
+                ]));
+            }
+        } else {
+            for (i, seg) in vis_lines.iter().enumerate() {
+                if i == 0 {
+                    lines.push(Line::from(vec![
+                        Span::styled("› ", Style::new().fg(ACCENT)),
+                        Span::raw(seg.clone()),
+                    ]));
+                } else {
+                    lines.push(Line::from(Span::raw(seg.clone())));
+                }
+            }
+        }
     }
     f.render_widget(Paragraph::new(lines), area);
 
-    // 光标定位：第 2 行（hint 下方），前缀 "› "(2)
+    // 光标定位到折行后的正确可视行/列（首行带 "› " 前缀占 2 列）
     if show_input {
-        let prefix_width: usize = app
-            .input
-            .chars()
-            .take(app.cursor_pos)
-            .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
-            .sum();
-        let x = area.x + 2 + prefix_width as u16;
-        if x < area.right() - 1 && area.height > 1 {
-            f.set_cursor_position((x, area.y + 1));
+        let x = area.x + if cursor_line == 0 { 2 } else { 0 } + cursor_col as u16;
+        let y = area.y + 1 + cursor_line as u16;
+        if x < area.right() && y < area.bottom() {
+            f.set_cursor_position((x, y));
         }
     }
 }
@@ -1397,5 +1439,46 @@ mod cursor_window_tests {
         assert_eq!(win, vec!['5', '6', '7', '8']);
         // 光标在 0 → 头部窗口
         assert_eq!(cursor_window(&chars, 0, 4), vec!['1', '2', '3', '4']);
+    }
+}
+
+#[cfg(test)]
+mod wrap_cursor_tests {
+    use super::wrap_input_with_cursor;
+
+    #[test]
+    fn single_line_no_wrap() {
+        let (lines, cl, cc) = wrap_input_with_cursor("abc", 2, 10);
+        assert_eq!(lines, vec!["abc"]);
+        assert_eq!((cl, cc), (0, 2));
+    }
+
+    #[test]
+    fn wraps_to_multiple_lines() {
+        // 宽 4：每行 2 个全角字符（甲=宽2）→ 3 行
+        let s = "甲乙丙丁戊";
+        let (lines, _, _) = wrap_input_with_cursor(s, 0, 4);
+        assert_eq!(lines.len(), 3);
+    }
+
+    #[test]
+    fn cursor_follows_wrapped_lines() {
+        let s = "甲乙丙丁戊";
+        // 光标在字符索引 4（丁之后、戊之前）：落在「丙丁」行尾（第 1 行，col 4）
+        let (_, cl, cc) = wrap_input_with_cursor(s, 4, 4);
+        assert_eq!((cl, cc), (1, 4));
+        // 光标在字符索引 2（乙之后）：第 1 行行尾（宽 4）
+        let (_, cl, cc) = wrap_input_with_cursor(s, 2, 4);
+        assert_eq!((cl, cc), (0, 4));
+        // 光标在尾部（索引 5）
+        let (_, cl, cc) = wrap_input_with_cursor(s, 5, 4);
+        assert_eq!((cl, cc), (2, 2));
+    }
+
+    #[test]
+    fn empty_input_cursor_at_origin() {
+        let (lines, cl, cc) = wrap_input_with_cursor("", 0, 10);
+        assert_eq!(lines, vec![""]);
+        assert_eq!((cl, cc), (0, 0));
     }
 }
