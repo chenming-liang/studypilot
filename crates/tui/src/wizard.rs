@@ -155,12 +155,9 @@ mod wizard_tests {
     #[test]
     fn review_wizard_flow_and_command() {
         let mut w = Wizard::new_review("rust".into());
-        assert_eq!(w.input, ""); // 概念默认空
-        w.input = "ownership".into();
-        assert!(!w.confirm()); // 推进到题数
-        assert_eq!(w.input, "5");
-        w.input = "10".into();
-        assert!(w.confirm()); // 最后一步
+        // 概念默认空（默认值由调用方写入聊天框缓冲）
+        assert!(!w.confirm("ownership".into())); // 推进到题数
+        assert!(w.confirm("10".into())); // 最后一步
         assert_eq!(w.command(), "/review rust ownership --n 10");
     }
 

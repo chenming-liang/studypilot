@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use unicode_width::UnicodeWidthChar;
 
-use crate::app::{App, CommandPalette, Entry, ModelPicker, Wizard};
+use crate::app::{App, Entry, ModelPicker};
 use crate::markdown;
 use crate::palette::ListPicker;
 
