@@ -8,7 +8,7 @@ use tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
 
 use super::{App, AppEvent, CourseOpOutcome, Entry, ModelPicker};
-use crate::course_cmd::{CourseAction, parse_course_action};
+use crate::course_cmd::{CourseAction, ReviewSpec, parse_course_action, parse_review_action};
 use crate::review;
 use storage::Store;
 
@@ -201,15 +201,15 @@ impl App {
             return;
         }
 
-        let tokens: Vec<&str> = arg.split_whitespace().collect();
-        if tokens.is_empty() {
-            self.push_entry(Entry::Error(
-                "用法: /review <课程名> [概念关键词] [--n 数量]".into(),
-            ));
-            return;
-        }
-
-        let course_name = tokens[0].to_owned();
+        let known: Vec<String> = self.courses.iter().map(|(_, n)| n.clone()).collect();
+        let spec = match parse_review_action(arg, &known) {
+            Ok(s) => s,
+            Err(e) => {
+                self.push_entry(Entry::Error(e));
+                return;
+            }
+        };
+        let course_name = spec.course;
         if course_name == "all" {
             self.push_entry(Entry::Error("复习需指定具体课程，不能为 all".into()));
             return;
@@ -225,25 +225,8 @@ impl App {
             return;
         };
 
-        // 解析 --n 数量（默认 5）
-        let n = tokens
-            .windows(2)
-            .find(|w| w[0] == "--n")
-            .and_then(|w| w[1].parse::<usize>().ok())
-            .unwrap_or(5);
-
-        // 概念关键词 = 去掉课程名和 --n 后的部分
-        let scope: String = tokens[1..]
-            .iter()
-            .filter(|s| !s.starts_with("--"))
-            .copied()
-            .collect::<Vec<_>>()
-            .join(" ");
-        let scope = if scope.is_empty() {
-            course_name.clone()
-        } else {
-            scope
-        };
+        let n = spec.n;
+        let scope = spec.scope;
 
         let provider = self.provider.clone();
         let provider_cfg = self.provider_cfg.clone();
