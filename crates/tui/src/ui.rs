@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use unicode_width::UnicodeWidthChar;
 
-use crate::app::{App, CommandPalette, Entry, ModelPicker};
+use crate::app::{App, CommandPalette, Entry, ModelPicker, Wizard};
 use crate::markdown;
 
 const ACCENT: Color = Color::Cyan;
@@ -43,43 +43,64 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if let Some(palette) = &app.palette {
         draw_command_palette(f, palette);
     }
+    if let Some(wizard) = &app.wizard {
+        draw_wizard(f, wizard);
+    }
 }
 
 fn draw_header(f: &mut Frame, area: Rect, app: &App) {
     // 状态由覆盖层状态推导（复习/导入/思考中/选择/就绪），颜色随状态变化
     let (status_text, status_color) = app.status_label();
 
+    // 左侧 = 学习位置（我是谁、在哪门课）；右侧 = 系统状态（模型/费用/状态）
+    let left = format!(" mynotes-agent │ {}", app.course);
+    let right = format!(
+        "{} · {} │ ¥{:.2}/{:.0} │ {} ",
+        app.provider_cfg.model,
+        if app.provider_cfg.thinking {
+            "思考"
+        } else {
+            "快速"
+        },
+        app.total_cost,
+        app.max_cost,
+        status_text,
+    );
+    let left_w = display_width(&left);
+    let right_w = display_width(&right);
+    let pad = (area.width as usize).saturating_sub(left_w + right_w + 2);
+
     let line = Line::from(vec![
+        Span::styled(left, Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
+        Span::raw(" ".repeat(pad)),
         Span::styled(
-            " mynotes-agent",
-            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+            format!("{} · ", app.provider_cfg.model),
+            Style::new().fg(Color::Magenta),
         ),
-        Span::raw(" │ "),
-        Span::styled(app.course.to_string(), Style::new().fg(Color::Cyan)),
-        Span::raw(" │ "),
-        Span::styled(&app.provider_cfg.model, Style::new().fg(Color::Magenta)),
-        Span::raw(format!(
-            " · {}",
-            if app.provider_cfg.thinking {
-                "思考"
-            } else {
-                "快速"
-            }
-        )),
-        Span::raw(" │ "),
         Span::styled(
-            format!("¥{:.2}/{:.0}", app.total_cost, app.max_cost),
+            format!(
+                "{} │ ",
+                if app.provider_cfg.thinking {
+                    "思考"
+                } else {
+                    "快速"
+                }
+            ),
+            Style::new().fg(Color::Magenta),
+        ),
+        Span::styled(
+            format!("¥{:.2}/{:.0} │ ", app.total_cost, app.max_cost),
             Style::new().fg(if app.total_cost > app.max_cost * 0.8 {
                 Color::Red
             } else {
                 Color::Gray
             }),
         ),
-        Span::raw(" │ "),
         Span::styled(
             status_text,
             Style::new().fg(status_color).add_modifier(Modifier::BOLD),
         ),
+        Span::raw(" "),
     ]);
     f.render_widget(
         Paragraph::new(line).block(Block::new().borders(Borders::ALL)),
@@ -318,25 +339,56 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
 }
 
 /// /model 弹窗：居中覆盖层，当前 provider 打 →，选中项高亮。
-/// 命令面板弹窗：输入过滤、↑↓ 选择、Enter 执行（无参命令）/填入（带参命令）。
+/// 命令面板弹窗：动态宽度、显示宽度对齐，选中项完整信息在底行展示。
 fn draw_command_palette(f: &mut Frame, palette: &CommandPalette) {
     let area = f.area();
     let height = (palette.filtered.len() as u16 + 4).min(area.height.saturating_sub(2));
-    let width = 62u16.min(area.width.saturating_sub(2));
+
+    // 动态宽度：列表行宽 = 标记 2 + command 显示宽 + 3 + desc 显示宽（截断保护）
+    let cmd_w = palette
+        .items
+        .iter()
+        .map(|i| display_width(i.command))
+        .max()
+        .unwrap_or(10);
+    let desc_w = palette
+        .items
+        .iter()
+        .map(|i| display_width(i.desc))
+        .max()
+        .unwrap_or(10);
+    let list_w = 2 + cmd_w + 3 + desc_w;
+    // 底行宽 = 选中项完整信息
+    let detail_w = palette
+        .filtered
+        .get(palette.selected)
+        .map(|&i| {
+            display_width(&format!(
+                "{} — {}",
+                palette.items[i].command, palette.items[i].desc
+            ))
+        })
+        .unwrap_or(0)
+        + 2;
+    let width = list_w.max(detail_w).max(40) as u16 + 2;
+    let width = width.min(area.width.saturating_sub(2));
     let x = area.x + (area.width - width) / 2;
     let y = area.y + (area.height - height) / 2;
     let pop = Rect::new(x, y, width, height);
 
     f.render_widget(ratatui::widgets::Clear, pop);
 
+    // 列表行内 desc 的可用宽：总宽 - 命令列 - 装饰
+    let desc_avail = (width as usize).saturating_sub(2 + cmd_w + 3 + 3);
     let items: Vec<ListItem> = palette
         .filtered
         .iter()
         .enumerate()
         .map(|(i, &idx)| {
             let item = &palette.items[idx];
-            let mark = if i == palette.selected { "▸" } else { " " };
-            let label = format!(" {} {:<38} {}", mark, item.command, item.desc);
+            let mark = if i == palette.selected { "▸ " } else { "  " };
+            let desc = display_truncate(item.desc, desc_avail);
+            let label = format!("{mark}{}  {}", display_pad(item.command, cmd_w), desc);
             let style = if i == palette.selected {
                 Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
             } else {
@@ -346,29 +398,119 @@ fn draw_command_palette(f: &mut Frame, palette: &CommandPalette) {
         })
         .collect();
 
+    let detail = palette
+        .filtered
+        .get(palette.selected)
+        .map(|&i| {
+            let it = &palette.items[i];
+            display_truncate(&format!("{} — {}", it.command, it.desc), width as usize - 4)
+        })
+        .unwrap_or_else(|| "（无匹配命令）".into());
     let title = format!(
-        " 命令面板 ({}项{}) ",
-        palette.filtered.len(),
+        " 命令面板 {} ",
         if palette.filter.is_empty() {
-            String::new()
+            format!("({} 项)", palette.filtered.len())
         } else {
-            format!(" · 过滤: {}", palette.filter)
+            format!(
+                "· 过滤: {}（{} 项）",
+                palette.filter,
+                palette.filtered.len()
+            )
         }
     );
-    let footer = if palette.filtered.is_empty() {
-        String::new()
-    } else {
-        " 输入过滤 · ↑↓ 选择 · Enter 执行 / Tab 填入 · Esc 关闭 ".to_owned()
-    };
     f.render_widget(
         List::new(items).block(
             Block::new()
                 .borders(Borders::ALL)
                 .title(Span::styled(title, Style::new().fg(ACCENT)))
-                .title_bottom(Span::styled(footer, Style::new().fg(DIM)).into_centered_line()),
+                .title_bottom(
+                    Span::styled(format!(" {detail} "), Style::new().fg(DIM))
+                        .into_left_aligned_line(),
+                ),
         ),
         pop,
     );
+}
+
+/// 参数向导弹窗：单步文本输入（预填默认值），Enter 推进 / Esc 回退。
+fn draw_wizard(f: &mut Frame, wizard: &Wizard) {
+    let area = f.area();
+    let height = 7u16.min(area.height.saturating_sub(2));
+    let width = 58u16.min(area.width.saturating_sub(2));
+    let x = area.x + (area.width - width) / 2;
+    let y = area.y + (area.height - height) / 2;
+    let pop = Rect::new(x, y, width, height);
+
+    f.render_widget(ratatui::widgets::Clear, pop);
+
+    let step_prompt = wizard.steps[wizard.current].prompt;
+    let inner_w = width.saturating_sub(4) as usize;
+    let value = display_truncate(&wizard.input, inner_w.saturating_sub(2));
+
+    let lines = vec![
+        Line::from(Span::styled(
+            format!(
+                "步骤 {}/{} · {}",
+                wizard.current + 1,
+                wizard.steps.len(),
+                step_prompt
+            ),
+            Style::new().fg(DIM),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  > {value}▍"),
+            Style::new().fg(Color::White),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            if wizard.current == 0 {
+                " Enter 确认 · Esc 取消向导".to_owned()
+            } else {
+                " Enter 确认 · Esc 返回上一步".to_owned()
+            },
+            Style::new().fg(DIM),
+        )),
+    ];
+    f.render_widget(
+        Paragraph::new(lines).block(Block::new().borders(Borders::ALL).title(Span::styled(
+            format!(" {} ", wizard.title),
+            Style::new().fg(ACCENT),
+        ))),
+        pop,
+    );
+}
+
+/// unicode 显示宽度（中文按 2 列）。
+fn display_width(s: &str) -> usize {
+    s.chars()
+        .map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0))
+        .sum()
+}
+
+/// 按显示宽度右侧补空格。
+fn display_pad(s: &str, w: usize) -> String {
+    let dw = display_width(s);
+    let mut out = s.to_owned();
+    for _ in dw..w {
+        out.push(' ');
+    }
+    out
+}
+
+/// 按显示宽度截断（保序丢尾部字符）。
+fn display_truncate(s: &str, w: usize) -> String {
+    let mut out = String::new();
+    let mut used = 0usize;
+    for c in s.chars() {
+        let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+        if used + cw > w {
+            break;
+        }
+        out.push(c);
+        used += cw;
+    }
+    out
 }
 
 fn draw_model_picker(f: &mut Frame, picker: &ModelPicker, current: &str) {
