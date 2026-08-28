@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use unicode_width::UnicodeWidthChar;
 
-use crate::app::{App, Entry, ModelPicker};
+use crate::app::{App, CommandPalette, Entry, ModelPicker};
 use crate::markdown;
 
 const ACCENT: Color = Color::Cyan;
@@ -40,15 +40,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if let Some(picker) = &app.model_picker {
         draw_model_picker(f, picker, &app.provider_cfg.name);
     }
+    if let Some(palette) = &app.palette {
+        draw_command_palette(f, palette);
+    }
 }
 
 fn draw_header(f: &mut Frame, area: Rect, app: &App) {
-    // 状态颜色：空闲=绿、思考=黄
-    let (status_text, status_color) = if app.is_inflight() {
-        ("思考中", Color::Yellow)
-    } else {
-        ("就绪", Color::Green)
-    };
+    // 状态由覆盖层状态推导（复习/导入/思考中/选择/就绪），颜色随状态变化
+    let (status_text, status_color) = app.status_label();
 
     let line = Line::from(vec![
         Span::styled(
@@ -78,16 +77,8 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         ),
         Span::raw(" │ "),
         Span::styled(
-            status_text.to_string(),
+            status_text,
             Style::new().fg(status_color).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            if app.selection_mode {
-                " │ 选择模式"
-            } else {
-                ""
-            },
-            Style::new().fg(DIM),
         ),
     ]);
     f.render_widget(
@@ -327,6 +318,59 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
 }
 
 /// /model 弹窗：居中覆盖层，当前 provider 打 →，选中项高亮。
+/// 命令面板弹窗：输入过滤、↑↓ 选择、Enter 执行（无参命令）/填入（带参命令）。
+fn draw_command_palette(f: &mut Frame, palette: &CommandPalette) {
+    let area = f.area();
+    let height = (palette.filtered.len() as u16 + 4).min(area.height.saturating_sub(2));
+    let width = 62u16.min(area.width.saturating_sub(2));
+    let x = area.x + (area.width - width) / 2;
+    let y = area.y + (area.height - height) / 2;
+    let pop = Rect::new(x, y, width, height);
+
+    f.render_widget(ratatui::widgets::Clear, pop);
+
+    let items: Vec<ListItem> = palette
+        .filtered
+        .iter()
+        .enumerate()
+        .map(|(i, &idx)| {
+            let item = &palette.items[idx];
+            let mark = if i == palette.selected { "▸" } else { " " };
+            let label = format!(" {} {:<38} {}", mark, item.command, item.desc);
+            let style = if i == palette.selected {
+                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+            } else {
+                Style::new()
+            };
+            ListItem::new(Span::styled(label, style))
+        })
+        .collect();
+
+    let title = format!(
+        " 命令面板 ({}项{}) ",
+        palette.filtered.len(),
+        if palette.filter.is_empty() {
+            String::new()
+        } else {
+            format!(" · 过滤: {}", palette.filter)
+        }
+    );
+    let footer = if palette.filtered.is_empty() {
+        String::new()
+    } else {
+        " 输入过滤 · ↑↓ 选择 · Enter 执行 / Tab 填入 · Esc 关闭 ".to_owned()
+    };
+    f.render_widget(
+        List::new(items).block(
+            Block::new()
+                .borders(Borders::ALL)
+                .title(Span::styled(title, Style::new().fg(ACCENT)))
+                .title_bottom(Span::styled(footer, Style::new().fg(DIM)).into_centered_line()),
+        ),
+        pop,
+    );
+}
+
 fn draw_model_picker(f: &mut Frame, picker: &ModelPicker, current: &str) {
     let area = f.area();
     let height = (picker.options.len() + 4).min(area.height as usize) as u16;

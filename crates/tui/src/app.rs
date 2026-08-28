@@ -152,6 +152,155 @@ pub struct ModelPicker {
     pub selected: usize,
 }
 
+/// 命令面板条目：`needs_arg` 决定 Enter 行为——无参命令直接执行，
+/// 带参命令填入输入框等待用户补全。
+pub struct PaletteItem {
+    pub command: &'static str,
+    pub desc: &'static str,
+    pub needs_arg: bool,
+}
+
+/// 命令面板（Ctrl+K）：可发现性入口——把"项目有什么能力"直接摆在眼前，
+/// 交互与 /model 弹窗同范式（覆盖层 + 按键路由优先级）。
+pub struct CommandPalette {
+    pub items: Vec<PaletteItem>,
+    /// 过滤后命中的 items 下标
+    pub filtered: Vec<usize>,
+    pub selected: usize,
+    pub filter: String,
+}
+
+impl CommandPalette {
+    /// 全量命令表（与 /help 能力文案一一对应）。
+    fn all_items() -> Vec<PaletteItem> {
+        use PaletteItem as P;
+        vec![
+            P {
+                command: "/help",
+                desc: "我能做什么（能力总览）",
+                needs_arg: false,
+            },
+            P {
+                command: "/outline",
+                desc: "生成当前课程知识大纲",
+                needs_arg: false,
+            },
+            P {
+                command: "/outline <课程> --export",
+                desc: "生成大纲并导出 Markdown",
+                needs_arg: true,
+            },
+            P {
+                command: "/review <课程> [概念] [--n 数量]",
+                desc: "出题复习（掌握度低优先）",
+                needs_arg: true,
+            },
+            P {
+                command: "/import <目录> [--course 名]",
+                desc: "批量导入 md/pdf/pptx",
+                needs_arg: true,
+            },
+            P {
+                command: "/notes",
+                desc: "列出当前分区的笔记",
+                needs_arg: false,
+            },
+            P {
+                command: "/course",
+                desc: "查看课程分区",
+                needs_arg: false,
+            },
+            P {
+                command: "/model",
+                desc: "切换模型（弹窗）",
+                needs_arg: false,
+            },
+            P {
+                command: "/budget",
+                desc: "查看预算花费",
+                needs_arg: false,
+            },
+            P {
+                command: "/sessions",
+                desc: "历史会话列表",
+                needs_arg: false,
+            },
+            P {
+                command: "/new",
+                desc: "开启新会话",
+                needs_arg: false,
+            },
+            P {
+                command: "/export",
+                desc: "导出当前会话为 JSON",
+                needs_arg: false,
+            },
+            P {
+                command: "/load <文件>",
+                desc: "加载导出的会话 JSON",
+                needs_arg: true,
+            },
+            P {
+                command: "/open <id>",
+                desc: "恢复指定历史会话",
+                needs_arg: true,
+            },
+            P {
+                command: "/rename <标题>",
+                desc: "重命名当前会话",
+                needs_arg: true,
+            },
+            P {
+                command: "/delete <id>",
+                desc: "删除笔记（不碰磁盘原文件）",
+                needs_arg: true,
+            },
+            P {
+                command: "/move <id> <课程>",
+                desc: "迁移笔记到另一课程",
+                needs_arg: true,
+            },
+            P {
+                command: "/course -new <名>",
+                desc: "新建课程分区",
+                needs_arg: true,
+            },
+            P {
+                command: "/course -delete <名>",
+                desc: "删除课程（笔记回落 all 区）",
+                needs_arg: true,
+            },
+        ]
+    }
+
+    pub fn new() -> Self {
+        let items = Self::all_items();
+        let filtered = (0..items.len()).collect();
+        Self {
+            items,
+            filtered,
+            selected: 0,
+            filter: String::new(),
+        }
+    }
+
+    fn refilter(&mut self) {
+        let f = self.filter.to_lowercase();
+        self.filtered = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| {
+                f.is_empty()
+                    || i.command.to_lowercase().contains(&f)
+                    || i.desc.to_lowercase().contains(&f)
+            })
+            .map(|(idx, _)| idx)
+            .collect();
+        self.selected = 0;
+    }
+}
+
 pub struct App {
     provider: Arc<OpenAiClient>,
     store: Arc<Store>,
@@ -205,6 +354,8 @@ pub struct App {
     pub scroll_up: u16,
     /// /model 弹窗状态；Some 时按键路由给弹窗
     pub model_picker: Option<ModelPicker>,
+    /// 命令面板（Ctrl+K）；Some 时按键路由给面板
+    pub palette: Option<CommandPalette>,
     /// `/sessions` 显式请求后的刷新回调时要打印列表到聊天区（侧栏静默刷新不打印）
     pending_sessions_print: bool,
     should_quit: bool,
@@ -253,6 +404,7 @@ impl App {
             tick: 0,
             scroll_up: 0,
             model_picker: None,
+            palette: None,
             pending_sessions_print: false,
             should_quit: false,
             tx,
@@ -270,6 +422,34 @@ impl App {
 
     pub fn is_inflight(&self) -> bool {
         self.inflight.is_some()
+    }
+
+    /// header 状态标签：与按键路由同源的覆盖层状态推导（复习 > 导入 > 请求中 > 选择 > 就绪）。
+    /// 让用户随时知道"我现在在哪"，替代隐含状态机。
+    pub fn status_label(&self) -> (String, ratatui::style::Color) {
+        use ratatui::style::Color;
+        if let Some(rs) = &self.review {
+            let grading = if self.review_grading {
+                " · 批改中…"
+            } else {
+                ""
+            };
+            let cur = (rs.current + 1).min(rs.questions.len());
+            return (
+                format!("复习 {cur}/{} 题{grading}", rs.questions.len()),
+                Color::Magenta,
+            );
+        }
+        if self.import_cancel.is_some() {
+            return ("导入中 (Ctrl+C 中断)".into(), Color::Yellow);
+        }
+        if self.is_inflight() {
+            return ("思考中…".into(), Color::Yellow);
+        }
+        if self.selection_mode {
+            return ("选择模式".into(), Color::Cyan);
+        }
+        ("就绪".into(), Color::Green)
     }
 
     pub fn push_entry(&mut self, e: Entry) {
@@ -327,9 +507,21 @@ impl App {
             self.handle_review_key(key);
             return;
         }
+        // 命令面板（Ctrl+K 唤起）覆盖普通输入
+        if self.palette.is_some() {
+            self.handle_palette_key(key);
+            return;
+        }
         // 弹窗打开时按键优先由弹窗处理
         if self.model_picker.is_some() {
             self.handle_picker_key(key);
+            return;
+        }
+        // Ctrl+K 打开命令面板
+        if let KeyCode::Char('k') = key.code
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            self.palette = Some(CommandPalette::new());
             return;
         }
         // v 键切换选择模式（临时关闭鼠标捕获，允许终端原生选中复制）
@@ -532,31 +724,32 @@ impl App {
         match cmd.as_str() {
             "/help" => {
                 for l in [
-                    "命令列表（输入不带 / 的内容即为对话）:",
-                    "  v                  切换选择模式（鼠标拖选复制文本）",
-                    "  /help              本帮助",
-                    "  /course            列出全部课程与当前分区",
-                    "  /course <课程|all>  切换分区",
-                    "  /course -new <名>   新建课程并切换",
-                    "  /course -delete <名> 删除课程（其笔记回落 all 区）",
-                    "  /model [名称]       弹窗选择或直接切换模型",
-                    "  /new                开启新会话",
-                    "  /sessions           刷新并列出历史会话",
-                    "  /open <id>          恢复指定历史会话",
-                    "  /rename <标题>       重命名当前会话",
-                    "  /export             导出当前会话为 JSON（可重新加载）",
-                    "  /load <文件>        加载导出的会话 JSON",
-                    "  /budget            查看预算（累计/上限/剩余）",
-                    "  /budget <金额>      设置上限",
-                    "  /budget reset      清零累计花费",
-                    "  /notes              列出当前课程的笔记",
-                    "  /delete <id>        删除指定笔记（安全：不碰磁盘原文件）",
-                    "  /delete --course <名> 批量删除课程下全部笔记",
-                    "  /move <id> <课程>    迁移笔记到另一课程",
-                    "  /import <目录> [--course <课程>]  导入语料（md/pdf/pptx）",
-                    "  /outline [课程]    生成课程大纲（无参=当前课程）",
-                    "  /outline [课程] --export  导出为 Markdown",
-                    "  /review <课程> [概念] 生成复习题（选择题+简答题）",
+                    "我能做什么？",
+                    "",
+                    "【学习】直接打字提问即可，无需命令",
+                    "  例: \"解释一下虚拟内存\"  \"这里为什么必须用 mutex\"",
+                    "  回答策略: 笔记优先并标注 [n] 引用；笔记没写的会用",
+                    "  自身知识补充并明示「（笔记外补充）」",
+                    "",
+                    "【知识库】",
+                    "  /import <目录> [--course 名]   批量导入 md/pdf/pptx",
+                    "  /notes                        列出当前分区笔记",
+                    "  /delete <id> | /move <id> <课程>  管理笔记（不碰磁盘原文件）",
+                    "  /course <课程|all>            切换分区；-new/-delete 管理",
+                    "",
+                    "【复习】",
+                    "  /review <课程> [概念] [--n 数量]  出题（选择+简答，掌握度低优先）",
+                    "",
+                    "【大纲】",
+                    "  /outline [课程] [--export]    生成课程知识大纲",
+                    "",
+                    "【系统】",
+                    "  /model [名]      切换模型      /budget [金额|reset]  预算",
+                    "  /new             新会话        /sessions             历史会话",
+                    "  /open <id>       恢复会话      /rename <标题>        重命名",
+                    "  /export /load    会话导出/导入",
+                    "",
+                    "快捷键: Ctrl+K 命令面板 · v 选择模式 · Ctrl+C 中断/退出 · Ctrl+Q 强退",
                 ] {
                     self.push_entry(Entry::Info(l.into()));
                 }
@@ -1464,6 +1657,60 @@ impl App {
         self.apply_provider_switch(arg);
     }
 
+    /// 面板按键：字符进过滤串、↑↓ 选择、Enter 执行、Tab 填入输入框、Esc 关闭。
+    fn handle_palette_key(&mut self, key: KeyEvent) {
+        if key.kind != KeyEventKind::Press {
+            return;
+        }
+        match key.code {
+            KeyCode::Esc => self.palette = None,
+            KeyCode::Up => {
+                if let Some(p) = &mut self.palette {
+                    p.selected = p.selected.saturating_sub(1);
+                }
+            }
+            KeyCode::Down => {
+                if let Some(p) = &mut self.palette
+                    && !p.filtered.is_empty()
+                {
+                    p.selected = (p.selected + 1).min(p.filtered.len() - 1);
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(p) = &mut self.palette {
+                    p.filter.pop();
+                    p.refilter();
+                }
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(p) = &mut self.palette {
+                    p.filter.push(c);
+                    p.refilter();
+                }
+            }
+            KeyCode::Enter | KeyCode::Tab => self.palette_execute(),
+            _ => {}
+        }
+    }
+
+    /// 执行面板选中项：带参命令填入输入框等用户补全，无参命令直接提交。
+    fn palette_execute(&mut self) {
+        let Some(p) = &self.palette else {
+            return;
+        };
+        let Some(&idx) = p.filtered.get(p.selected) else {
+            return;
+        };
+        let item = &p.items[idx];
+        let (cmd, needs_arg) = (item.command, item.needs_arg);
+        self.palette = None;
+        self.input = cmd.to_owned();
+        self.cursor_pos = self.input.chars().count();
+        if !needs_arg {
+            self.submit();
+        }
+    }
+
     /// 弹窗按键：↑↓/j/k 移动、数字直选、Enter 确认、Esc 关闭。
     fn handle_picker_key(&mut self, key: KeyEvent) {
         let picker = self.model_picker.as_mut().unwrap();
@@ -2245,7 +2492,7 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
     });
 
     app.push_entry(Entry::Info(format!(
-        "mynotes-agent 已就绪 │ 课程: {} │ 模型: {} │ 输入 /help 查看命令",
+        "mynotes-agent 已就绪 │ 课程: {} │ 模型: {} │ Ctrl+K 命令面板 · /help 能力总览",
         app.course, app.provider_cfg.model
     )));
     app.request_sessions_refresh();
