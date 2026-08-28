@@ -533,6 +533,7 @@ impl App {
                 self.request_courses_refresh();
                 self.push_entry(Entry::Info(msg));
                 self.sync_session_course();
+            }
             Err(e) => self.push_entry(Entry::Error(format!("课程操作失败: {e}"))),
         }
     }
