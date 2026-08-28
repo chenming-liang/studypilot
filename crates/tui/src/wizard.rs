@@ -91,9 +91,11 @@ impl Wizard {
     /// Enter：确认当前步（值由聊天框缓冲传入）。返回 true 表示已到最后一步。
     pub(crate) fn confirm(&mut self, value: String) -> bool {
         self.values[self.current] = Some(value);
-        self.current + 1 < self.steps.len() && {
+        if self.current + 1 < self.steps.len() {
             self.current += 1;
             false
+        } else {
+            true
         }
     }
 
