@@ -529,15 +529,27 @@ impl App {
 
     /// 重命名确认（Enter）：写库 → 刷新列表 → 返回 Select。
     pub(crate) fn session_browser_confirm_rename(&mut self) {
-        let Some(b) = &self.session_browser else {
-            return;
-        };
-        let Some(id) = b.rename_id else {
-            return;
+        let (id, old_title) = {
+            let Some(b) = &self.session_browser else {
+                return;
+            };
+            match b.rename_id {
+                Some(id) => (id, b.rename_old.clone()),
+                None => return,
+            }
         };
         let new_title = self.input.trim().to_owned();
         if new_title.is_empty() {
             return;
+        }
+        // 乐观更新：立即回 Select 并刷新本地列表（写库失败再报错，下次搜索自愈）
+        if let Some(b) = &mut self.session_browser {
+            for r in b.results.iter_mut() {
+                if r.id == id {
+                    r.title = Some(new_title.clone());
+                }
+            }
+            b.mode = crate::session_browser::SessionBrowserMode::Select;
         }
         self.input.clear();
         self.cursor_pos = 0;
@@ -574,7 +586,9 @@ impl App {
                 _ => {
                     let _ = tx.send(AppEvent::BrowserActionDone {
                         scope_label: "会话".into(),
-                        result: Err("重命名失败：会话不存在".into()),
+                        result: Err(format!(
+                            "重命名失败：会话 #{id} 可能不存在，重新搜索可恢复显示"
+                        )),
                     });
                 }
             }
