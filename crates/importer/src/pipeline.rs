@@ -155,6 +155,11 @@ async fn process_one(
     )
     .await;
 
+    // 抽取期间被取消：当前文件不再入库（避免"取消后仍落一篇无概念笔记"）
+    if cancel.is_cancelled() {
+        return Ok(ProcessOutcome::Skipped);
+    }
+
     // ③ 入库（spawn_blocking，D2）
     let store = Arc::clone(store);
     let path_owned = path.to_owned();

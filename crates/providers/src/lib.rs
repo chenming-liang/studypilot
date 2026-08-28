@@ -4,6 +4,6 @@ pub mod client;
 pub mod config;
 pub mod cost;
 
-pub use client::{OpenAiClient, parse_response};
+pub use client::{OpenAiClient, parse_response, with_cancel};
 pub use config::{Config, ProviderConfig};
 pub use cost::estimate_cost;

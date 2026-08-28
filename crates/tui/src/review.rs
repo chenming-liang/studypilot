@@ -216,18 +216,26 @@ pub async fn start_review(
         Message::user(&prompt),
     ];
 
-    // ③ D4 降级链
+    // ③ D4 降级链（await 期间观察取消：Ctrl+C 立即中断，不等 LLM 返回）
     let content = if cancel.is_cancelled() {
         // 取消也要发事件，否则 on_review_ready 不触发、inflight 卡死
         let _ = tx.send(AppEvent::ReviewReady(Err("已取消".into())));
         return;
     } else {
-        match provider.chat_json(&messages).await {
-            Ok(resp) => Some(resp),
-            Err(e) if e.is_json_mode_unsupported() => provider.chat(&messages, &[]).await.ok(),
-            Err(e) => {
+        match agent_providers::with_cancel(provider.chat_json(&messages), &cancel).await {
+            Some(Ok(resp)) => Some(resp),
+            Some(Err(e)) if e.is_json_mode_unsupported() => {
+                agent_providers::with_cancel(provider.chat(&messages, &[]), &cancel)
+                    .await
+                    .and_then(|r| r.ok())
+            }
+            Some(Err(e)) => {
                 tracing::warn!("出题失败: {e}");
                 None
+            }
+            None => {
+                let _ = tx.send(AppEvent::ReviewReady(Err("已取消".into())));
+                return;
             }
         }
     };

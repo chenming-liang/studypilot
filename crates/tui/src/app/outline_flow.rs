@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use agent_core::{Message, Provider};
 use tokio::task::spawn_blocking;
+use tokio_util::sync::CancellationToken;
 
 use super::{App, AppEvent, Entry};
 use crate::outline_render::{render_outline_markdown, render_outline_tree};
@@ -37,6 +38,9 @@ impl App {
         let provider_cfg = self.provider_cfg.clone();
         let tx = self.tx.clone();
         let course_name = name.clone();
+        // 大纲期间挂 inflight：header 显示进行中，Ctrl+C 可中断（否则会落入空闲→退出）
+        let cancel = CancellationToken::new();
+        self.inflight = Some(cancel.clone());
 
         tokio::spawn(async move {
             let store_clone = Arc::clone(&store);
@@ -81,29 +85,34 @@ impl App {
                 Message::system("只输出 JSON，不要 markdown 代码块。"),
                 Message::user(&prompt),
             ];
-            // R6：outline 的 LLM 调用也记 usage + cost
+            // R6：outline 的 LLM 调用也记 usage + cost（等待期间观察取消）
             let pc = provider_cfg.clone();
-            let content = match provider.chat_json(&messages).await {
-                Ok(resp) => {
+            let content = match agent_providers::with_cancel(provider.chat_json(&messages), &cancel)
+                .await
+            {
+                Some(Ok(resp)) => {
                     Self::log_llm_usage(&store, &pc, "outline", &resp.usage);
                     Some(resp.content)
                 }
-                Err(e) if e.is_json_mode_unsupported() => {
-                    match provider.chat(&messages, &[]).await {
-                        Ok(resp) => {
+                Some(Err(e)) if e.is_json_mode_unsupported() => {
+                    match agent_providers::with_cancel(provider.chat(&messages, &[]), &cancel).await
+                    {
+                        Some(Ok(resp)) => {
                             Self::log_llm_usage(&store, &pc, "outline", &resp.usage);
                             Some(resp.content)
                         }
-                        Err(e) => {
+                        Some(Err(e)) => {
                             tracing::warn!("大纲生成失败: {e}");
                             None
                         }
+                        None => None,
                     }
                 }
-                Err(e) => {
+                Some(Err(e)) => {
                     tracing::warn!("大纲生成失败: {e}");
                     None
                 }
+                None => None,
             };
             let _ = tx.send(AppEvent::OutlineGenerated(
                 content,
@@ -121,6 +130,7 @@ impl App {
         export: bool,
         titles: Vec<(i64, String)>,
     ) {
+        self.inflight = None;
         self.request_cost_sync();
         let Some(json_str) = content else {
             self.push_entry(Entry::Error("大纲生成失败（LLM 无响应或无笔记）".into()));

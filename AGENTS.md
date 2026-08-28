@@ -93,3 +93,4 @@ cargo test --workspace
 - [x] 收口会话⑦：app.rs 拆分重构（14 模块）+ 交互补全（PaletteAction 绑条目、ListPicker 选择器 /course /open、单步向导 /rename /load /course -new、光标编辑、outline --export 直执行）
 - [x] 收口会话⑧：Review workspace 半成品修复（GLM 崩溃遗留：编译错误/进度点颜色丢失/废函数清理/解析丢失回补），主区聊天流隔离为独立答题场 + 反馈停留态 + 简答输入区加高；改进建议.md 新设计版作后续基线（Sources 区/workspace 内 Summary/难度标签等已判不必要）
 - [x] 收口会话⑨：底部状态栏专属化（Review 时 hint 随答题态切换，简答输入行即答案框、消除双份渲染）+ 选择题答后选项正误染色（ReviewResult::user_choice），纯渲染改动；改进建议.md 中 Sources 区/卡片化/Summary/侧栏降噪/概念色等经判断未做（成本>收益）
+- [x] 收口会话⑩：Review 题干/解析改走 markdown 管线（出题允许题干内代码围栏，修复 C 代码无高亮无缩进）+ 中断修复（新增 `providers::with_cancel`，出题/大纲/导入抽取 LLM 等待期间 Ctrl+C 立即生效；/outline 补 inflight 防空闲退出）

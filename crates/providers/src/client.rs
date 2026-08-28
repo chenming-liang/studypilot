@@ -1,13 +1,12 @@
 //! OpenAI-compatible 客户端（非流式：本项目交互以 agent loop 的整段回复为主，
 //! SSE 流式渲染不在当前范围；中断经 CancellationToken 由调用方 select 竞速实现）。
-//!
-//! 思考字段按决策 D7 兼容 `reasoning_content` / `reasoning` 双变体。
 
 use std::time::Duration;
 
 use agent_core::{Error, Function, Message, Provider, Response, Result, ToolCall, Usage};
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use tokio_util::sync::CancellationToken;
 
 use crate::config::ProviderConfig;
 
@@ -16,6 +15,20 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// 单次请求整体超时。LLM 长生成 + 思考模型可能需要数分钟，
 /// 无超时会让 async 任务永久挂起（取消令牌也只能放弃等待）。
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// 取消感知的 provider 调用包装：等待期间 `cancel` 触发立即返回 `None`（不等 LLM 返回）。
+/// 返回 `None` 时调用方用 `cancel.is_cancelled()` 区分「用户取消」与「调用失败」。
+/// 所有 LLM 调用点（聊天/出题/大纲/导入抽取）都应经此包装，否则 Ctrl+C 期间
+/// HTTP await 不响应取消，界面保持"思考中"直到请求自然返回。
+pub async fn with_cancel<F>(f: F, cancel: &CancellationToken) -> Option<F::Output>
+where
+    F: std::future::Future,
+{
+    tokio::select! {
+        out = f => Some(out),
+        _ = cancel.cancelled() => None,
+    }
+}
 
 pub struct OpenAiClient {
     http: reqwest::Client,
@@ -321,5 +334,26 @@ mod tests {
         let r = parse_response(&v).unwrap();
         assert_eq!(r.tool_calls.len(), 1);
         assert_eq!(r.tool_calls[0].id, "ok1");
+    }
+}
+
+#[cfg(test)]
+mod with_cancel_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn cancel_triggers_immediate_none() {
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        // 已取消：即使 future 永不完成也立即返回 None（不等 LLM 返回）
+        let r = with_cancel(std::future::pending::<()>(), &cancel).await;
+        assert_eq!(r, None);
+    }
+
+    #[tokio::test]
+    async fn completes_returns_output() {
+        let cancel = CancellationToken::new();
+        let r = with_cancel(async { 42 }, &cancel).await;
+        assert_eq!(r, Some(42));
     }
 }

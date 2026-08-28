@@ -80,33 +80,35 @@ pub async fn extract(
         Message::user(&prompt),
     ];
 
-    // 第一跳：尝试 JSON mode；记录 usage 落库（R6）
-    let content = match provider.chat_json(&messages).await {
-        Ok(resp) => {
+    // 第一跳：尝试 JSON mode；记录 usage 落库（R6）。等待期间观察取消（Ctrl+C 立即停）。
+    let content = match agent_providers::with_cancel(provider.chat_json(&messages), cancel).await {
+        Some(Ok(resp)) => {
             log_usage(&store, provider_cfg, &resp.usage).await;
             *accumulated_cost += estimate_cost(provider_cfg, &resp.usage);
             Some(resp.content)
         }
-        Err(e) if e.is_json_mode_unsupported() => {
+        Some(Err(e)) if e.is_json_mode_unsupported() => {
             // endpoint 不支持 json_object → 降级：prompt 约束
             // （认证失败/限流等错误不降级——换普通 chat 同样会失败）
             tracing::info!("JSON mode 不支持，降级为 prompt 约束");
-            match provider.chat(&messages, &[]).await {
-                Ok(resp) => {
+            match agent_providers::with_cancel(provider.chat(&messages, &[]), cancel).await {
+                Some(Ok(resp)) => {
                     log_usage(&store, provider_cfg, &resp.usage).await;
                     *accumulated_cost += estimate_cost(provider_cfg, &resp.usage);
                     Some(resp.content)
                 }
-                Err(e) => {
+                Some(Err(e)) => {
                     tracing::warn!("LLM 调用失败: {e}");
                     None
                 }
+                None => None,
             }
         }
-        Err(e) => {
+        Some(Err(e)) => {
             tracing::warn!("LLM 调用失败: {e}");
             None
         }
+        None => None,
     };
 
     let content = content?;
@@ -131,7 +133,9 @@ pub async fn extract(
                 ),
                 Message::user(&prompt),
             ];
-            let retry = provider.chat(&retry_messages, &[]).await.ok();
+            let retry = agent_providers::with_cancel(provider.chat(&retry_messages, &[]), cancel)
+                .await
+                .and_then(|r| r.ok());
             if let Some(r) = &retry {
                 log_usage(&store, provider_cfg, &r.usage).await;
                 *accumulated_cost += estimate_cost(provider_cfg, &r.usage);
