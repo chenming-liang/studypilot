@@ -207,6 +207,11 @@ impl App {
 
     /// `/review <课程> [概念] [--n 数量]`：启动复习出题。
     pub(crate) fn handle_review_command(&mut self, arg: &str) {
+        // 无参 = 参数向导（课程自动取当前分区），与 /help 承诺一致
+        if arg.trim().is_empty() {
+            self.open_review_wizard();
+            return;
+        }
         if self.review.is_some() {
             self.push_entry(Entry::Error("复习进行中，请先完成或 Esc 退出".into()));
             return;
