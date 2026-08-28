@@ -159,12 +159,6 @@ impl CommandPalette {
                 group: G::Session,
             },
             P {
-                command: "/open <id>",
-                desc: "恢复指定历史会话（选择列表）",
-                action: A::Pick(PickKind::Session),
-                group: G::Session,
-            },
-            P {
                 command: "/rename <标题>",
                 desc: "重命名当前会话",
                 action: A::Prompt("重命名会话", "新标题", "/rename"),

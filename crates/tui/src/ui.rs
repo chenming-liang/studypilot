@@ -547,7 +547,7 @@ fn draw_list_picker(f: &mut Frame, lp: &ListPicker) {
 }
 
 /// 会话浏览器：搜索 → 选择（恢复/重命名/删除）。
-fn draw_session_browser(f: &mut Frame, app: &App) {
+fn draw_session_browser(f: &mut Frame, app: &mut App) {
     use crate::session_browser::{SESSION_LIST_VISIBLE, SessionBrowserMode};
     let Some(browser) = app.session_browser.as_mut() else {
         return;
