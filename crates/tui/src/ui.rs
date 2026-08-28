@@ -280,41 +280,55 @@ fn draw_chat(f: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn append_entry_lines(entry: &Entry, width: usize, out: &mut Vec<Line<'static>>) {
-    // 用户/AI/系统：前缀着色（语义），正文回归浅灰——两套视觉语言
+    // 消息块宽度 = 可用宽 - 色条占位（"▎ " 2 列）
+    let w = width.saturating_sub(2);
+    // 用户/AI/系统：左色条 + 前缀着色（语义），正文回归浅灰——两套视觉语言
     match entry {
-        Entry::Info(text) => push_prefixed_wrapped(out, "· ", DIM, text, theme::FG, width),
-        Entry::User(text) => push_prefixed_wrapped(out, "你 › ", USER, text, theme::FG, width),
+        Entry::Info(text) => push_prefixed_wrapped(out, "· ", DIM, text, theme::MUTED, width, None),
+        Entry::User(text) => {
+            push_prefixed_wrapped(out, "你 › ", USER, text, theme::FG, w, Some(USER))
+        }
         Entry::Assistant {
             content,
             reasoning_chars,
         } => {
             if let Some(n) = reasoning_chars {
-                out.push(Line::from(Span::styled(
-                    format!("  (已思考 {n} 字符)").to_owned(),
-                    Style::new().fg(DIM),
-                )));
+                out.push(Line::from(vec![
+                    Span::styled("▎ ", Style::new().fg(theme::SECONDARY)),
+                    Span::styled(format!("  (已思考 {n} 字符)"), Style::new().fg(DIM)),
+                ]));
             }
             // AI 前缀：Secondary 蓝紫（与用户暖黄形成两套视觉语言）
-            out.push(Line::from(Span::styled(
-                "StudyPilot ›".to_owned(),
-                Style::new()
-                    .fg(theme::SECONDARY)
-                    .add_modifier(Modifier::BOLD),
-            )));
-            out.push(Line::default()); // 空行呼吸
-            // Markdown 渲染
-            let md_lines = markdown::render_markdown(content, width);
-            out.extend(md_lines);
-            out.push(Line::default()); // 空行呼吸
+            out.push(Line::from(vec![
+                Span::styled("▎ ", Style::new().fg(theme::SECONDARY)),
+                Span::styled(
+                    "StudyPilot ›".to_owned(),
+                    Style::new()
+                        .fg(theme::SECONDARY)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            // Markdown 渲染（块内：来源脚注与思考行同属该块）
+            let mut lines: Vec<Line<'static>> = Vec::new();
+            let md_lines = markdown::render_markdown(content, w);
+            lines.extend(md_lines);
+            for l in lines {
+                let mut spans: Vec<Span<'static>> =
+                    vec![Span::styled("▎ ", Style::new().fg(theme::SECONDARY))];
+                spans.extend(l.spans.into_iter());
+                out.push(Line::from(spans));
+            }
         }
         Entry::Citation(text) => {
-            // RAG 品牌色：引用来源行整体 Reference 青
-            out.push(Line::from(Span::styled(
-                format!("  {text}"),
-                Style::new().fg(theme::REFERENCE),
-            )));
+            // RAG 品牌色：引用来源行整体 Reference 青（同属 AI 块色条）
+            out.push(Line::from(vec![
+                Span::styled("▎ ", Style::new().fg(theme::SECONDARY)),
+                Span::styled(format!("  {text}"), Style::new().fg(theme::REFERENCE)),
+            ]));
         }
-        Entry::Error(text) => push_prefixed_wrapped(out, "✗ ", ERROR, text, theme::FG, width),
+        Entry::Error(text) => {
+            push_prefixed_wrapped(out, "✗ ", ERROR, text, theme::FG, w, Some(ERROR))
+        }
     }
 }
 
@@ -326,26 +340,30 @@ fn push_prefixed_wrapped(
     text: &str,
     body_color: Color,
     width: usize,
+    bar: Option<Color>,
 ) {
+    // 左侧色条（"▎ "）占 2 列，块内所有行统一携带 → 形成连续竖线的消息块
+    let bar_span = bar.map(|c| Span::styled("▎ ", Style::new().fg(c)));
+    let bar_w = if bar.is_some() { 2 } else { 0 };
     let pw = display_width(prefix);
-    let body_w = width.saturating_sub(pw);
+    let body_w = width.saturating_sub(pw + bar_w);
     let body_style = Style::new().fg(body_color);
     let prefix_span = Span::styled(prefix.to_owned(), Style::new().fg(prefix_color));
-    let indent = " ".repeat(pw);
+    let indent = format!("{}{}", " ".repeat(bar_w), " ".repeat(pw));
     let mut first = true;
     for seg in wrap(text, body_w.max(4)) {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        if let Some(bs) = &bar_span {
+            spans.push(bs.clone());
+        }
         if first {
-            out.push(Line::from(vec![
-                prefix_span.clone(),
-                Span::styled(seg, body_style),
-            ]));
+            spans.push(prefix_span.clone());
             first = false;
         } else {
-            out.push(Line::from(vec![
-                Span::raw(indent.clone()),
-                Span::styled(seg, body_style),
-            ]));
+            spans.push(Span::raw(indent.clone()));
         }
+        spans.push(Span::styled(seg, body_style));
+        out.push(Line::from(spans));
     }
 }
 
