@@ -341,7 +341,7 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
     });
 
     app.push_entry(Entry::Info(format!(
-        "mynotes-agent 已就绪 │ 课程: {} │ 模型: {} │ Ctrl+K 命令面板 · /help 能力总览",
+        "StudyPilot 已就绪 │ 课程: {} │ 模型: {} │ Ctrl+K 命令面板 · /help 能力总览",
         app.course, app.provider_cfg.model
     )));
     app.request_sessions_refresh();

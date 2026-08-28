@@ -4,7 +4,7 @@
 
 ## 项目一句话
 
-mynotes-agent：Rust TUI 个人知识库 Agent（导入 → 学习 → 复习三模式），ratatui + SQLite，本地优先。
+StudyPilot（仓库目录 agent）：Rust TUI 个人学习 Agent（导入 → 学习 → 复习三模式），ratatui + SQLite，本地优先。
 
 ## Workspace 布局
 

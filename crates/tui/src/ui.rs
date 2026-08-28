@@ -63,7 +63,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
     let (status_text, status_color) = app.status_label();
 
     // 左侧 = 学习位置（我是谁、在哪门课）；右侧 = 系统状态（模型/费用/状态）
-    let left = format!(" mynotes-agent │ {}", app.course);
+    let left = format!(" StudyPilot │ {}", app.course);
     let right = format!(
         "{} · {} │ ¥{:.2}/{:.0} │ {} ",
         app.provider_cfg.model,

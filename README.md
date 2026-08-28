@@ -1,8 +1,10 @@
-# mynotes-agent
+# StudyPilot
 
-> **"Agent 主动管理你的知识，而不是被动回答你的知识。"**
+> **Your AI study agent for course materials.**
 
-一个用 Rust 实现的本地优先个人知识管理 Agent——自动导入、分类、关联你的笔记/论文/课件，并主动发现知识盲区、生成复习计划。
+一个用 Rust 实现的本地优先学习 Agent——导入课程资料、基于笔记辅导问答、主动出题复习并追踪掌握度。（仓库目录沿用 agent）
+
+
 
 ## 核心功能
 
@@ -44,7 +46,7 @@ sudo apt install xclip   # X11
 ### 构建
 
 ```bash
-git clone <repo-url> && cd mynotes-agent
+git clone <repo-url> && cd agent
 cargo build --release
 ```
 

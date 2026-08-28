@@ -1,4 +1,4 @@
-//! mynotes-agent TUI 入口。
+//! StudyPilot TUI 入口。
 
 mod app;
 mod clipboard;
