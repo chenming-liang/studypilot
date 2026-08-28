@@ -222,8 +222,13 @@ impl Store {
             [course_id],
             |r| r.get(0),
         )?;
+        // 概念口径 = 该课笔记关联的 DISTINCT 概念数（收编后概念的
+        // course_id 可能仍留 all，按归属数会漏——按关联数才符合
+        // "这门课覆盖多少概念"的用户预期）
         let concepts: i64 = conn.query_row(
-            "SELECT count(*) FROM concepts WHERE course_id = ?1",
+            "SELECT COUNT(DISTINCT nc.concept_id)
+             FROM note_concepts nc JOIN notes n ON n.id = nc.note_id
+             WHERE n.course_id = ?1",
             [course_id],
             |r| r.get(0),
         )?;
@@ -707,8 +712,11 @@ impl Store {
                 COALESCE(cm.attempts, 0) as attempts,
                 COALESCE(cm.correct, 0) as correct
          FROM concepts c
+         JOIN note_concepts nc ON nc.concept_id = c.id
+         JOIN notes n ON n.id = nc.note_id
          LEFT JOIN concept_mastery cm ON cm.concept_id = c.id
-         WHERE c.course_id = ?1
+         WHERE n.course_id = ?1
+         GROUP BY c.id
          ORDER BY attempts ASC, correct DESC",
         )?;
         let rows = stmt.query_map([course_id], |r| {

@@ -360,3 +360,40 @@ fn title_search_and_batch_delete() {
     // 空列表安全
     assert_eq!(store.delete_notes_by_ids(&[]).unwrap(), 0);
 }
+
+/// 回归（收编统计口径）：move_note 收编后概念归属仍留旧课/all，
+/// 课程统计与出题概念清单必须按"笔记关联的概念"计数，否则显示 0c
+/// 且出题时概念清单为空。
+#[test]
+fn course_stats_counts_concepts_by_note_association() {
+    let store = store();
+    let rust = store.get_or_create_course("rust").unwrap();
+
+    // 还原真实时序：无课导入 → 笔记与概念都归 NULL（all 区）
+    let n1 = match store
+        .insert_note(NewNote {
+            course_id: None,
+            title: "所有权",
+            source_path: None,
+            content: "所有权内容",
+            fts_content: None,
+        })
+        .unwrap()
+    {
+        InsertOutcome::Created(n) => n,
+        InsertOutcome::Duplicate { .. } => panic!(),
+    };
+    let concept = store.get_or_create_concept("所有权", None).unwrap();
+    store.link_note_concept(n1.id, concept).unwrap();
+
+    // 新建 test 课并收编笔记（概念归属仍留 NULL——即用户遇到的 0c 场景）
+    let test = store.get_or_create_course("test").unwrap();
+    store.move_note(n1.id, Some(test)).unwrap();
+
+    // 统计口径：test 课 1 篇笔记、1 个关联概念（旧口径为 0c）
+    assert_eq!(store.course_stats(test).unwrap(), (1, 1));
+    // 出题概念清单同样按关联取
+    let concepts = store.list_concepts_with_mastery(test).unwrap();
+    assert_eq!(concepts.len(), 1);
+    assert_eq!(concepts[0].name, "所有权");
+}
