@@ -562,7 +562,7 @@ mod course_delete_tests {
     use super::*;
     use crate::app::AppEvent;
 
-    fn test_app() -> App {
+    pub(crate) fn test_app() -> App {
         let cfg = agent_providers::ProviderConfig {
             name: "test".into(),
             endpoint: "http://localhost".into(),
@@ -629,7 +629,7 @@ mod course_delete_tests {
 mod selection_mapping_tests {
     use super::*;
 
-    pub(crate) fn test_app() -> App {
+    fn test_app() -> App {
         let cfg = agent_providers::ProviderConfig {
             name: "test".into(),
             endpoint: "http://localhost".into(),
