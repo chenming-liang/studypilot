@@ -157,7 +157,11 @@ impl App {
 
     /// 覆盖层接管聊天框输入：备份原内容并清空（fzf 风格——覆盖层与聊天框共享同一缓冲）。
     pub(crate) fn take_input_for_overlay(&mut self) {
-        self.input_backup = Some(std::mem::take(&mut self.input));
+        // 嵌套守卫：备份仅首次建立。浏览器的 Select→Search 二次进入
+        // 不得覆盖外层备份，否则关闭时恢复的是搜索词、原聊天内容丢失。
+        if self.input_backup.is_none() {
+            self.input_backup = Some(std::mem::take(&mut self.input));
+        }
         self.cursor_pos = 0;
     }
 

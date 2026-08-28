@@ -629,7 +629,7 @@ mod course_delete_tests {
 mod selection_mapping_tests {
     use super::*;
 
-    fn test_app() -> App {
+    pub(crate) fn test_app() -> App {
         let cfg = agent_providers::ProviderConfig {
             name: "test".into(),
             endpoint: "http://localhost".into(),
@@ -672,5 +672,34 @@ mod selection_mapping_tests {
         assert_eq!(app.selection_anchor, Some(0));
         app.update_text_selection(9, 30, true); // 第 7 行
         assert_eq!(app.selection_anchor, Some(6));
+    }
+}
+
+#[cfg(test)]
+mod overlay_backup_tests {
+    use super::super::course_delete_tests::test_app;
+    use super::*;
+
+    /// 回归：覆盖层备份嵌套守卫——二次 take 不得覆盖首次备份，
+    /// 否则浏览器 Select→Search 再关闭时，原聊天内容丢失。
+    #[test]
+    fn take_is_nested_safe() {
+        let mut app = test_app();
+        app.input = "原始聊天内容".into();
+        app.take_input_for_overlay(); // 首次：备份原内容
+        assert_eq!(app.input, "");
+        app.input = "搜索词".into();
+        app.take_input_for_overlay(); // 二次：不得覆盖备份
+        app.restore_input_backup();
+        assert_eq!(app.input, "原始聊天内容", "原聊天内容不得被搜索词覆盖");
+    }
+
+    /// 无备份时 restore 不产生任何效果。
+    #[test]
+    fn restore_without_backup_is_noop() {
+        let mut app = test_app();
+        app.input = "保留".into();
+        app.restore_input_backup();
+        assert_eq!(app.input, "保留");
     }
 }

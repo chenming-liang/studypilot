@@ -131,12 +131,10 @@ impl App {
             let result = spawn_blocking(move || -> Result<String, String> {
                 match action {
                     BatchAction::Move => {
-                        let Some(target) = course_id else {
-                            return Err("未选择目标课程".into());
-                        };
+                        // course_id=None = all 区，同样是合法目标
                         let mut ok = 0usize;
                         for id in &ids {
-                            if store.move_note(*id, Some(target)).unwrap_or(false) {
+                            if store.move_note(*id, course_id).unwrap_or(false) {
                                 ok += 1;
                             }
                         }

@@ -469,8 +469,10 @@ impl App {
                 KeyCode::Char('/') | KeyCode::Enter => {
                     if let Some(b) = &mut self.note_browser {
                         b.mode = BrowserMode::Search;
-                        self.take_input_for_overlay();
                     }
+                    self.input.clear();
+                    self.cursor_pos = 0;
+                    self.browser_search(); // 与结果集对齐
                     true
                 }
                 KeyCode::Char('m') => {
@@ -623,8 +625,10 @@ impl App {
                 KeyCode::Char('/') => {
                     if let Some(b) = &mut self.session_browser {
                         b.mode = SessionBrowserMode::Search;
-                        self.take_input_for_overlay();
                     }
+                    self.input.clear();
+                    self.cursor_pos = 0;
+                    self.session_browser_search(); // 与结果集对齐
                     true
                 }
                 _ => true,
