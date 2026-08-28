@@ -321,6 +321,18 @@ fn append_entry_lines(entry: &Entry, width: usize, out: &mut Vec<Line<'static>>)
             }
             out.push(Line::default()); // 块间空行：紫条与下一条消息隔开
         }
+        Entry::Tool { text, ok } => {
+            // 工具活动：◌ 蓝紫进行中 / ✓ 绿 / ✗ 红
+            let (mark, color) = match ok {
+                None => ("◌ ", theme::PRIMARY),
+                Some(true) => ("✓ ", theme::SUCCESS),
+                Some(false) => ("✗ ", ERROR),
+            };
+            out.push(Line::from(Span::styled(
+                format!("  {mark}{text}"),
+                Style::new().fg(color),
+            )));
+        }
         Entry::Citation(text) => {
             // RAG 品牌色：引用来源行整体 Reference 青（同属 AI 块色条）
             out.push(Line::from(vec![

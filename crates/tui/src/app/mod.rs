@@ -1,10 +1,8 @@
 //! TUI 应用状态、事件分发与主循环。
 
-//! TUI 应用状态、事件类型与聊天任务。
-
 use std::sync::Arc;
 
-use agent_core::{Message, Role, Usage};
+use agent_core::{LoopEvent, Message, Role, Usage};
 use agent_providers::{OpenAiClient, ProviderConfig};
 use crossterm::event::Event as CtEvent;
 use ratatui::DefaultTerminal;
@@ -249,6 +247,42 @@ impl App {
         });
     }
 
+    /// agent 过程活动行：◌ 开始 / ✓ 完成原地替换 / ✗ 失败。
+    pub(crate) fn on_agent_activity(&mut self, ev: LoopEvent) {
+        match ev {
+            LoopEvent::RoundStart { round } => {
+                if round > 1 {
+                    self.push_entry(Entry::Info(format!("◌ 第 {round} 轮思考…")));
+                }
+            }
+            LoopEvent::ToolStart { tool, detail, .. } => {
+                self.entries.push(Entry::Tool {
+                    text: format!("{tool} {detail}"),
+                    ok: None,
+                });
+                self.scroll_up = 0;
+            }
+            LoopEvent::ToolDone {
+                tool, ok, detail, ..
+            } => {
+                // 原地替换最后的 Running 行（工具串行执行，最后一行必是其 Start 行）
+                if let Some(Entry::Tool { text, ok: slot }) = self.entries.last_mut()
+                    && slot.is_none()
+                    && text.starts_with(&tool)
+                {
+                    *text = format!("{tool}{detail}");
+                    *slot = Some(ok);
+                    return;
+                }
+                self.entries.push(Entry::Tool {
+                    text: format!("{tool}{detail}"),
+                    ok: Some(ok),
+                });
+                self.scroll_up = 0;
+            }
+        }
+    }
+
     /// 弹出右上角临时通知（Tick 时自动过期清除）。
     pub(crate) fn set_toast(&mut self, message: impl Into<String>, error: bool) {
         self.toast = Some(if error {
@@ -455,6 +489,7 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
                 app.expire_toast();
             }
             AppEvent::Agent(ae) => app.handle_agent_event(ae),
+            AppEvent::AgentActivity(ev) => app.on_agent_activity(ev),
             AppEvent::CourseManaged(outcome) => app.on_course_managed(outcome),
             AppEvent::SessionReady(id) => app.on_session_ready(id),
             AppEvent::SessionsLoaded(list) => app.on_sessions_loaded(list),

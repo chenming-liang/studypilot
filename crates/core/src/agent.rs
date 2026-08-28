@@ -25,6 +25,29 @@ pub struct AgentResult {
     pub tool_trace: Vec<ToolTraceEntry>,
 }
 
+/// agent loop 过程事件（实时活动流：工具调用/轮次，供 UI 渲染"正在做什么"）。
+#[derive(Debug, Clone)]
+pub enum LoopEvent {
+    /// 一轮 LLM 思考开始
+    RoundStart { round: usize },
+    /// 工具调用开始
+    ToolStart {
+        round: usize,
+        tool: String,
+        detail: String,
+    },
+    /// 工具调用完成
+    ToolDone {
+        round: usize,
+        tool: String,
+        ok: bool,
+        detail: String,
+    },
+}
+
+/// 过程事件回调（同步、非阻塞——实现方只做事件投递）。
+pub type LoopEventFn = dyn Fn(&LoopEvent) + Send + Sync;
+
 /// 单次工具调用记录。
 #[derive(Debug, Clone)]
 pub struct ToolTraceEntry {
@@ -42,6 +65,8 @@ pub struct Agent {
     max_rounds: usize,
     /// Context 预算（字符）；None = 不裁剪。默认启用 DEFAULT_CONTEXT_BUDGET_CHARS。
     context_budget: Option<usize>,
+    /// 过程事件回调；None = 静默
+    on_event: Option<Arc<LoopEventFn>>,
 }
 
 impl Agent {
@@ -52,6 +77,7 @@ impl Agent {
             system_prompt: None,
             max_rounds: DEFAULT_MAX_ROUNDS,
             context_budget: Some(crate::context::DEFAULT_CONTEXT_BUDGET_CHARS),
+            on_event: None,
         }
     }
 
@@ -69,6 +95,18 @@ impl Agent {
     pub fn with_max_rounds(mut self, max_rounds: usize) -> Self {
         self.max_rounds = max_rounds;
         self
+    }
+
+    /// 订阅 loop 过程事件（实时活动流）。
+    pub fn with_on_event(mut self, f: Arc<LoopEventFn>) -> Self {
+        self.on_event = Some(f);
+        self
+    }
+
+    fn emit(&self, ev: LoopEvent) {
+        if let Some(f) = &self.on_event {
+            f(&ev);
+        }
     }
 
     /// 自定义上下文字符预算（Context Manager，超限裁掉最老的轮次）。
@@ -131,6 +169,7 @@ impl Agent {
         let mut tool_trace: Vec<ToolTraceEntry> = Vec::new();
 
         for round in 1..=self.max_rounds {
+            self.emit(LoopEvent::RoundStart { round });
             let resp = self.provider.chat(msgs, &self.tools.schemas()).await?;
             total_usage.prompt_tokens += resp.usage.prompt_tokens;
             total_usage.completion_tokens += resp.usage.completion_tokens;
@@ -157,6 +196,17 @@ impl Agent {
             msgs.push(Message::assistant_tool_calls(resp.tool_calls.clone()));
 
             for tc in &resp.tool_calls {
+                let args: Value = serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                let detail = args
+                    .get("query")
+                    .and_then(Value::as_str)
+                    .map(|q| format!("\u{201c}{q}\u{201d}"))
+                    .unwrap_or_else(|| tc.function.arguments.chars().take(48).collect());
+                self.emit(LoopEvent::ToolStart {
+                    round,
+                    tool: tc.function.name.clone(),
+                    detail,
+                });
                 // 检索型工具防重：search_notes 最多 3 次真实检索，且 query 不能重复。
                 // 注意：计数/轨迹只在真正执行时登记；坏参（q 提取失败）透传 execute_tool
                 // 让工具自身的参数校验回错误给模型修正，而不是谎报"重复查询"。
@@ -209,6 +259,26 @@ impl Agent {
                     ok = !output.starts_with("TOOL_ERROR"),
                     "agent loop: 工具执行完成"
                 );
+                let ok = !output.starts_with("TOOL_ERROR");
+                let done_detail = serde_json::from_str::<Value>(&output)
+                    .ok()
+                    .and_then(|v| {
+                        v.get("results")
+                            .and_then(|r| r.as_array())
+                            .map(|a| a.len().to_string())
+                    })
+                    .unwrap_or_default();
+                let done_detail = if done_detail.is_empty() {
+                    String::new()
+                } else {
+                    format!(" → {done_detail} 条")
+                };
+                self.emit(LoopEvent::ToolDone {
+                    round,
+                    tool: tc.function.name.clone(),
+                    ok,
+                    detail: done_detail,
+                });
                 msgs.push(Message::tool_result(&tc.id, output));
             }
         }

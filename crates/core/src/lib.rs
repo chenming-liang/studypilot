@@ -11,7 +11,7 @@ pub mod parse;
 pub mod provider;
 pub mod tool;
 
-pub use agent::{Agent, AgentResult, DEFAULT_MAX_ROUNDS, ToolTraceEntry};
+pub use agent::{Agent, AgentResult, DEFAULT_MAX_ROUNDS, LoopEvent, LoopEventFn, ToolTraceEntry};
 pub use context::{DEFAULT_CONTEXT_BUDGET_CHARS, trim_history};
 pub use message::{Function, Message, Role, ToolCall};
 pub use mock::MockProvider;

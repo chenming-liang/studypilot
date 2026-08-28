@@ -29,9 +29,16 @@ impl App {
             )))
             .register(Box::new(ListCoursesTool::new(store)));
 
+        // 过程事件流：工具调用实时活动行（◌ 进行中 / ✓ 完成）
+        let tx_events = tx.clone();
+        let on_event: std::sync::Arc<agent_core::LoopEventFn> =
+            std::sync::Arc::new(move |ev: &agent_core::LoopEvent| {
+                let _ = tx_events.send(AppEvent::AgentActivity(ev.clone()));
+            });
         let agent = Agent::new(provider)
             .with_tools(tools)
-            .with_system_prompt(system_prompt);
+            .with_system_prompt(system_prompt)
+            .with_on_event(on_event);
 
         tokio::spawn(async move {
             let _ = tx.send(AppEvent::Agent(AgentEvent::Thinking));
@@ -128,7 +135,7 @@ impl App {
                 reasoning_chars,
                 usage,
                 new_messages,
-                tool_trace,
+                ..
             } => {
                 self.total_usage.prompt_tokens += usage.prompt_tokens;
                 self.total_usage.completion_tokens += usage.completion_tokens;
@@ -138,24 +145,6 @@ impl App {
                 for m in &new_messages {
                     self.history.push(m.clone());
                     self.persist(m.clone());
-                }
-                if !tool_trace.is_empty() {
-                    let total_hits: usize = tool_trace.iter().map(|t| t.hit_count).sum();
-                    let lines: Vec<String> = tool_trace
-                        .iter()
-                        .map(|t| {
-                            format!(
-                                "  {} {} → {} 条",
-                                if t.ok { "✓" } else { "✗" },
-                                t.tool_name,
-                                t.hit_count
-                            )
-                        })
-                        .collect();
-                    self.push_entry(Entry::Info(format!(
-                        "Agent trace ({total_hits} 条命中):\n{}",
-                        lines.join("\n")
-                    )));
                 }
                 // RAG 来源脚注：把回答里的 [n] 映射到实际笔记（只列被引用的）
                 let citations = extract_citations(&new_messages, &content);

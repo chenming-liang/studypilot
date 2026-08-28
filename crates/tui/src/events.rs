@@ -1,6 +1,6 @@
 //! 事件类型：后台任务 → TUI 的统一通道载体。
 
-use agent_core::{Message, Usage};
+use agent_core::{LoopEvent, Message, Usage};
 use crossterm::event::Event as CtEvent;
 
 use crate::review;
@@ -76,6 +76,8 @@ pub enum AppEvent {
         scope_label: String,
         result: Result<String, String>,
     },
+    /// agent loop 过程事件（工具活动流：◌ 进行中 / ✓ 完成 / ✗ 失败）
+    AgentActivity(LoopEvent),
     /// 会话浏览器异步搜索结果（seq 丢弃过期响应）
     SessionBrowserResults {
         seq: u64,
@@ -97,5 +99,10 @@ pub enum Entry {
     },
     /// RAG 来源脚注行（"[n] 标题 · 小节"，Reference 青色渲染）
     Citation(String),
+    /// 工具活动行：◌ 进行中（蓝紫） / ✓ 成功（绿） / ✗ 失败（红）
+    Tool {
+        text: String,
+        ok: Option<bool>,
+    },
     Error(String),
 }
