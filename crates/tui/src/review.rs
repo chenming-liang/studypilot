@@ -99,7 +99,7 @@ pub async fn start_review(
     store: Arc<Store>,
     provider: Arc<OpenAiClient>,
     provider_cfg: ProviderConfig,
-    course_id: i64,
+    course_id: Option<i64>,
     course_name: String,
     scope: String,
     n: usize,
@@ -112,7 +112,7 @@ pub async fn start_review(
     let gathered = tokio::task::spawn_blocking(
         move || -> storage::Result<(Vec<storage::ChunkHit>, Vec<storage::ConceptMastery>)> {
             // 用课程范围检索相关片段
-            let hits = store_clone.search_chunks(&scope_for_search, Some(course_id), 10)?;
+            let hits = store_clone.search_chunks(&scope_for_search, course_id, 10)?;
             // 概念 + 掌握度（薄弱优先）
             let concepts = store_clone.list_concepts_with_mastery(course_id)?;
             Ok((hits, concepts))
@@ -253,7 +253,7 @@ pub async fn start_review(
     // ⑤ 存入 DB
     let store_clone = Arc::clone(&store);
     let quiz_id = tokio::task::spawn_blocking(move || -> storage::Result<i64> {
-        let qid = store_clone.create_quiz(Some(course_id), &scope.clone())?;
+        let qid = store_clone.create_quiz(course_id, &scope.clone())?;
         for q in &quiz.questions {
             let options_json = if q.options.is_empty() {
                 None

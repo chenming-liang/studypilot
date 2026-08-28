@@ -533,18 +533,13 @@ impl App {
     /// 打开复习参数向导（手输无参 /review 与面板共用；课程自动取当前分区）。
     pub(crate) fn open_review_wizard(&mut self) {
         if self.review.is_some() {
-            self.push_entry(Entry::Error("复习进行中，请先完成或 Esc 退出".into()));
+            self.set_toast("复习进行中，请先完成或 Esc 退出", true);
             return;
         }
-        let Some(course_id) = self.current_course_id() else {
-            self.push_entry(Entry::Error(
-                "复习需指定具体课程——先 /course 切换分区".into(),
-            ));
-            return;
-        };
+        let course_id = self.current_course_id();
         let course_name = self.course.clone();
         self.take_input_for_overlay();
-        self.wizard = Some(Wizard::new_review(Some(course_id), course_name));
+        self.wizard = Some(Wizard::new_review(course_id, course_name));
         self.enter_wizard_step();
     }
 

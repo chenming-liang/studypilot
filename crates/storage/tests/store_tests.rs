@@ -392,7 +392,7 @@ fn course_stats_counts_concepts_by_note_association() {
     // 统计口径：test 课 1 篇笔记、1 个关联概念（旧口径为 0c）
     assert_eq!(store.course_stats(test).unwrap(), (1, 1));
     // 出题概念清单同样按关联取
-    let concepts = store.list_concepts_with_mastery(test).unwrap();
+    let concepts = store.list_concepts_with_mastery(Some(test)).unwrap();
     assert_eq!(concepts.len(), 1);
     assert_eq!(concepts[0].name, "所有权");
 }
@@ -441,6 +441,6 @@ fn chunks_by_course_returns_all_material() {
             .is_empty()
     );
     // 兜底取材：全课 chunk
-    let all = store.chunks_by_course(cid, 24).unwrap();
+    let all = store.chunks_by_course(Some(cid), 24).unwrap();
     assert_eq!(all.len(), 2, "应取到该课全部 chunk");
 }

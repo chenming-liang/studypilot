@@ -219,15 +219,19 @@ impl App {
         let known: Vec<String> = self.courses.iter().map(|(_, n)| n.clone()).collect();
         match parse_review_action(arg, &known) {
             Ok(spec) => {
-                let Some(course_id) = self
-                    .courses
-                    .iter()
-                    .find(|(_, n)| *n == spec.course.as_str())
-                    .map(|(id, _)| *id)
-                else {
+                // all = 全部笔记出题（course_id=None）
+                let course_id = if spec.course == "all" {
+                    None
+                } else {
+                    self.courses
+                        .iter()
+                        .find(|(_, n)| *n == spec.course.as_str())
+                        .map(|(id, _)| *id)
+                };
+                if course_id.is_none() && spec.course != "all" {
                     self.push_entry(Entry::Error(format!("课程 `{}` 不存在", spec.course)));
                     return;
-                };
+                }
                 self.run_review(course_id, spec.course, spec.scope, spec.n);
             }
             Err(e) => self.push_entry(Entry::Error(e)),
@@ -237,7 +241,7 @@ impl App {
     /// 复习执行（结构化入口：手输解析与向导直连共用）。
     pub(crate) fn run_review(
         &mut self,
-        course_id: i64,
+        course_id: Option<i64>,
         course_name: String,
         scope: String,
         n: usize,

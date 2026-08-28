@@ -715,7 +715,10 @@ impl Store {
     }
 
     /// 列出课程下概念 + 掌握度（掌握度低的排前，用于出题优先）。
-    pub fn list_concepts_with_mastery(&self, course_id: i64) -> Result<Vec<ConceptMastery>> {
+    pub fn list_concepts_with_mastery(
+        &self,
+        course_id: Option<i64>,
+    ) -> Result<Vec<ConceptMastery>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT c.id, c.name,
@@ -725,7 +728,7 @@ impl Store {
          JOIN note_concepts nc ON nc.concept_id = c.id
          JOIN notes n ON n.id = nc.note_id
          LEFT JOIN concept_mastery cm ON cm.concept_id = c.id
-         WHERE n.course_id = ?1
+         WHERE n.course_id IS ?1
          GROUP BY c.id
          ORDER BY attempts ASC, correct DESC",
         )?;
@@ -809,24 +812,42 @@ impl Store {
     }
 
     /// 取某课程全部笔记的 chunk（出题兜底：概念检索未命中时按课取材）。
-    pub fn chunks_by_course(&self, course_id: i64, limit: usize) -> Result<Vec<ChunkHit>> {
+    /// 取课程范围（None=全部）的 chunk（出题兜底：概念检索未命中时按范围取材）。
+    pub fn chunks_by_course(&self, course_id: Option<i64>, limit: usize) -> Result<Vec<ChunkHit>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT c.id, c.note_id, n.title, c.heading, c.content
-             FROM note_chunks c JOIN notes n ON n.id = c.note_id
-             WHERE n.course_id = ?1
-             ORDER BY c.note_id, c.position LIMIT ?2",
+        let (sql, course_param): (&str, Option<i64>) = match course_id {
+            Some(_) => (
+                "SELECT c.id, c.note_id, n.title, c.heading, c.content
+                 FROM note_chunks c JOIN notes n ON n.id = c.note_id
+                 WHERE n.course_id = ?1
+                 ORDER BY c.note_id, c.position LIMIT ?2",
+                course_id,
+            ),
+            None => (
+                "SELECT c.id, c.note_id, n.title, c.heading, c.content
+                 FROM note_chunks c JOIN notes n ON n.id = c.note_id
+                 ORDER BY c.note_id, c.position LIMIT ?1",
+                None,
+            ),
+        };
+        let params: Vec<Box<dyn rusqlite::ToSql>> = match course_param {
+            Some(cid) => vec![Box::new(cid), Box::new(limit as i64)],
+            None => vec![Box::new(limit as i64)],
+        };
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+            |r| {
+                Ok(ChunkHit {
+                    chunk_id: r.get(0)?,
+                    note_id: r.get(1)?,
+                    note_title: r.get(2)?,
+                    heading: r.get(3)?,
+                    content: r.get(4)?,
+                    rank: 0.0,
+                })
+            },
         )?;
-        let rows = stmt.query_map(rusqlite::params![course_id, limit as i64], |r| {
-            Ok(ChunkHit {
-                chunk_id: r.get(0)?,
-                note_id: r.get(1)?,
-                note_title: r.get(2)?,
-                heading: r.get(3)?,
-                content: r.get(4)?,
-                rank: 0.0,
-            })
-        })?;
         Ok(rows.flatten().collect())
     }
 

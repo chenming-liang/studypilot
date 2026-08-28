@@ -739,15 +739,12 @@ impl App {
                     .and_then(|v| v.trim().parse::<usize>().ok())
                     .filter(|n| *n > 0)
                     .unwrap_or(5);
-                let Some(course_id) = course_id else {
-                    self.push_entry(Entry::Error("复习需指定具体课程，不能为 all".into()));
-                    return;
-                };
                 let scope = if concept.is_empty() {
                     course_name.clone()
                 } else {
                     format!("{course_name} {concept}")
                 };
+                // all（course_id=None）= 全部笔记出题，同样合法
                 self.run_review(course_id, course_name, scope, n);
             }
             WizardKind::Import => {
