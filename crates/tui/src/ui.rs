@@ -146,18 +146,26 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
         "Recent",
         Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
     ))));
+    let row_w = area.width as usize;
     for s in app.sidebar_sessions.iter().take(6) {
         let title = s.title.as_deref().unwrap_or("(未命名)");
-        let short: String = title.chars().take(14).collect();
-        let suffix = if title.chars().count() > 14 {
+        // 行尾 dim 课程标注（会话发生时的分区）
+        let course = app.course_label(s.course_id);
+        let prefix = format!(" #{} ", s.id);
+        let suffix = format!(" · {course}");
+        let avail = row_w
+            .saturating_sub(display_width(&prefix) + display_width(&suffix))
+            .max(4);
+        let short = display_truncate(title, avail);
+        let ellipsis = if display_width(title) > avail {
             "…"
         } else {
             ""
         };
-        items.push(ListItem::new(Line::from(Span::styled(
-            format!(" #{} {}{}", s.id, short, suffix),
-            Style::new(),
-        ))));
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled(format!("{prefix}{short}{ellipsis}"), Style::new()),
+            Span::styled(suffix, Style::new().fg(DIM)),
+        ])));
     }
 
     f.render_widget(List::new(items), area);

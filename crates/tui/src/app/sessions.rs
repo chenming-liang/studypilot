@@ -378,7 +378,15 @@ impl App {
         let lines: Vec<String> = self
             .sidebar_sessions
             .iter()
-            .map(|s| format!("  #{} {}", s.id, s.title.as_deref().unwrap_or("(未命名)")))
+            .map(|s| {
+                let course = self.course_label(s.course_id);
+                format!(
+                    "  #{} {} · {}",
+                    s.id,
+                    s.title.as_deref().unwrap_or("(未命名)"),
+                    course
+                )
+            })
             .collect();
         if lines.is_empty() {
             self.push_entry(Entry::Info("尚无历史会话".into()));

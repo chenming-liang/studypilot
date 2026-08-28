@@ -60,6 +60,19 @@ impl App {
     }
 
     /// 当前课程分区对应的 course_id（all = None = 不过滤）。
+    /// 会话归属课程的显示名（course_id None = all 区）。
+    pub(crate) fn course_label(&self, course_id: Option<i64>) -> String {
+        match course_id {
+            Some(id) => self
+                .courses
+                .iter()
+                .find(|(cid, _)| *cid == id)
+                .map(|(_, n)| n.clone())
+                .unwrap_or_else(|| "all".into()),
+            None => "all".into(),
+        }
+    }
+
     pub(crate) fn current_course_id(&self) -> Option<i64> {
         if self.course == "all" {
             None
