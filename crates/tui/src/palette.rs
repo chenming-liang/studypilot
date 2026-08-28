@@ -63,9 +63,7 @@ pub struct CommandPalette {
     /// 过滤后命中的 items 下标
     pub filtered: Vec<usize>,
     pub selected: usize,
-    pub filter: String,
-    /// 过滤串光标（字符索引，支持左右编辑）
-    pub cursor: usize,
+    // 过滤串 = App.input（覆盖层与聊天框共享同一缓冲，无独立状态）
 }
 
 impl CommandPalette {
@@ -179,13 +177,12 @@ impl CommandPalette {
             items,
             filtered,
             selected: 0,
-            filter: String::new(),
-            cursor: 0,
         }
     }
 
-    pub(crate) fn refilter(&mut self) {
-        let f = self.filter.to_lowercase();
+    /// 按聊天框当前内容过滤（共享缓冲）。
+    pub(crate) fn refilter(&mut self, input: &str) {
+        let f = input.to_lowercase();
         self.filtered = self
             .items
             .iter()

@@ -25,9 +25,9 @@ impl App {
             self.handle_review_key(key);
             return;
         }
-        // 参数向导（palette Enter 触发）
-        if self.wizard.is_some() {
-            self.handle_wizard_key(key);
+        // 参数向导（palette Enter 触发）：导航键拦截，编辑键落入普通路径
+        // （向导/面板与聊天框共享同一输入缓冲，fzf 风格）
+        if self.wizard.is_some() && self.handle_wizard_key(key) {
             return;
         }
         // 列表选择器（面板 Pick 动作唤起）
@@ -35,9 +35,8 @@ impl App {
             self.handle_list_picker_key(key);
             return;
         }
-        // 命令面板（Ctrl+K 唤起）覆盖普通输入
-        if self.palette.is_some() {
-            self.handle_palette_key(key);
+        // 命令面板（Ctrl+K 唤起）：导航键拦截，编辑键落入普通路径
+        if self.palette.is_some() && self.handle_palette_key(key) {
             return;
         }
         // 弹窗打开时按键优先由弹窗处理
@@ -45,16 +44,19 @@ impl App {
             self.handle_picker_key(key);
             return;
         }
-        // Ctrl+K 打开命令面板
+        // Ctrl+K 打开命令面板（接管聊天框输入作过滤缓冲）
         if let KeyCode::Char('k') = key.code
             && key.modifiers.contains(KeyModifiers::CONTROL)
         {
+            self.take_input_for_overlay();
             self.palette = Some(CommandPalette::new());
             return;
         }
-        // v 键切换选择模式（临时关闭鼠标捕获，允许终端原生选中复制）
+        // v 键切换选择模式（覆盖层打开时 v 是过滤字符，不触发）
         if let KeyCode::Char('v') = key.code
             && !key.modifiers.contains(KeyModifiers::CONTROL)
+            && self.palette.is_none()
+            && self.wizard.is_none()
         {
             self.toggle_selection_mode();
             return;
@@ -85,14 +87,27 @@ impl App {
             KeyCode::End => self.cursor_pos = self.input.chars().count(),
             KeyCode::Backspace => {
                 self.cursor_pos = delete_before(&mut self.input, self.cursor_pos);
+                self.sync_palette_filter();
             }
-            KeyCode::Delete => delete_at(&mut self.input, self.cursor_pos),
+            KeyCode::Delete => {
+                delete_at(&mut self.input, self.cursor_pos);
+                self.sync_palette_filter();
+            }
             KeyCode::PageUp => self.scroll_up = self.scroll_up.saturating_add(10),
             KeyCode::PageDown => self.scroll_up = self.scroll_up.saturating_sub(10),
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.cursor_pos = insert_char(&mut self.input, self.cursor_pos, c);
+                self.sync_palette_filter();
             }
             _ => {}
+        }
+    }
+
+    /// 面板打开期间，聊天框缓冲即过滤串——编辑后同步过滤结果。
+    fn sync_palette_filter(&mut self) {
+        if let Some(p) = &mut self.palette {
+            let input = self.input.clone();
+            p.refilter(&input);
         }
     }
 
@@ -331,17 +346,23 @@ impl App {
         }
     }
 
-    /// 面板按键：字符进过滤串、↑↓ 选择、Enter 执行、Tab 填入输入框、Esc 关闭。
-    pub(crate) fn handle_palette_key(&mut self, key: KeyEvent) {
+    /// 面板导航键（编辑键由普通聊天框路径处理——共享同一输入缓冲）。
+    /// 返回 true 表示该键已被面板消费。
+    pub(crate) fn handle_palette_key(&mut self, key: KeyEvent) -> bool {
         if key.kind != KeyEventKind::Press {
-            return;
+            return false;
         }
         match key.code {
-            KeyCode::Esc => self.palette = None,
+            KeyCode::Esc => {
+                self.palette = None;
+                self.restore_input_backup();
+                true
+            }
             KeyCode::Up => {
                 if let Some(p) = &mut self.palette {
                     p.selected = p.selected.saturating_sub(1);
                 }
+                true
             }
             KeyCode::Down => {
                 if let Some(p) = &mut self.palette
@@ -349,52 +370,14 @@ impl App {
                 {
                     p.selected = (p.selected + 1).min(p.filtered.len() - 1);
                 }
-            }
-            KeyCode::Backspace => {
-                if let Some(p) = &mut self.palette
-                    && p.cursor > 0
-                {
-                    p.cursor = delete_before(&mut p.filter, p.cursor);
-                    p.refilter();
-                }
-            }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(p) = &mut self.palette {
-                    p.cursor = insert_char(&mut p.filter, p.cursor, c);
-                    p.refilter();
-                }
-            }
-            KeyCode::Left => {
-                if let Some(p) = &mut self.palette {
-                    p.cursor = p.cursor.saturating_sub(1);
-                }
-            }
-            KeyCode::Right => {
-                if let Some(p) = &mut self.palette {
-                    p.cursor = (p.cursor + 1).min(p.filter.chars().count());
-                }
-            }
-            KeyCode::Home => {
-                if let Some(p) = &mut self.palette {
-                    p.cursor = 0;
-                }
-            }
-            KeyCode::End => {
-                if let Some(p) = &mut self.palette {
-                    p.cursor = p.filter.chars().count();
-                }
-            }
-            KeyCode::Delete => {
-                if let Some(p) = &mut self.palette {
-                    delete_at(&mut p.filter, p.cursor);
-                    p.refilter();
-                }
+                true
             }
             KeyCode::Enter | KeyCode::Tab => {
                 let fill_only = key.code == KeyCode::Tab;
                 self.palette_execute(fill_only);
+                true
             }
-            _ => {}
+            _ => false,
         }
     }
 
@@ -411,6 +394,10 @@ impl App {
         let item = &p.items[idx];
         let (cmd, action) = (item.command, item.action);
         self.palette = None;
+        // 输入缓冲将被命令文本/向导接管：备份使命结束
+        if !fill_only {
+            self.drop_input_backup();
+        }
 
         if !fill_only {
             match action {
@@ -430,6 +417,7 @@ impl App {
                 }
                 A::Prompt(title, prompt) => {
                     self.wizard = Some(Wizard::new_prompt(title, prompt, cmd));
+                    self.enter_wizard_step();
                     return;
                 }
                 A::Pick(kind) => {
@@ -440,6 +428,7 @@ impl App {
             }
         }
         // Tab 或 Fill：填入输入框（power-user 文本模式）
+        self.restore_input_backup();
         self.input = cmd.to_owned();
         self.cursor_pos = self.input.chars().count();
     }
@@ -500,7 +489,10 @@ impl App {
             return;
         }
         match key.code {
-            KeyCode::Esc => self.list_picker = None,
+            KeyCode::Esc => {
+                self.list_picker = None;
+                self.restore_input_backup();
+            }
             KeyCode::Up => {
                 if let Some(lp) = &mut self.list_picker {
                     lp.selected = lp.selected.saturating_sub(1);
@@ -522,6 +514,7 @@ impl App {
                 };
                 let cmd = choice.command.clone();
                 self.list_picker = None;
+                self.drop_input_backup();
                 self.input = cmd;
                 self.cursor_pos = self.input.chars().count();
                 self.submit();
@@ -530,66 +523,53 @@ impl App {
         }
     }
 
-    /// 向导按键：字符进输入缓冲、Enter 推进/完成、Esc 回退/取消。
-    pub(crate) fn handle_wizard_key(&mut self, key: KeyEvent) {
+    /// 向导导航键（编辑键由普通聊天框路径处理——共享输入缓冲）。
+    /// 返回 true 表示该键已被向导消费。
+    pub(crate) fn handle_wizard_key(&mut self, key: KeyEvent) -> bool {
         if key.kind != KeyEventKind::Press {
-            return;
+            return false;
         }
         match key.code {
             KeyCode::Esc => {
-                let close = self.wizard.as_mut().is_some_and(Wizard::back);
-                if close {
-                    self.wizard = None;
+                match self.wizard.as_mut().unwrap().back() {
+                    // 回退上一步：聊天框恢复该步默认/已填值
+                    Some(restored) => {
+                        self.input = restored;
+                        self.cursor_pos = self.input.chars().count();
+                    }
+                    None => {
+                        self.wizard = None;
+                        self.restore_input_backup();
+                    }
                 }
+                true
             }
             KeyCode::Enter => {
-                let done = self.wizard.as_mut().is_some_and(Wizard::confirm);
+                let value = std::mem::take(&mut self.input);
+                self.cursor_pos = 0;
+                let done = self.wizard.as_mut().unwrap().confirm(value);
                 if done {
                     let cmd = self.wizard.as_ref().unwrap().command();
                     self.wizard = None;
+                    self.drop_input_backup();
                     self.input = cmd;
                     self.cursor_pos = self.input.chars().count();
                     self.submit();
+                } else {
+                    self.enter_wizard_step();
                 }
+                true
             }
-            KeyCode::Backspace => {
-                if let Some(w) = &mut self.wizard
-                    && w.cursor > 0
-                {
-                    w.cursor = delete_before(&mut w.input, w.cursor);
-                }
-            }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(w) = &mut self.wizard {
-                    w.cursor = insert_char(&mut w.input, w.cursor, c);
-                }
-            }
-            KeyCode::Left => {
-                if let Some(w) = &mut self.wizard {
-                    w.cursor = w.cursor.saturating_sub(1);
-                }
-            }
-            KeyCode::Right => {
-                if let Some(w) = &mut self.wizard {
-                    w.cursor = (w.cursor + 1).min(w.input.chars().count());
-                }
-            }
-            KeyCode::Home => {
-                if let Some(w) = &mut self.wizard {
-                    w.cursor = 0;
-                }
-            }
-            KeyCode::End => {
-                if let Some(w) = &mut self.wizard {
-                    w.cursor = w.input.chars().count();
-                }
-            }
-            KeyCode::Delete => {
-                if let Some(w) = &mut self.wizard {
-                    delete_at(&mut w.input, w.cursor);
-                }
-            }
-            _ => {}
+            _ => false,
+        }
+    }
+
+    /// 推进到向导下一步：把该步默认值放进聊天框缓冲。
+    pub(crate) fn enter_wizard_step(&mut self) {
+        if let Some(w) = &self.wizard {
+            let default = w.steps[w.current].default.clone();
+            self.input = default;
+            self.cursor_pos = self.input.chars().count();
         }
     }
 

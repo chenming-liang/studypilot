@@ -26,10 +26,6 @@ pub struct Wizard {
     pub current: usize,
     /// 每步已确认的值（Enter 写入，Esc 回退保留）
     values: Vec<Option<String>>,
-    /// 当前步输入缓冲
-    pub input: String,
-    /// 输入缓冲光标（字符索引）
-    pub cursor: usize,
 }
 
 impl Wizard {
@@ -82,8 +78,6 @@ impl Wizard {
     }
 
     fn build(kind: WizardKind, course: String, title: String, steps: Vec<WizardStep>) -> Self {
-        let input = steps[0].default.clone();
-        let cursor = input.chars().count();
         Self {
             kind,
             course,
@@ -91,35 +85,29 @@ impl Wizard {
             values: vec![None; steps.len()],
             steps,
             current: 0,
-            input,
-            cursor,
         }
     }
 
-    /// Enter：确认当前步。返回 true 表示已到最后一步（可合成命令）。
-    pub(crate) fn confirm(&mut self) -> bool {
-        self.values[self.current] = Some(self.input.clone());
-        if self.current + 1 < self.steps.len() {
+    /// Enter：确认当前步（值由聊天框缓冲传入）。返回 true 表示已到最后一步。
+    pub(crate) fn confirm(&mut self, value: String) -> bool {
+        self.values[self.current] = Some(value);
+        self.current + 1 < self.steps.len() && {
             self.current += 1;
-            self.input = self.steps[self.current].default.clone();
-            self.cursor = self.input.chars().count();
             false
-        } else {
-            true
         }
     }
 
-    /// Esc：回退上一步并恢复其值。返回 true 表示已在第一步（应关闭向导）。
-    pub(crate) fn back(&mut self) -> bool {
+    /// Esc：回退上一步。返回 Some(该步恢复值)；None = 已在第一步（应关闭向导）。
+    pub(crate) fn back(&mut self) -> Option<String> {
         if self.current == 0 {
-            return true;
+            return None;
         }
         self.current -= 1;
-        self.input = self.values[self.current]
-            .clone()
-            .unwrap_or_else(|| self.steps[self.current].default.clone());
-        self.cursor = self.input.chars().count();
-        false
+        Some(
+            self.values[self.current]
+                .clone()
+                .unwrap_or_else(|| self.steps[self.current].default.clone()),
+        )
     }
 
     /// 合成最终命令（走 handle_command 的 D6 直连路径）。
@@ -179,8 +167,8 @@ mod wizard_tests {
     #[test]
     fn review_wizard_empty_concept_and_default_n() {
         let mut w = Wizard::new_review("csapp".into());
-        assert!(!w.confirm());
-        assert!(w.confirm()); // 数量留空 → 默认 5
+        assert!(!w.confirm(String::new()));
+        assert!(w.confirm(String::new())); // 数量留空 → 默认 5
         assert_eq!(w.command(), "/review csapp --n 5");
     }
 
@@ -188,32 +176,26 @@ mod wizard_tests {
     fn import_wizard_esc_back_restores_value() {
         let mut w = Wizard::new_import("all".into());
         assert_eq!(w.steps[1].default, "", "all 分区时课程默认应为空");
-        w.input = "~/notes".into();
-        assert!(!w.confirm());
-        w.input = "rust".into();
+        assert!(!w.confirm("~/notes".into()));
         // Esc 回退到目录步并恢复已填值
-        assert!(!w.back());
-        assert_eq!(w.input, "~/notes");
-        assert!(w.back()); // 第一步再 Esc → 关闭
+        assert_eq!(w.back().as_deref(), Some("~/notes"));
+        assert!(w.back().is_none()); // 第一步再 Esc → 关闭
     }
 
     #[test]
     fn import_wizard_course_omitted_when_empty() {
         let mut w = Wizard::new_import("rust".into());
         assert_eq!(w.steps[1].default, "rust");
-        w.input = "~/CSAPP".into();
-        assert!(!w.confirm());
-        w.input = "".into(); // 课程留空 → LLM 归类
-        assert!(w.confirm());
+        assert!(!w.confirm("~/CSAPP".into()));
+        assert!(w.confirm(String::new())); // 课程留空 → LLM 归类
         assert_eq!(w.command(), "/import ~/CSAPP");
     }
 
     #[test]
     fn review_rejects_non_numeric_n_gracefully() {
         let mut w = Wizard::new_review("rust".into());
-        assert!(!w.confirm());
-        w.input = "abc".into();
-        assert!(w.confirm());
+        assert!(!w.confirm(String::new()));
+        assert!(w.confirm("abc".into()));
         assert!(w.command().ends_with("--n 5"), "{}", w.command());
     }
 
@@ -230,16 +212,14 @@ mod wizard_tests {
     #[test]
     fn plain_prompt_wizard_completes_command() {
         let mut w = Wizard::new_prompt("重命名会话", "新标题", "/rename");
-        w.input = "讲所有权".into();
-        w.cursor = w.input.chars().count();
-        assert!(w.confirm());
+        assert!(w.confirm("讲所有权".into()));
         assert_eq!(w.command(), "/rename 讲所有权");
     }
 
     #[test]
     fn plain_prompt_empty_input_keeps_bare_command() {
         let mut w = Wizard::new_prompt("加载会话", "JSON 文件路径", "/load");
-        assert!(w.confirm());
+        assert!(w.confirm(String::new()));
         assert_eq!(w.command(), "/load");
     }
 }

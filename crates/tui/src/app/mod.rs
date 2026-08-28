@@ -61,6 +61,8 @@ pub struct App {
     pub input: String,
     /// 输入框光标位置（字符索引，非字节索引）
     pub cursor_pos: usize,
+    /// 覆盖层（面板/向导/选择器）打开前的聊天框输入备份；关闭时恢复
+    input_backup: Option<String>,
     /// 当前课程分区（M4 仅展示与检索范围占位，/course 切换属后续里程碑）
     pub course: String,
 
@@ -109,6 +111,25 @@ pub struct App {
 }
 
 impl App {
+    /// 覆盖层接管聊天框输入：备份原内容并清空（fzf 风格——覆盖层与聊天框共享同一缓冲）。
+    pub(crate) fn take_input_for_overlay(&mut self) {
+        self.input_backup = Some(std::mem::take(&mut self.input));
+        self.cursor_pos = 0;
+    }
+
+    /// 覆盖层取消：恢复备份的聊天框内容。无备份时不动。
+    pub(crate) fn restore_input_backup(&mut self) {
+        if let Some(prev) = self.input_backup.take() {
+            self.input = prev;
+            self.cursor_pos = self.input.chars().count();
+        }
+    }
+
+    /// 覆盖层完成（提交执行）：丢弃备份。
+    pub(crate) fn drop_input_backup(&mut self) {
+        self.input_backup = None;
+    }
+
     pub(crate) fn new(
         provider: Arc<OpenAiClient>,
         store: Arc<Store>,
@@ -132,6 +153,7 @@ impl App {
             sidebar_sessions: Vec::new(),
             input: String::new(),
             cursor_pos: 0,
+            input_backup: None,
             course: "rust".into(),
             total_usage: Usage::default(),
             total_cost: 0.0,

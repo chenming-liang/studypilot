@@ -41,14 +41,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if let Some(picker) = &app.model_picker {
         draw_model_picker(f, picker, &app.provider_cfg.name);
     }
-    if let Some(palette) = &app.palette {
-        draw_command_palette(f, palette);
+    if app.palette.is_some() {
+        draw_command_palette(f, app);
     }
     if let Some(lp) = &app.list_picker {
         draw_list_picker(f, lp);
     }
-    if let Some(wizard) = &app.wizard {
-        draw_wizard(f, wizard);
+    if app.wizard.is_some() {
+        draw_wizard(f, app);
     }
 }
 
@@ -344,7 +344,19 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
 
 /// /model 弹窗：居中覆盖层，当前 provider 打 →，选中项高亮。
 /// 命令面板弹窗：动态宽度、显示宽度对齐，选中项完整信息在底行展示。
-fn draw_command_palette(f: &mut Frame, palette: &CommandPalette) {
+fn draw_command_palette(f: &mut Frame, app: &App) {
+    let palette = app.palette.as_ref().expect("调用方保证 palette 已打开");
+    // 过滤串 = 聊天框共享缓冲，▍ 画在光标位
+    let mut shown = String::new();
+    for (i, ch) in app.input.chars().enumerate() {
+        if i == app.cursor_pos {
+            shown.push('▍');
+        }
+        shown.push(ch);
+    }
+    if app.cursor_pos >= app.input.chars().count() {
+        shown.push('▍');
+    }
     let area = f.area();
     let height = (palette.filtered.len() as u16 + 4).min(area.height.saturating_sub(2));
 
@@ -410,20 +422,9 @@ fn draw_command_palette(f: &mut Frame, palette: &CommandPalette) {
             display_truncate(&format!("{} — {}", it.command, it.desc), width as usize - 4)
         })
         .unwrap_or_else(|| "（无匹配命令）".into());
-    // 过滤串在光标位置显示 ▍
-    let mut shown = String::new();
-    for (i, ch) in palette.filter.chars().enumerate() {
-        if i == palette.cursor {
-            shown.push('▍');
-        }
-        shown.push(ch);
-    }
-    if palette.cursor >= palette.filter.chars().count() {
-        shown.push('▍');
-    }
     let title = format!(
         " 命令面板 {} ",
-        if palette.filter.is_empty() {
+        if app.input.is_empty() {
             format!("({} 项)", palette.filtered.len())
         } else {
             format!("· 过滤: {shown}（{} 项）", palette.filtered.len())
@@ -487,7 +488,8 @@ fn draw_list_picker(f: &mut Frame, lp: &ListPicker) {
 }
 
 /// 参数向导弹窗：单步文本输入（预填默认值），Enter 推进 / Esc 回退。
-fn draw_wizard(f: &mut Frame, wizard: &Wizard) {
+fn draw_wizard(f: &mut Frame, app: &App) {
+    let wizard = app.wizard.as_ref().expect("调用方保证 wizard 已打开");
     let area = f.area();
     let height = 7u16.min(area.height.saturating_sub(2));
     let width = 58u16.min(area.width.saturating_sub(2));
@@ -499,12 +501,12 @@ fn draw_wizard(f: &mut Frame, wizard: &Wizard) {
 
     let step_prompt = wizard.steps[wizard.current].prompt;
     let inner_w = width.saturating_sub(4) as usize;
-    // 在光标位置插入 ▍；超宽时滑动窗口保证光标始终可见
-    let chars: Vec<char> = wizard.input.chars().collect();
-    let cursor_at_tail = wizard.cursor >= chars.len();
+    // 输入 = 聊天框共享缓冲；▍ 画在光标位，超宽时滑动窗口保证可见
+    let chars: Vec<char> = app.input.chars().collect();
+    let cursor_at_tail = app.cursor_pos >= chars.len();
     let mut shown: Vec<char> = Vec::with_capacity(chars.len() + 1);
     for (i, ch) in chars.iter().enumerate() {
-        if i == wizard.cursor {
+        if i == app.cursor_pos {
             shown.push('▍');
         }
         shown.push(*ch);
@@ -512,7 +514,7 @@ fn draw_wizard(f: &mut Frame, wizard: &Wizard) {
     if cursor_at_tail {
         shown.push('▍');
     }
-    let view = cursor_window(&shown, wizard.cursor, inner_w.saturating_sub(2));
+    let view = cursor_window(&shown, app.cursor_pos, inner_w.saturating_sub(2));
     let value: String = view.into_iter().collect();
 
     let lines = vec![
