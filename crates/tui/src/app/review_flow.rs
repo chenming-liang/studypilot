@@ -15,6 +15,7 @@ impl App {
         score: Option<i64>,
         feedback: &str,
         missing: &[String],
+        user_choice: Option<usize>,
     ) {
         // ① 提取题目数据（不可变借用结束后再操作 self）
         let (db_id, concept_id) = match &self.review {
@@ -61,6 +62,7 @@ impl App {
                 score,
                 feedback: feedback.to_owned(),
                 missing: missing.to_vec(),
+                user_choice,
             });
             rs.selected_option = None;
         }
@@ -167,11 +169,11 @@ impl App {
                         String::new()
                     }
                 );
-                self.finish_review_question(correct, Some(score), &feedback, &missing);
+                self.finish_review_question(correct, Some(score), &feedback, &missing, None);
             }
             Err(e) => {
                 self.push_entry(Entry::Error(format!("批改失败: {e}")));
-                self.finish_review_question(false, None, &e, &Vec::new());
+                self.finish_review_question(false, None, &e, &Vec::new(), None);
             }
         }
     }

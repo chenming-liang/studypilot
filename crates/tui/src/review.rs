@@ -96,6 +96,8 @@ pub struct ReviewResult {
     pub score: Option<i64>,
     pub feedback: String,
     pub missing: Vec<String>,
+    /// 用户选的选项下标（选择题作答时记录，供 workspace 答后渲染 ✗/✓ 染色；简答为 None）
+    pub user_choice: Option<usize>,
 }
 
 /// 启动复习出题流程。

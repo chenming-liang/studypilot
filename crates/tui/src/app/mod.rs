@@ -386,6 +386,11 @@ impl App {
         self.inflight.is_some()
     }
 
+    /// 简答题批改进行中（供 UI 渲染"批改中…"提示）。
+    pub(crate) fn is_review_grading(&self) -> bool {
+        self.review_grading
+    }
+
     /// header 状态标签：与按键路由同源的覆盖层状态推导（复习 > 导入 > 请求中 > 选择 > 就绪）。
     /// 让用户随时知道"我现在在哪"，替代隐含状态机。
     pub(crate) fn status_label(&self) -> (String, ratatui::style::Color) {

@@ -367,14 +367,14 @@ impl App {
         let user_letter = (b'A' + choice as u8) as char;
         let Some(correct_idx) = q.answer else {
             self.push_entry(Entry::Error("该题缺少标准答案（LLM 未生成），跳过".into()));
-            self.finish_review_question(false, None, "答案缺失跳过", &[]);
+            self.finish_review_question(false, None, "答案缺失跳过", &[], Some(choice));
             return;
         };
         if correct_idx < 0 || correct_idx as usize >= q.options.len() {
             self.push_entry(Entry::Error(format!(
                 "该题答案下标非法 ({correct_idx})，跳过"
             )));
-            self.finish_review_question(false, None, "答案非法跳过", &[]);
+            self.finish_review_question(false, None, "答案非法跳过", &[], Some(choice));
             return;
         }
         let is_correct = choice as i64 == correct_idx;
@@ -384,7 +384,7 @@ impl App {
         } else {
             format!("✗ 错误（选 {user_letter}，正确答案: {correct_letter}）")
         };
-        self.finish_review_question(is_correct, None, &feedback, &[]);
+        self.finish_review_question(is_correct, None, &feedback, &[], Some(choice));
     }
 
     /// 浏览器按键：返回 true 表示已消费（导航/动作键）；

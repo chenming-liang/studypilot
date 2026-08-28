@@ -28,12 +28,14 @@ fn spinner_char(tick: usize) -> &'static str {
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let root = f.area();
-    // Review workspace：简答题需要更大的答案输入区
+    // Review workspace：简答题作答中需要更大的答案输入区（反馈停留态收窄回 3）
     let input_h = if app.review.as_ref().is_some_and(|rs| {
-        rs.questions
-            .get(rs.current)
-            .map(|q| q.q_type == crate::review::QType::ShortAnswer)
-            .unwrap_or(false)
+        !rs.awaiting_feedback()
+            && rs
+                .questions
+                .get(rs.current)
+                .map(|q| q.q_type == crate::review::QType::ShortAnswer)
+                .unwrap_or(false)
     }) {
         6
     } else {
@@ -149,7 +151,34 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &App) {
     body.push(Line::default());
 
     if awaiting {
-        // ④ 反馈卡
+        // ④a 选择题选项正误染色：✓ 正确答案绿 · ✗ 用户误选红 · 其余灰
+        if q.q_type == QType::Choice
+            && let Some(r) = rs.results.get(rs.current)
+        {
+            let correct_idx = q
+                .answer
+                .filter(|&a| a >= 0 && (a as usize) < q.options.len())
+                .map(|a| a as usize);
+            for (i, opt) in q.options.iter().enumerate() {
+                let is_correct = correct_idx == Some(i);
+                let is_pick = r.user_choice == Some(i);
+                let (mark, color) = if is_correct {
+                    ("✓ ", theme::SUCCESS)
+                } else if is_pick {
+                    ("✗ ", ERROR)
+                } else {
+                    ("  ", theme::MUTED)
+                };
+                let letter = (b'A' + i as u8) as char;
+                body.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(format!("{mark}{letter}"), Style::new().fg(color)),
+                    Span::styled(format!("  {opt}"), Style::new().fg(color)),
+                ]));
+            }
+            body.push(Line::default());
+        }
+        // ④b 反馈卡
         if let Some(r) = rs.results.get(rs.current) {
             let mark = if r.correct {
                 "✓ Correct"
@@ -223,33 +252,10 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &App) {
             Style::new().fg(theme::MUTED),
         )));
     } else {
-        // 简答题：答案输入缓冲提示
-        let shown: String = app
-            .input
-            .chars()
-            .enumerate()
-            .flat_map(|(i, ch)| {
-                if i == app.cursor_pos {
-                    vec!['▍', ch]
-                } else {
-                    vec![ch]
-                }
-            })
-            .chain(
-                std::iter::once('▍').take(if app.cursor_pos >= app.input.chars().count() {
-                    1
-                } else {
-                    0
-                }),
-            )
-            .collect();
-        body.push(Line::from(Span::styled(
-            format!("  你的答案 > {shown}"),
-            Style::new().fg(theme::FG),
-        )));
+        // 简答题：答案输入区在底部（draw_input 专属 hint + 输入行），此处只提示
         body.push(Line::default());
         body.push(Line::from(Span::styled(
-            "  Enter 提交批改 · Esc 退出复习",
+            "  在下方输入你的答案，Enter 提交批改 · Esc 退出复习",
             Style::new().fg(theme::MUTED),
         )));
     }
@@ -598,18 +604,43 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
 }
 
 fn draw_input(f: &mut Frame, area: Rect, app: &App) {
-    let hint = if app.is_inflight() {
-        "Ctrl+C/Esc 中断请求"
-    } else {
-        "Enter 发送 · Ctrl+K 命令面板 · Ctrl+C 退出"
+    // Review 模式：底部状态栏专属化，只显示当前答题动作的提示，简答时输入行即答案框
+    let (hint, show_input) = match &app.review {
+        Some(rs) => {
+            let is_choice = rs
+                .questions
+                .get(rs.current)
+                .map(|q| q.q_type == crate::review::QType::Choice)
+                .unwrap_or(false);
+            if app.is_review_grading() {
+                ("批改中…", false)
+            } else if rs.awaiting_feedback() {
+                ("Enter 下一题 · Esc 退出复习", false)
+            } else if is_choice {
+                ("↑↓ 选择 · A-D 作答 · Enter 提交 · Esc 退出", false)
+            } else {
+                ("输入答案 · Enter 提交批改 · Esc 退出复习", true)
+            }
+        }
+        None => {
+            if app.is_inflight() {
+                ("Ctrl+C/Esc 中断请求", true)
+            } else {
+                ("Enter 发送 · Ctrl+K 命令面板 · Ctrl+C 退出", true)
+            }
+        }
     };
 
     // placeholder：输入为空时显示灰色提示
-    let display_input = if app.input.is_empty() && !app.is_inflight() {
-        let ph = format!("Ask {}...", app.course);
+    let display_input = if app.input.is_empty() && app.review.is_some() && show_input {
         vec![
             Span::styled("› ", Style::new().fg(ACCENT)),
-            Span::styled(ph, Style::new().fg(DIM)),
+            Span::styled("输入你的答案…", Style::new().fg(DIM)),
+        ]
+    } else if app.input.is_empty() && !app.is_inflight() {
+        vec![
+            Span::styled("› ", Style::new().fg(ACCENT)),
+            Span::styled(format!("Ask {}...", app.course), Style::new().fg(DIM)),
         ]
     } else {
         vec![
@@ -619,24 +650,27 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     };
 
     // 底线样式：上边一条分隔线，无框
-    f.render_widget(
-        Paragraph::new(vec![
-            Line::from(Span::styled(hint.to_owned(), Style::new().fg(DIM))),
-            Line::from(display_input),
-        ]),
-        area,
-    );
+    let mut lines = vec![Line::from(Span::styled(
+        hint.to_owned(),
+        Style::new().fg(DIM),
+    ))];
+    if show_input {
+        lines.push(Line::from(display_input));
+    }
+    f.render_widget(Paragraph::new(lines), area);
 
     // 光标定位：第 2 行（hint 下方），前缀 "› "(2)
-    let prefix_width: usize = app
-        .input
-        .chars()
-        .take(app.cursor_pos)
-        .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
-        .sum();
-    let x = area.x + 2 + prefix_width as u16;
-    if x < area.right() - 1 && area.height > 1 {
-        f.set_cursor_position((x, area.y + 1));
+    if show_input {
+        let prefix_width: usize = app
+            .input
+            .chars()
+            .take(app.cursor_pos)
+            .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
+            .sum();
+        let x = area.x + 2 + prefix_width as u16;
+        if x < area.right() - 1 && area.height > 1 {
+            f.set_cursor_position((x, area.y + 1));
+        }
     }
 }
 
