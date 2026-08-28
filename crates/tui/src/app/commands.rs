@@ -7,7 +7,7 @@ use agent_providers::OpenAiClient;
 use tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
 
-use super::{App, AppEvent, CourseOpOutcome, Entry, ModelPicker, SessionState};
+use super::{App, AppEvent, CourseOpOutcome, Entry, ModelPicker};
 use crate::course_cmd::{CourseAction, parse_course_action, parse_review_action};
 use crate::review;
 use storage::Store;
@@ -473,14 +473,23 @@ impl App {
                     Ok((msg, list, switch_to))
                 });
             }
-            CourseAction::SwitchById(id) => match self.courses.iter().find(|(i, _)| *i == id) {
-                Some((_, name)) => {
-                    self.course = name.clone();
-                    self.sync_session_course();
-                    self.push_entry(Entry::Info(format!("已切换到课程: {name}")));
+            CourseAction::SwitchById(id) => {
+                let found = self
+                    .courses
+                    .iter()
+                    .find(|(i, _)| *i == id)
+                    .map(|(_, n)| n.clone());
+                match found {
+                    Some(name) => {
+                        self.course = name.clone();
+                        self.sync_session_course();
+                        self.push_entry(Entry::Info(format!("已切换到课程: {name}")));
+                    }
+                    None => {
+                        self.push_entry(Entry::Error(format!("课程 #{id} 不存在（可能已删除）")))
+                    }
                 }
-                None => self.push_entry(Entry::Error(format!("课程 #{id} 不存在（可能已删除）"))),
-            },
+            }
             CourseAction::DeleteById(id) => {
                 let Some((_, name)) = self.courses.iter().find(|(i, _)| *i == id).cloned() else {
                     self.push_entry(Entry::Error(format!("课程 #{id} 不存在（可能已删除）")));
