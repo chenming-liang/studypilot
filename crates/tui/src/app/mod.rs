@@ -303,25 +303,6 @@ impl App {
     }
 }
 
-#[cfg(test)]
-mod strip_tokens_tests {
-    use super::strip_placeholder_tokens;
-
-    #[test]
-    fn strips_placeholder_tokens_only() {
-        assert_eq!(strip_placeholder_tokens("<标题> my rust"), "my rust");
-        assert_eq!(strip_placeholder_tokens("rust"), "rust");
-        assert_eq!(
-            strip_placeholder_tokens("-delete <名> rust"),
-            "-delete rust"
-        );
-        // 全是占位符 → 空（上层按"参数缺失"报用法错误）
-        assert_eq!(strip_placeholder_tokens("<标题>"), "");
-        // 纯文本聊天不经此路径，但函数本身不破坏非占位符内容
-        assert_eq!(strip_placeholder_tokens("a <b c"), "a <b c");
-    }
-}
-
 /// 主循环：绘制 → 等事件 → 处理。
 pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<()> {
     // 键盘事件转发进统一通道
@@ -432,4 +413,23 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod strip_tokens_tests {
+    use super::strip_placeholder_tokens;
+
+    #[test]
+    fn strips_placeholder_tokens_only() {
+        assert_eq!(strip_placeholder_tokens("<标题> my rust"), "my rust");
+        assert_eq!(strip_placeholder_tokens("rust"), "rust");
+        assert_eq!(
+            strip_placeholder_tokens("-delete <名> rust"),
+            "-delete rust"
+        );
+        // 全是占位符 → 空（上层按"参数缺失"报用法错误）
+        assert_eq!(strip_placeholder_tokens("<标题>"), "");
+        // 纯文本聊天不经此路径，但函数本身不破坏非占位符内容
+        assert_eq!(strip_placeholder_tokens("a <b c"), "a <b c");
+    }
 }
