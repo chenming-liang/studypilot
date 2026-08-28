@@ -54,7 +54,7 @@ pub fn highlight_lines(code: &str, lang: &str) -> Vec<Vec<(Color, String)>> {
                     (Color::Rgb(c.r, c.g, c.b), text.to_owned())
                 })
                 .collect(),
-            Err(_) => vec![(Color::Rgb(0xE5, 0xC0, 0x7B), trimmed.to_owned())],
+            Err(_) => vec![(crate::theme::CODE_FG, trimmed.to_owned())],
         };
         out.push(spans);
     }
