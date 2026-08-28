@@ -493,7 +493,7 @@ fn draw_list_picker(f: &mut Frame, lp: &ListPicker) {
 /// 笔记浏览器：搜索 → 多选 → 动作确认，四态渲染。
 fn draw_note_browser(f: &mut Frame, app: &mut App) {
     use crate::note_browser::{BatchAction, BrowserMode};
-    let Some(browser) = &app.note_browser else {
+    let Some(browser) = app.note_browser.as_mut() else {
         return;
     };
     let area = f.area();
