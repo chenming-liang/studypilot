@@ -1,0 +1,475 @@
+//! 按键/鼠标路由：主输入、复习、面板、向导、弹窗、拖选复制。
+
+use std::sync::Arc;
+
+use crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
+
+use super::{App, Entry, Wizard};
+use crate::clipboard::copy_to_clipboard;
+use crate::input_edit::{delete_at, delete_before, insert_char};
+use crate::palette::CommandPalette;
+use crate::review;
+
+impl App {
+    pub(crate) fn handle_key(&mut self, key: KeyEvent) {
+        if key.kind != KeyEventKind::Press {
+            return;
+        }
+        // 键盘操作清除文本选区（防止残留高亮）
+        self.text_selection = None;
+        self.selection_anchor = None;
+        // 复习模式优先处理
+        if self.review.is_some() {
+            self.handle_review_key(key);
+            return;
+        }
+        // 参数向导（palette Enter 触发）
+        if self.wizard.is_some() {
+            self.handle_wizard_key(key);
+            return;
+        }
+        // 命令面板（Ctrl+K 唤起）覆盖普通输入
+        if self.palette.is_some() {
+            self.handle_palette_key(key);
+            return;
+        }
+        // 弹窗打开时按键优先由弹窗处理
+        if self.model_picker.is_some() {
+            self.handle_picker_key(key);
+            return;
+        }
+        // Ctrl+K 打开命令面板
+        if let KeyCode::Char('k') = key.code
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            self.palette = Some(CommandPalette::new());
+            return;
+        }
+        // v 键切换选择模式（临时关闭鼠标捕获，允许终端原生选中复制）
+        if let KeyCode::Char('v') = key.code
+            && !key.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            self.toggle_selection_mode();
+            return;
+        }
+        match key.code {
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.interrupt_or_quit();
+            }
+            KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.quit_now();
+            }
+            KeyCode::Esc => {
+                if self.selection_mode {
+                    self.toggle_selection_mode();
+                } else {
+                    self.interrupt_or_quit();
+                }
+            }
+            KeyCode::Enter => self.submit(),
+            KeyCode::Left => {
+                self.cursor_pos = self.cursor_pos.saturating_sub(1);
+            }
+            KeyCode::Right => {
+                let len = self.input.chars().count();
+                self.cursor_pos = (self.cursor_pos + 1).min(len);
+            }
+            KeyCode::Home => self.cursor_pos = 0,
+            KeyCode::End => self.cursor_pos = self.input.chars().count(),
+            KeyCode::Backspace => {
+                self.cursor_pos = delete_before(&mut self.input, self.cursor_pos);
+            }
+            KeyCode::Delete => delete_at(&mut self.input, self.cursor_pos),
+            KeyCode::PageUp => self.scroll_up = self.scroll_up.saturating_add(10),
+            KeyCode::PageDown => self.scroll_up = self.scroll_up.saturating_sub(10),
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.cursor_pos = insert_char(&mut self.input, self.cursor_pos, c);
+            }
+            _ => {}
+        }
+    }
+
+    /// 鼠标：滚轮滚动 + 左键拖选复制聊天内容。
+    pub(crate) async fn handle_mouse(&mut self, event: MouseEvent) {
+        match event.kind {
+            MouseEventKind::ScrollDown => {
+                self.scroll_up = self.scroll_up.saturating_sub(3);
+            }
+            MouseEventKind::ScrollUp => {
+                self.scroll_up = self.scroll_up.saturating_add(3);
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.update_text_selection(event.row, event.column, true);
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                self.update_text_selection(event.row, event.column, false);
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                // 同步等待复制完成（fd 1/2 重定向窗口内主线程不得 draw，
+                // 否则该帧输出进 /dev/null → 残留高亮/画面污染）
+                self.copy_text_selection().await;
+            }
+            _ => {}
+        }
+    }
+
+    /// 根据鼠标位置更新文本选区（仅限聊天区内）+ 边缘自动翻页。
+    pub(crate) fn update_text_selection(&mut self, row: u16, col: u16, is_down: bool) {
+        let inner = self.chat_rect.inner(ratatui::layout::Margin::new(1, 1));
+        if !inner.contains(ratatui::layout::Position { x: col, y: row }) {
+            return;
+        }
+
+        // 自动翻页：贴近视口上下边缘时滚动（拖选超出可视范围时跟随）
+        let max_offset = self.chat_lines.len().saturating_sub(inner.height as usize);
+        let near_top = row <= inner.y.saturating_add(1);
+        let near_bottom = row >= inner.bottom().saturating_sub(2);
+        if near_top && max_offset > 0 {
+            self.scroll_up = (self.scroll_up + 3).min(max_offset as u16);
+        } else if near_bottom {
+            self.scroll_up = self.scroll_up.saturating_sub(3);
+        }
+
+        // 屏幕 row → 渲染行索引（用更新后的 scroll_top，保持与 draw 一致）
+        let scroll_top = max_offset.saturating_sub(self.scroll_up as usize);
+        let visible_row = (row - inner.y) as usize;
+        let line_idx = (scroll_top + visible_row).min(self.chat_lines.len().saturating_sub(1));
+        tracing::debug!(row, col, line_idx, "拖选更新");
+
+        if is_down {
+            // 左键按下：定锚，锚点在 Drag 期间不漂移
+            self.selection_anchor = Some(line_idx);
+            self.text_selection = Some((line_idx, line_idx));
+            return;
+        }
+        // Drag：以固定锚点为基准双向扩展（上/下方向对称）
+        match self.selection_anchor {
+            Some(anchor) => {
+                let lo = anchor.min(line_idx);
+                let hi = anchor.max(line_idx);
+                self.text_selection = Some((lo, hi));
+            }
+            None => {
+                // 极端情况：Drag 先于 Down 到达，当作起点
+                self.selection_anchor = Some(line_idx);
+                self.text_selection = Some((line_idx, line_idx));
+            }
+        }
+    }
+
+    /// 释放鼠标：提取选中文本，复制到系统剪贴板。
+    /// 释放鼠标：提取选中文本，复制到系统剪贴板。
+    /// 同步执行；任何内部 panic 被捕获转为 Err，绝不杀死 TUI。
+    pub(crate) async fn copy_text_selection(&mut self) {
+        self.selection_anchor = None;
+        let Some((start, end)) = self.text_selection.take() else {
+            return;
+        };
+        // 双端钳制，防越界切片
+        let last = self.chat_lines.len().saturating_sub(1);
+        let start = start.min(last);
+        let end = end.min(last);
+        let text = self.chat_lines[start..=end].join("\n");
+        if text.trim().is_empty() {
+            return;
+        }
+        let count = end - start + 1;
+
+        // 同步执行：等 fd 1/2 恢复后再返回，下一帧 draw 才不会丢输出
+        let result = tokio::task::spawn_blocking(move || copy_to_clipboard(&text))
+            .await
+            .unwrap_or_else(|e| Err(format!("任务错误: {e}")));
+
+        match result {
+            Ok(()) => {
+                // 直接写 entries，保留当前滚动位置（push_entry 会回到底部）
+                self.entries
+                    .push(Entry::Info(format!("已复制 {count} 行到剪贴板")));
+            }
+            Err(e) => self.entries.push(Entry::Error(format!("复制失败: {e}"))),
+        }
+    }
+
+    /// 复习模式按键处理：选择题 1-4 / 简答题 Enter 提交 / Esc 退出。
+    pub(crate) fn handle_review_key(&mut self, key: KeyEvent) {
+        if key.kind != KeyEventKind::Press {
+            return;
+        }
+        // 批改进行中：禁止再次提交或切题（并发批改会错位污染 attempts/mastery）
+        if self.review_grading {
+            if key.code == KeyCode::Esc {
+                self.exit_review("已退出复习模式（批改结果将不作记录）");
+            }
+            return;
+        }
+
+        match key.code {
+            KeyCode::Esc => {
+                self.exit_review("已退出复习模式");
+            }
+            KeyCode::Enter => {
+                // 简答题提交：先提取数据，避免 borrow 冲突
+                let (idx, q_clone) = match &self.review {
+                    Some(rs) => match rs.questions.get(rs.current) {
+                        Some(q) if q.q_type == review::QType::ShortAnswer => {
+                            (rs.current, q.clone())
+                        }
+                        _ => return,
+                    },
+                    None => return,
+                };
+                let answer = self.input.trim().to_owned();
+                self.input.clear();
+                self.cursor_pos = 0;
+                if answer.is_empty() {
+                    return;
+                }
+                // 防止并发批改：同题多任务会错位污染 attempts/mastery
+                self.review_grading = true;
+                self.push_entry(Entry::User(format!("答: {answer}")));
+                self.push_entry(Entry::Info("批改中…".into()));
+                let provider = self.provider.clone();
+                let provider_cfg = self.provider_cfg.clone();
+                let store = Arc::clone(&self.store);
+                let tx = self.tx.clone();
+                tokio::spawn(async move {
+                    review::grade_short_answer(
+                        provider,
+                        provider_cfg,
+                        store,
+                        &q_clone,
+                        &answer,
+                        tx,
+                        idx,
+                    )
+                    .await;
+                });
+            }
+            KeyCode::Char(c @ '1'..='9') => {
+                // 选择题作答：先提取数据
+                let (q_clone, _current) = match &self.review {
+                    Some(rs) => match rs.questions.get(rs.current) {
+                        Some(q) if q.q_type == review::QType::Choice => (q.clone(), rs.current),
+                        _ => return,
+                    },
+                    None => return,
+                };
+                let choice = (c as u8 - b'1') as usize;
+                if choice >= q_clone.options.len() {
+                    return;
+                }
+                let user_letter = (b'A' + choice as u8) as char;
+
+                // answer 缺失或越界（LLM 输出不可控）：不计分，提示后跳过
+                let Some(correct_idx) = q_clone.answer else {
+                    self.push_entry(Entry::User(format!("选 {user_letter}")));
+                    self.push_entry(Entry::Error(
+                        "该题缺少标准答案（LLM 未生成），无法判分，跳过此题".into(),
+                    ));
+                    self.finish_review_question(false, None, "答案缺失跳过", &[]);
+                    return;
+                };
+                if correct_idx < 0 || correct_idx as usize >= q_clone.options.len() {
+                    self.push_entry(Entry::User(format!("选 {user_letter}")));
+                    self.push_entry(Entry::Error(format!(
+                        "该题答案下标非法 ({correct_idx})，无法判分，跳过此题"
+                    )));
+                    self.finish_review_question(false, None, "答案非法跳过", &[]);
+                    return;
+                }
+
+                let is_correct = choice as i64 == correct_idx;
+                let correct_letter = (b'A' + correct_idx as u8) as char;
+                let feedback = if is_correct {
+                    format!("✓ 正确（选 {user_letter}）")
+                } else {
+                    format!("✗ 错误（选 {user_letter}，正确答案: {correct_letter}）")
+                };
+                self.push_entry(Entry::User(format!("选 {user_letter}")));
+                self.push_entry(Entry::Info(feedback.clone()));
+                if let Some(exp) = &q_clone.explanation {
+                    self.push_entry(Entry::Info(format!("解析: {exp}")));
+                }
+                self.finish_review_question(is_correct, None, &feedback, &[]);
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let is_short = self
+                    .review
+                    .as_ref()
+                    .and_then(|rs| rs.questions.get(rs.current))
+                    .map(|q| q.q_type == review::QType::ShortAnswer)
+                    .unwrap_or(false);
+                if is_short {
+                    self.cursor_pos = insert_char(&mut self.input, self.cursor_pos, c);
+                }
+            }
+            KeyCode::Backspace => {
+                let is_short = self
+                    .review
+                    .as_ref()
+                    .and_then(|rs| rs.questions.get(rs.current))
+                    .map(|q| q.q_type == review::QType::ShortAnswer)
+                    .unwrap_or(false);
+                if is_short {
+                    self.cursor_pos = delete_before(&mut self.input, self.cursor_pos);
+                }
+            }
+            KeyCode::Left => {
+                self.cursor_pos = self.cursor_pos.saturating_sub(1);
+            }
+            KeyCode::Right => {
+                self.cursor_pos = (self.cursor_pos + 1).min(self.input.chars().count());
+            }
+            _ => {}
+        }
+    }
+
+    /// 面板按键：字符进过滤串、↑↓ 选择、Enter 执行、Tab 填入输入框、Esc 关闭。
+    pub(crate) fn handle_palette_key(&mut self, key: KeyEvent) {
+        if key.kind != KeyEventKind::Press {
+            return;
+        }
+        match key.code {
+            KeyCode::Esc => self.palette = None,
+            KeyCode::Up => {
+                if let Some(p) = &mut self.palette {
+                    p.selected = p.selected.saturating_sub(1);
+                }
+            }
+            KeyCode::Down => {
+                if let Some(p) = &mut self.palette
+                    && !p.filtered.is_empty()
+                {
+                    p.selected = (p.selected + 1).min(p.filtered.len() - 1);
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(p) = &mut self.palette {
+                    p.filter.pop();
+                    p.refilter();
+                }
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(p) = &mut self.palette {
+                    p.filter.push(c);
+                    p.refilter();
+                }
+            }
+            KeyCode::Enter | KeyCode::Tab => {
+                let fill_only = key.code == KeyCode::Tab;
+                self.palette_execute(fill_only);
+            }
+            _ => {}
+        }
+    }
+
+    /// 执行面板选中项：/review、/import 走参数向导（Tab 强制填入文本模式），
+    /// 其他带参命令填入输入框等用户补全，无参命令直接提交。
+    pub(crate) fn palette_execute(&mut self, fill_only: bool) {
+        let Some(p) = &self.palette else {
+            return;
+        };
+        let Some(&idx) = p.filtered.get(p.selected) else {
+            return;
+        };
+        let item = &p.items[idx];
+        let (cmd, needs_arg) = (item.command, item.needs_arg);
+        self.palette = None;
+
+        if !fill_only {
+            match cmd {
+                c if c.starts_with("/review") => {
+                    self.wizard = Some(Wizard::new_review(self.course.clone()));
+                    return;
+                }
+                c if c.starts_with("/import") => {
+                    self.wizard = Some(Wizard::new_import(self.course.clone()));
+                    return;
+                }
+                _ => {}
+            }
+            if !needs_arg {
+                self.input = cmd.to_owned();
+                self.cursor_pos = self.input.chars().count();
+                self.submit();
+                return;
+            }
+        }
+        // Tab 或带参命令：填入输入框（power-user 文本模式）
+        self.input = cmd.to_owned();
+        self.cursor_pos = self.input.chars().count();
+    }
+
+    /// 向导按键：字符进输入缓冲、Enter 推进/完成、Esc 回退/取消。
+    pub(crate) fn handle_wizard_key(&mut self, key: KeyEvent) {
+        if key.kind != KeyEventKind::Press {
+            return;
+        }
+        match key.code {
+            KeyCode::Esc => {
+                let close = self.wizard.as_mut().is_some_and(Wizard::back);
+                if close {
+                    self.wizard = None;
+                }
+            }
+            KeyCode::Enter => {
+                let done = self.wizard.as_mut().is_some_and(Wizard::confirm);
+                if done {
+                    let cmd = self.wizard.as_ref().unwrap().command();
+                    self.wizard = None;
+                    self.input = cmd;
+                    self.cursor_pos = self.input.chars().count();
+                    self.submit();
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(w) = &mut self.wizard {
+                    w.input.pop();
+                }
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(w) = &mut self.wizard {
+                    w.input.push(c);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 弹窗按键：↑↓/j/k 移动、数字直选、Enter 确认、Esc 关闭。
+    pub(crate) fn handle_picker_key(&mut self, key: KeyEvent) {
+        let picker = self.model_picker.as_mut().unwrap();
+        let len = picker.options.len();
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                picker.selected = picker.selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if len > 0 {
+                    picker.selected = (picker.selected + 1).min(len - 1);
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.model_picker = None;
+            }
+            KeyCode::Enter => {
+                let name = picker.options.get(picker.selected).map(|p| p.name.clone());
+                self.model_picker = None;
+                if let Some(name) = name {
+                    self.apply_provider_switch(&name);
+                }
+            }
+            KeyCode::Char(c @ '1'..='9') => {
+                let idx = (c as u8 - b'1') as usize;
+                if idx < len {
+                    let name = picker.options[idx].name.clone();
+                    self.model_picker = None;
+                    self.apply_provider_switch(&name);
+                }
+            }
+            _ => {}
+        }
+    }
+}

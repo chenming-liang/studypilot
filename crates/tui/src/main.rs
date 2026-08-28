@@ -1,10 +1,16 @@
 //! mynotes-agent TUI 入口。
 
 mod app;
+mod clipboard;
 mod course_cmd;
+mod events;
+mod input_edit;
 mod markdown;
+mod outline_render;
+mod palette;
 mod review;
 mod ui;
+mod wizard;
 
 use std::sync::{Arc, Mutex};
 
