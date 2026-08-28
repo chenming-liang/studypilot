@@ -15,7 +15,8 @@ pub enum AgentEvent {
         reasoning_chars: Option<usize>,
         usage: Usage,
         new_messages: Vec<Message>,
-        /// 工具调用轨迹
+        /// 工具调用轨迹（实时活动行已取代事后汇总展示，字段保留供扩展）
+        #[allow(dead_code)]
         tool_trace: Vec<agent_core::ToolTraceEntry>,
     },
     Failed(String),
