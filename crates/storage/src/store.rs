@@ -420,6 +420,16 @@ impl Store {
         Ok(())
     }
 
+    /// 更新会话归属课程（用户切分区时跟随当前工作上下文；None = all）。
+    pub fn update_session_course(&self, session_id: i64, course_id: Option<i64>) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE sessions SET course_id = ?1 WHERE id = ?2",
+            params![course_id, session_id],
+        )?;
+        Ok(())
+    }
+
     /// 按序还原会话消息（R5 历史上下文的基础）。
     pub fn load_session_messages(&self, session_id: i64) -> Result<Vec<Message>> {
         let conn = self.conn.lock().unwrap();

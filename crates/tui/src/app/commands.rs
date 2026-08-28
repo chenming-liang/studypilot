@@ -7,7 +7,7 @@ use agent_providers::OpenAiClient;
 use tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
 
-use super::{App, AppEvent, CourseOpOutcome, Entry, ModelPicker};
+use super::{App, AppEvent, CourseOpOutcome, Entry, ModelPicker, SessionState, Wizard};
 use crate::course_cmd::{CourseAction, parse_course_action, parse_review_action};
 use crate::review;
 use storage::Store;
@@ -530,6 +530,26 @@ impl App {
                 }
                 self.request_courses_refresh();
                 self.push_entry(Entry::Info(msg));
+                // 会话归属跟随当前分区（含删除课程回落 all 的情况）
+                if let SessionState::Ready { id, .. } = &self.session_state {
+                    let sid = *id;
+                    let new_course = self.current_course_id();
+                    let store = Arc::clone(&self.store);
+                    let tx = self.tx.clone();
+                    tokio::spawn(async move {
+                        let _ =
+                            spawn_blocking(move || store.update_session_course(sid, new_course))
+                                .await;
+                        if let Ok(list) =
+                            spawn_blocking(move || store.list_sessions().map_err(|e| e.to_string()))
+                                .await
+                                .map_err(|e| e.to_string())
+                                .and_then(|r| r)
+                        {
+                            let _ = tx.send(AppEvent::SessionsLoaded(list));
+                        }
+                    });
+                }
             }
             Err(e) => self.push_entry(Entry::Error(format!("课程操作失败: {e}"))),
         }

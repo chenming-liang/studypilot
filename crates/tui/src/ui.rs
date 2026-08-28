@@ -31,7 +31,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     ])
     .areas(root);
     let [sidebar, chat] =
-        Layout::horizontal([Constraint::Length(22), Constraint::Min(20)]).areas(main_area);
+        Layout::horizontal([Constraint::Length(28), Constraint::Min(20)]).areas(main_area);
 
     draw_header(f, header, app);
     draw_sidebar(f, sidebar, app);
