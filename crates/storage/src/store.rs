@@ -744,6 +744,27 @@ impl Store {
     }
 
     /// 获取测验的全部题目。
+    /// 按 id 批量查概念名（复习小结/掌握度可视化用）。
+    pub fn concept_names(&self, ids: &[i64]) -> Result<std::collections::HashMap<i64, String>> {
+        if ids.is_empty() {
+            return Ok(Default::default());
+        }
+        let conn = self.conn.lock().unwrap();
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!("SELECT id, name FROM concepts WHERE id IN ({placeholders})");
+        let params: Vec<&dyn rusqlite::ToSql> =
+            ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })?;
+        let mut map = std::collections::HashMap::new();
+        for (id, name) in rows.flatten() {
+            map.insert(id, name);
+        }
+        Ok(map)
+    }
+
     pub fn get_quiz_questions(&self, quiz_id: i64) -> Result<Vec<QuestionRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
