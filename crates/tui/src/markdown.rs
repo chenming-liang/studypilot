@@ -485,4 +485,31 @@ mod codeblock_tests {
                 .any(|l| l.spans.iter().any(|s| s.content.contains("plain text")))
         );
     }
+
+    #[test]
+    fn c_code_block_gets_highlighted_and_keeps_indent() {
+        // Review 题干现在允许 ```c 围栏：代码应被 syntect 高亮且内部缩进原样保留
+        let code = "int main(int argc, char *argv[]) {\n    int fd;\n    fd = open(argv[1], O_RDONLY, 0);\n    return 0;\n}\n";
+        let lines = render_markdown(&format!("```c\n{code}```\n"), 120);
+        let code_row = lines
+            .iter()
+            .find(|l| {
+                let text: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+                text.contains("int fd;")
+            })
+            .expect("代码行应存在");
+        // 内部缩进原样保留（render 给代码块加 2 空格块内缩进，代码自身 4 空格不变）
+        let row_text: String = code_row.spans.iter().map(|s| s.content.as_ref()).collect();
+        let stripped = row_text.strip_prefix("  ").unwrap_or(&row_text);
+        assert!(
+            stripped.starts_with("    int fd;"),
+            "代码内部缩进丢失: {row_text:?}"
+        );
+        // 关键字 int 应被 syntect 染色（非纯灰，颜色与 CODE_FG 兜底不同）
+        let colors: Vec<_> = code_row.spans.iter().map(|s| s.style.fg).collect();
+        assert!(
+            colors.iter().any(|c| *c != Some(crate::theme::CODE_FG)),
+            "C 代码未被高亮: {code_row:?}"
+        );
+    }
 }

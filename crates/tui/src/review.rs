@@ -206,11 +206,13 @@ pub async fn start_review(
            \"concept\": \"对应概念名\"\n\
          }}]}}\n\n\
          笔记资料:\n{material}\n\n概念(正确/总次数): {concept_list}\n\n\
-         优先考察掌握度低（次数少或正确率低）的概念。"
+          优先考察掌握度低（次数少或正确率低）的概念。"
     );
 
     let messages = [
-        Message::system("只输出 JSON，不要 markdown 代码块。"),
+        Message::system(
+            "只输出 JSON 本体（不要用代码块包裹整个输出）；题干或解析中需要展示的代码，请用 ```c 等围栏标注。",
+        ),
         Message::user(&prompt),
     ];
 
