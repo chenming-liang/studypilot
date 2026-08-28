@@ -707,7 +707,8 @@ impl App {
             return;
         };
         let item = &p.items[idx];
-        let (cmd, action) = (item.command, item.action);
+        let cmd = item.command;
+        let action = item.action.clone();
         self.palette = None;
         // 输入缓冲将被命令文本/向导接管：备份使命结束
         if !fill_only {
@@ -723,16 +724,37 @@ impl App {
                     return;
                 }
                 A::WizardReview => {
-                    self.wizard = Some(Wizard::new_review(self.course.clone()));
+                    let course_id = self.current_course_id();
+                    if course_id.is_none() {
+                        self.push_entry(Entry::Error(
+                            "复习需指定具体课程——先 /course 切换分区".into(),
+                        ));
+                        return;
+                    }
+                    let course_name = self.course.clone();
+                    self.wizard = Some(Wizard::new_review(course_id, course_name));
+                    self.enter_wizard_step();
                     return;
                 }
                 A::WizardImport => {
                     self.wizard = Some(Wizard::new_import(self.course.clone()));
+                    self.enter_wizard_step();
                     return;
                 }
-                A::Prompt(title, prompt, prefix) => {
-                    // 前缀不含占位符——条目 command 文本仅用于列表展示
-                    self.wizard = Some(Wizard::new_prompt(title, prompt, prefix));
+                A::Prompt {
+                    title,
+                    prompt,
+                    kind,
+                } => {
+                    if kind == crate::wizard::WizardKind::RenameSession
+                        && self.current_session_id().is_none()
+                    {
+                        self.push_entry(Entry::Error(
+                            "当前没有已持久化的聊天会话——先发一条消息创建会话".into(),
+                        ));
+                        return;
+                    }
+                    self.wizard = Some(Wizard::new_for(kind, title, prompt));
                     self.enter_wizard_step();
                     return;
                 }
@@ -852,12 +874,8 @@ impl App {
                 self.cursor_pos = 0;
                 let done = self.wizard.as_mut().unwrap().confirm(value);
                 if done {
-                    let cmd = self.wizard.as_ref().unwrap().command();
                     self.wizard = None;
-                    self.drop_input_backup();
-                    self.input = cmd;
-                    self.cursor_pos = self.input.chars().count();
-                    self.submit();
+                    self.finish_wizard();
                 } else {
                     self.enter_wizard_step();
                 }

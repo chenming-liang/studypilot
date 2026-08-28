@@ -8,30 +8,39 @@ use tokio_util::sync::CancellationToken;
 use super::{App, AppEvent, Entry};
 
 impl App {
-    /// `/import <dir> [--course <name>]`：启动导入任务（逐文件串行，进度经事件通道上报）。
+    /// `/import --dir <路径> [--course <名>]`：启动导入任务（逐文件串行，进度经事件通道上报）。
     pub(crate) fn handle_import_command(&mut self, arg: &str) {
         if self.import_cancel.is_some() {
             self.push_entry(Entry::Error("导入任务进行中，Ctrl+C 可中断".into()));
             return;
         }
 
-        // 解析: <dir> [--course <name>]
-        let tokens: Vec<&str> = arg.split_whitespace().collect();
-        if tokens.is_empty() {
+        // 全旗标解析：--dir 与 --course 的值可含空格（到下一个 -- 或串尾）
+        let mut dir: Option<String> = None;
+        let mut course: Option<String> = None;
+        crate::course_cmd::collect_flags(arg, &mut |flag, value| match flag {
+            "--dir" => dir = Some(value),
+            "--course" => course = Some(value),
+            _ => {}
+        });
+        let Some(dir) = dir else {
             self.push_entry(Entry::Error(
-                "用法: /import <目录> [--course <课程名>]".into(),
+                "用法: /import --dir <路径> [--course <课程名>]".into(),
             ));
             return;
-        }
-        let dir = tokens[0].to_owned();
-        let course = tokens
-            .windows(2)
-            .find(|w| w[0] == "--course")
-            .map(|w| w[1].to_owned());
+        };
 
-        let path = std::path::PathBuf::from(&dir);
-        if !path.exists() {
-            self.push_entry(Entry::Error(format!("目录不存在: {dir}")));
+        self.run_import(std::path::PathBuf::from(dir), course);
+    }
+
+    /// 导入执行（结构化入口：手输解析与向导直连共用）。
+    pub(crate) fn run_import(&mut self, dir: std::path::PathBuf, course: Option<String>) {
+        if self.import_cancel.is_some() {
+            self.push_entry(Entry::Error("导入任务进行中，Ctrl+C 可中断".into()));
+            return;
+        }
+        if !dir.exists() {
+            self.push_entry(Entry::Error(format!("目录不存在: {}", dir.display())));
             return;
         }
 
@@ -42,13 +51,14 @@ impl App {
         let provider = Arc::clone(&self.provider);
         let provider_cfg = self.provider_cfg.clone();
         let config = importer::ImportConfig {
-            dir: path,
+            dir: dir.clone(),
             course: course.clone(),
             max_cost: self.max_cost,
         };
 
         self.push_entry(Entry::Info(format!(
-            "开始导入: {dir}{}",
+            "开始导入: {}{}",
+            dir.display(),
             course
                 .as_deref()
                 .map(|c| format!(" → 课程 {c}"))

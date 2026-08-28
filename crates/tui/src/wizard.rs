@@ -8,13 +8,22 @@ pub struct WizardStep {
 }
 
 #[derive(Clone, PartialEq, Debug)]
-enum WizardKind {
-    Review,
-    Import,
-    /// 单步自由文本：完成后合成 `{command} {输入}`
-    Plain {
-        command: String,
+pub(crate) enum WizardKind {
+    /// 复习出题（课程 = 打开时的当前分区 id）
+    Review {
+        course_id: Option<i64>,
+        course_name: String,
     },
+    /// 导入笔记
+    Import,
+    /// 重命名当前会话
+    RenameSession,
+    /// 加载会话 JSON
+    LoadFile,
+    /// 新建课程
+    CreateCourse,
+    /// 设置预算上限（金额元）
+    BudgetLimit,
 }
 
 pub struct Wizard {
@@ -29,10 +38,13 @@ pub struct Wizard {
 }
 
 impl Wizard {
-    pub(crate) fn new_review(course: String) -> Self {
+    pub(crate) fn new_review(course_id: Option<i64>, course_name: String) -> Self {
         Self::build(
-            WizardKind::Review,
-            course,
+            WizardKind::Review {
+                course_id,
+                course_name: course_name.clone(),
+            },
+            course_name,
             "复习出题".to_owned(),
             vec![
                 WizardStep {
@@ -63,11 +75,9 @@ impl Wizard {
     }
 
     /// 单步自由文本向导（palette Prompt 动作：/rename /load /course -new）。
-    pub(crate) fn new_prompt(title: &'static str, prompt: &'static str, command: &str) -> Self {
+    pub(crate) fn new_for(kind: WizardKind, title: &'static str, prompt: &'static str) -> Self {
         Self::build(
-            WizardKind::Plain {
-                command: command.to_owned(),
-            },
+            kind,
             String::new(),
             title.to_owned(),
             vec![WizardStep {
@@ -99,6 +109,21 @@ impl Wizard {
         }
     }
 
+    pub(crate) fn kind(&self) -> &WizardKind {
+        &self.kind
+    }
+
+    /// 已确认的字段值（按步骤顺序）。
+    pub(crate) fn values(&self) -> Vec<String> {
+        (0..self.steps.len())
+            .map(|i| self.values[i].clone().unwrap_or_default())
+            .collect()
+    }
+
+    pub(crate) fn course_name(&self) -> &str {
+        &self.course
+    }
+
     /// Esc：回退上一步。返回 Some(该步恢复值)；None = 已在第一步（应关闭向导）。
     pub(crate) fn back(&mut self) -> Option<String> {
         if self.current == 0 {
@@ -111,64 +136,27 @@ impl Wizard {
                 .unwrap_or_else(|| self.steps[self.current].default.clone()),
         )
     }
-
-    /// 合成最终命令（走 handle_command 的 D6 直连路径）。
-    pub(crate) fn command(&self) -> String {
-        let v: Vec<String> = (0..self.steps.len())
-            .map(|i| self.values[i].clone().unwrap_or_default())
-            .collect();
-        match &self.kind {
-            WizardKind::Review => {
-                let concept = v[0].trim();
-                let n = v[1].trim().parse::<usize>().unwrap_or(5);
-                let scope = if concept.is_empty() {
-                    self.course.clone()
-                } else {
-                    format!("{} {concept}", self.course)
-                };
-                format!("/review {scope} --n {n}")
-            }
-            WizardKind::Import => {
-                let dir = v[0].trim().trim_matches('"');
-                let course = v[1].trim();
-                if course.is_empty() {
-                    format!("/import {dir}")
-                } else {
-                    format!("/import {dir} --course {course}")
-                }
-            }
-            WizardKind::Plain { command } => {
-                let command = command.clone();
-                let arg = v[0].trim();
-                if arg.is_empty() {
-                    command
-                } else {
-                    format!("{command} {arg}")
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]
 mod wizard_tests {
-    use super::{Wizard, WizardKind};
+    use super::*;
 
     #[test]
-    fn review_wizard_flow_and_command() {
-        let mut w = Wizard::new_review("rust".into());
-        // 概念默认空（默认值由调用方写入聊天框缓冲）
+    fn review_wizard_flow_values() {
+        let mut w = Wizard::new_review(Some(1), "rust".into());
         assert!(!w.confirm("ownership".into())); // 推进到题数
         assert!(w.confirm("10".into())); // 最后一步
-        assert_eq!(w.command(), "/review rust ownership --n 10");
+        let v = w.values();
+        assert_eq!(v[0], "ownership");
+        assert_eq!(v[1], "10");
     }
 
     #[test]
-    fn review_wizard_empty_concept_and_default_n() {
-        let mut w = Wizard::new_review("csapp".into());
+    fn review_wizard_empty_concept_keeps_defaults() {
+        let mut w = Wizard::new_review(Some(2), "csapp".into());
         assert!(!w.confirm(String::new()));
-        assert!(w.confirm(String::new())); // 数量留空 → 默认 5
-        assert_eq!(w.command(), "/review csapp --n 5");
+        assert!(w.confirm(String::new())); // 数量留空 → 上层默认 5
     }
 
     #[test]
@@ -176,7 +164,6 @@ mod wizard_tests {
         let mut w = Wizard::new_import("all".into());
         assert_eq!(w.steps[1].default, "", "all 分区时课程默认应为空");
         assert!(!w.confirm("~/notes".into()));
-        // Esc 回退到目录步并恢复已填值
         assert_eq!(w.back().as_deref(), Some("~/notes"));
         assert!(w.back().is_none()); // 第一步再 Esc → 关闭
     }
@@ -187,38 +174,38 @@ mod wizard_tests {
         assert_eq!(w.steps[1].default, "rust");
         assert!(!w.confirm("~/CSAPP".into()));
         assert!(w.confirm(String::new())); // 课程留空 → LLM 归类
-        assert_eq!(w.command(), "/import ~/CSAPP");
     }
 
     #[test]
-    fn review_rejects_non_numeric_n_gracefully() {
-        let mut w = Wizard::new_review("rust".into());
-        assert!(!w.confirm(String::new()));
-        assert!(w.confirm("abc".into()));
-        assert!(w.command().ends_with("--n 5"), "{}", w.command());
-    }
-
-    #[test]
-    fn kind_discrimination() {
-        let a = Wizard::new_review("rust".into());
-        let b = Wizard::new_import("rust".into());
-        assert_eq!(a.title, "复习出题");
-        assert_eq!(b.title, "导入笔记");
-        assert_ne!(a.kind, b.kind);
-        let _ = WizardKind::Review;
-    }
-
-    #[test]
-    fn plain_prompt_wizard_completes_command() {
-        let mut w = Wizard::new_prompt("重命名会话", "新标题", "/rename");
+    fn prompt_wizard_rename_flow() {
+        let mut w = Wizard::new_for(WizardKind::RenameSession, "重命名会话", "新标题");
         assert!(w.confirm("讲所有权".into()));
-        assert_eq!(w.command(), "/rename 讲所有权");
     }
 
     #[test]
-    fn plain_prompt_empty_input_keeps_bare_command() {
-        let mut w = Wizard::new_prompt("加载会话", "JSON 文件路径", "/load");
+    fn prompt_wizard_empty_input_ok() {
+        let mut w = Wizard::new_for(WizardKind::LoadFile, "加载会话", "JSON 文件路径");
         assert!(w.confirm(String::new()));
-        assert_eq!(w.command(), "/load");
+    }
+
+    #[test]
+    fn kinds_are_distinct() {
+        assert_ne!(
+            WizardKind::Review {
+                course_id: Some(1),
+                course_name: "rust".into()
+            },
+            WizardKind::Import
+        );
+        assert_eq!(
+            WizardKind::Review {
+                course_id: Some(1),
+                course_name: "rust".into()
+            },
+            WizardKind::Review {
+                course_id: Some(1),
+                course_name: "rust".into()
+            }
+        );
     }
 }

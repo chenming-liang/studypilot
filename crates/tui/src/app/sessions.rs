@@ -595,6 +595,51 @@ impl App {
         });
     }
 
+    /// 重命名任意会话（浏览器 r 动作与向导直连共用）。
+    pub(crate) fn rename_session_id(&mut self, id: i64, title: &str) {
+        if title.is_empty() {
+            return;
+        }
+        let store = Arc::clone(&self.store);
+        let tx = self.tx.clone();
+        let title = title.to_owned();
+        tokio::spawn(async move {
+            let result = spawn_blocking({
+                let store = Arc::clone(&store);
+                move || {
+                    store
+                        .set_session_title(id, &title)
+                        .map_err(|e| e.to_string())
+                }
+            })
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r);
+            match result {
+                Ok(true) => {
+                    let _ = tx.send(AppEvent::BrowserActionDone {
+                        scope_label: "会话".into(),
+                        result: Ok(format!("会话 #{id} 已重命名")),
+                    });
+                    if let Ok(list) =
+                        spawn_blocking(move || store.list_sessions().map_err(|e| e.to_string()))
+                            .await
+                            .map_err(|e| e.to_string())
+                            .and_then(|r| r)
+                    {
+                        let _ = tx.send(AppEvent::SessionsLoaded(list));
+                    }
+                }
+                _ => {
+                    let _ = tx.send(AppEvent::BrowserActionDone {
+                        scope_label: "会话".into(),
+                        result: Err("重命名失败：会话不存在".into()),
+                    });
+                }
+            }
+        });
+    }
+
     /// d：进入删除确认（当前打开的会话禁止删除）。
     pub(crate) fn session_browser_begin_delete(&mut self) {
         if self.current_session_id()
@@ -667,5 +712,102 @@ impl App {
                 }
             }
         });
+    }
+}
+
+impl App {
+    /// 向导完成：按 kind 分发到结构化内部调用（不再合成命令字符串走文本解析）。
+    pub(crate) fn finish_wizard(&mut self) {
+        use crate::wizard::WizardKind;
+        let Some(w) = &self.wizard else { return };
+        let values = w.values();
+        let kind = w.kind().clone();
+        let course_name = w.course_name().to_owned();
+        self.wizard = None;
+        self.drop_input_backup();
+        self.input.clear();
+        self.cursor_pos = 0;
+
+        match kind {
+            WizardKind::Review { course_id, .. } => {
+                let concept = values
+                    .first()
+                    .map(|v| v.trim().to_owned())
+                    .unwrap_or_default();
+                let n = values
+                    .get(1)
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .filter(|n| *n > 0)
+                    .unwrap_or(5);
+                let Some(course_id) = course_id else {
+                    self.push_entry(Entry::Error("复习需指定具体课程，不能为 all".into()));
+                    return;
+                };
+                let scope = if concept.is_empty() {
+                    course_name.clone()
+                } else {
+                    format!("{course_name} {concept}")
+                };
+                self.run_review(course_id, course_name, scope, n);
+            }
+            WizardKind::Import => {
+                let dir = values
+                    .first()
+                    .map(|s| s.trim().trim_matches('"').to_owned());
+                let course = values
+                    .get(1)
+                    .map(|s| s.trim().to_owned())
+                    .filter(|c| !c.is_empty() && c != "all");
+                match dir {
+                    Some(d) if !d.is_empty() => {
+                        self.run_import(std::path::PathBuf::from(d), course)
+                    }
+                    _ => self.push_entry(Entry::Error("用法: /import --dir <路径>".into())),
+                }
+            }
+            WizardKind::RenameSession => {
+                let Some(id) = self.current_session_id() else {
+                    self.push_entry(Entry::Error("当前没有已持久化的聊天会话".into()));
+                    return;
+                };
+                let title = values
+                    .first()
+                    .map(|s| s.trim().to_owned())
+                    .unwrap_or_default();
+                if !title.is_empty() {
+                    self.rename_session_id(id, &title);
+                }
+            }
+            WizardKind::LoadFile => {
+                if let Some(path) = values
+                    .first()
+                    .map(|s| s.trim().to_owned())
+                    .filter(|s| !s.is_empty())
+                {
+                    self.load_session_file(&path);
+                }
+            }
+            WizardKind::CreateCourse => {
+                if let Some(name) = values
+                    .first()
+                    .map(|s| s.trim().to_owned())
+                    .filter(|s| !s.is_empty())
+                {
+                    self.create_course_flow(name);
+                }
+            }
+            WizardKind::BudgetLimit => {
+                if let Some(v) = values
+                    .first()
+                    .and_then(|s| s.trim().parse::<f64>().ok())
+                    .filter(|v| *v > 0.0)
+                {
+                    self.max_cost = v;
+                    self.push_entry(Entry::Info(format!("预算上限已设为 ¥{v:.2}")));
+                } else {
+                    self.push_entry(Entry::Error("用法: /budget <金额>（金额须为正数）".into()));
+                }
+            }
+        }
     }
 }

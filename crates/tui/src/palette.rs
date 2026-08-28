@@ -31,7 +31,7 @@ impl PaletteGroup {
 }
 
 /// 面板条目的 Enter 行为（Tab 一律填入文本模式，power-user 兜底）。
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum PaletteAction {
     /// 无参命令，直接执行
     Run,
@@ -39,9 +39,12 @@ pub enum PaletteAction {
     WizardReview,
     /// /import 参数向导
     WizardImport,
-    /// 单步文本向导：(弹窗标题, 输入提示, 命令前缀)
-    /// 前缀必须不含占位符——向导完成时用 `prefix + " " + 输入` 合成真实命令
-    Prompt(&'static str, &'static str, &'static str),
+    /// 单步文本向导：(弹窗标题, 输入提示, 向导种类)——完成时直连内部函数
+    Prompt {
+        title: &'static str,
+        prompt: &'static str,
+        kind: crate::wizard::WizardKind,
+    },
     /// 列表选择器
     Pick(PickKind),
 }
@@ -108,7 +111,7 @@ impl CommandPalette {
                 group: G::Learn,
             },
             P {
-                command: "/review <课程> [概念] [--n 数量]",
+                command: "/review --course <名>",
                 desc: "出题复习（掌握度低优先）",
                 action: A::WizardReview,
                 group: G::Learn,
@@ -121,7 +124,7 @@ impl CommandPalette {
                 group: G::Knowledge,
             },
             P {
-                command: "/import <目录> [--course 名]",
+                command: "/import --dir <目录>",
                 desc: "批量导入 md/pdf/pptx",
                 action: A::WizardImport,
                 group: G::Knowledge,
@@ -136,7 +139,11 @@ impl CommandPalette {
             P {
                 command: "/course -new <名>",
                 desc: "新建课程分区",
-                action: A::Prompt("新建课程", "课程名", "/course -new"),
+                action: A::Prompt {
+                    title: "新建课程",
+                    prompt: "课程名",
+                    kind: crate::wizard::WizardKind::CreateCourse,
+                },
                 group: G::Course,
             },
             P {
@@ -161,7 +168,11 @@ impl CommandPalette {
             P {
                 command: "/rename <标题>",
                 desc: "重命名当前会话",
-                action: A::Prompt("重命名会话", "新标题", "/rename"),
+                action: A::Prompt {
+                    title: "重命名会话",
+                    prompt: "新标题",
+                    kind: crate::wizard::WizardKind::RenameSession,
+                },
                 group: G::Session,
             },
             P {
@@ -173,7 +184,11 @@ impl CommandPalette {
             P {
                 command: "/load <文件>",
                 desc: "加载导出的会话 JSON",
-                action: A::Prompt("加载会话", "JSON 文件路径", "/load"),
+                action: A::Prompt {
+                    title: "加载会话",
+                    prompt: "JSON 文件路径",
+                    kind: crate::wizard::WizardKind::LoadFile,
+                },
                 group: G::Session,
             },
             // ---- 系统 ----
@@ -192,7 +207,11 @@ impl CommandPalette {
             P {
                 command: "/budget <金额>",
                 desc: "设置花费上限（元）",
-                action: A::Prompt("设置预算上限", "金额（元）", "/budget"),
+                action: A::Prompt {
+                    title: "设置预算上限",
+                    prompt: "金额（元）",
+                    kind: crate::wizard::WizardKind::BudgetLimit,
+                },
                 group: G::System,
             },
             P {

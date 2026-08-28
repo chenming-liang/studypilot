@@ -207,56 +207,67 @@ pub(crate) struct ReviewSpec {
     pub n: usize,
 }
 
-/// 解析 `/review <课程> [概念] [--n 数量]`。
+/// 解析全旗标语法：`/review --course <名...> [--concept <文本...>] [--n <数>]`
 ///
-/// 课程与概念都是自由文本、边界无法靠空格切分，策略：
-/// ① 先摘出 `--n <数>` 旗标；② 剩余整段与已知课程做**最长前缀匹配**
-/// （`rest == 课程名` 或 `rest` 以 `课程名 + 空格` 开头），匹配到则课程名
-/// 之后的部分为概念；无匹配则整段视为课程名（由调用方报"不存在"）。
+/// 旗标值 = 旗标后的全部 token（直到下一个 `--` 旗标或串尾），
+/// 多词课程名与含空格概念天然支持；字段间零歧义（顺序无关、全部显式声明）。
 pub(crate) fn parse_review_action(arg: &str, known: &[String]) -> Result<ReviewSpec, String> {
+    let mut course: Option<String> = None;
+    let mut concept: Option<String> = None;
     let mut n = 5usize;
-    let mut rest_parts: Vec<&str> = Vec::new();
-    let mut it = arg.split_whitespace().peekable();
-    while let Some(tok) = it.next() {
-        if tok == "--n" {
-            if let Some(v) = it.next()
-                && let Ok(k) = v.parse::<usize>()
+    collect_flags(arg, &mut |flag, value| match flag {
+        "--course" => course = Some(value),
+        "--concept" => concept = Some(value),
+        "--n" => {
+            if let Ok(k) = value.trim().parse::<usize>()
                 && k > 0
             {
                 n = k;
             }
-        } else if !tok.starts_with("--") {
-            rest_parts.push(tok);
         }
+        _ => {}
+    });
+    let Some(course) = course else {
+        return Err(
+            "用法: /review --course <课程名> [--concept <概念>] [--n <数量>]\n\
+             或 Ctrl+K → /review 进入参数向导（无歧义）"
+                .into(),
+        );
+    };
+    if course == "all" {
+        return Err("复习需指定具体课程，不能为 all".into());
     }
-    let rest = rest_parts.join(" ");
-    if rest.is_empty() {
-        return Err("用法: /review <课程名> [概念关键词] [--n 数量]".into());
+    if !known.iter().any(|k| k == &course) {
+        return Err(format!(
+            "课程 `{course}` 不存在。可用: {}，或 /course -new <名> 新建",
+            known.join(", ")
+        ));
     }
+    let scope = match concept {
+        Some(c) if !c.trim().is_empty() => c.trim().to_owned(),
+        _ => course.clone(),
+    };
+    Ok(ReviewSpec { course, scope, n })
+}
 
-    // 最长已知课程前缀匹配
-    let hit = known
-        .iter()
-        .filter(|cn| *cn == &rest || rest.starts_with(&format!("{cn} ")))
-        .max_by_key(|cn| cn.len())
-        .cloned();
-    match hit {
-        Some(course) => {
-            let scope = rest[course.len()..].trim().to_owned();
-            let scope = if scope.is_empty() {
-                course.clone()
-            } else {
-                scope
-            };
-            Ok(ReviewSpec { course, scope, n })
+/// 通用旗标扫描：`--flag` 后的所有 token 归属该旗标，直到下一个 `--` 开头的
+/// token 或串尾。对每个 (flag, joined_value) 调用 `on`。
+pub(crate) fn collect_flags(arg: &str, on: &mut dyn FnMut(&str, String)) {
+    let mut current: Option<&str> = None;
+    let mut buf: Vec<&str> = Vec::new();
+    for tok in arg.split_whitespace() {
+        if tok.starts_with("--") {
+            if let Some(f) = current {
+                on(f, buf.join(" "));
+            }
+            current = Some(tok);
+            buf.clear();
+        } else if current.is_some() {
+            buf.push(tok);
         }
-        None => Err(format!(
-            "课程 `{rest}` 不存在。可用: {}",
-            std::iter::once("all")
-                .chain(known.iter().map(String::as_str))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )),
+    }
+    if let Some(f) = current {
+        on(f, buf.join(" "));
     }
 }
 
@@ -269,56 +280,61 @@ mod review_tests {
     }
 
     #[test]
-    fn single_word_course_and_concept() {
-        let s = parse_review_action("rust ownership --n 3", &known()).unwrap();
+    fn full_flag_form() {
+        let s = parse_review_action("--course rust --concept ownership --n 3", &known()).unwrap();
         assert_eq!(s.course, "rust");
         assert_eq!(s.scope, "ownership");
         assert_eq!(s.n, 3);
     }
 
     #[test]
-    fn multi_word_course_consumes_full_name() {
-        // 旧实现会劈成课程="程序设计训练（Rust"、概念="语言）"——回归保护
-        let s = parse_review_action("程序设计训练（Rust 语言） --n 5", &known()).unwrap();
+    fn multi_word_course_in_flag() {
+        let s = parse_review_action("--course 程序设计训练（Rust 语言） --n 5", &known()).unwrap();
         assert_eq!(s.course, "程序设计训练（Rust 语言）");
-        assert_eq!(s.scope, "程序设计训练（Rust 语言）"); // 无概念时 scope=课程名
+        assert_eq!(s.scope, "程序设计训练（Rust 语言）"); // 无概念 → 课程名
     }
 
     #[test]
-    fn multi_word_course_with_concept() {
-        let s = parse_review_action("程序设计训练（Rust 语言） ownership", &known()).unwrap();
-        assert_eq!(s.course, "程序设计训练（Rust 语言）");
-        assert_eq!(s.scope, "ownership");
-        assert_eq!(s.n, 5);
+    fn concept_with_spaces() {
+        let s = parse_review_action("--course rust --concept ownership and borrowing", &known())
+            .unwrap();
+        assert_eq!(s.scope, "ownership and borrowing");
     }
 
     #[test]
-    fn longest_prefix_wins() {
-        // 两个已知课程互为前缀时取最长
-        let k = vec!["os".into(), "os 内存".into()];
-        let s = parse_review_action("os 内存 置换", &k).unwrap();
-        assert_eq!(s.course, "os 内存");
-        assert_eq!(s.scope, "置换");
-    }
-
-    #[test]
-    fn flag_order_is_flexible() {
-        let s = parse_review_action("--n 7 rust", &known()).unwrap();
+    fn order_is_irrelevant() {
+        let s = parse_review_action("--n 7 --course rust", &known()).unwrap();
         assert_eq!(s.course, "rust");
         assert_eq!(s.n, 7);
     }
 
     #[test]
-    fn empty_arg_is_usage_error() {
-        assert!(parse_review_action("", &known()).is_err());
-        assert!(parse_review_action("--n 5", &known()).is_err());
+    fn all_rejected() {
+        assert!(
+            parse_review_action("--course all --concept x", &known())
+                .unwrap_err()
+                .contains("不能为 all")
+        );
     }
 
     #[test]
     fn unknown_course_reports_available() {
-        let e = parse_review_action("不存在的课", &known()).unwrap_err();
+        let e = parse_review_action("--course 不存在的课", &known()).unwrap_err();
         assert!(e.contains("不存在"), "{e}");
         assert!(e.contains("程序设计训练"), "{e}");
+    }
+
+    #[test]
+    fn missing_course_is_usage_error() {
+        let e = parse_review_action("--concept x", &known()).unwrap_err();
+        assert!(e.contains("用法"), "{e}");
+        assert!(e.contains("向导"), "{e}");
+    }
+
+    #[test]
+    fn defaults_n_to_five() {
+        let s = parse_review_action("--course rust", &known()).unwrap();
+        assert_eq!(s.n, 5);
     }
 }
 

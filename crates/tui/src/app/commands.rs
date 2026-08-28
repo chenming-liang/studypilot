@@ -8,7 +8,7 @@ use tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
 
 use super::{App, AppEvent, CourseOpOutcome, Entry, ModelPicker};
-use crate::course_cmd::{CourseAction, parse_course_action, parse_review_action};
+use crate::course_cmd::{CourseAction, collect_flags, parse_course_action, parse_review_action};
 use crate::review;
 use storage::Store;
 
@@ -76,13 +76,15 @@ impl App {
                     "  自身知识补充并明示「（笔记外补充）」",
                     "",
                     "【知识库】",
-                    "  /import <目录> [--course 名]   批量导入 md/pdf/pptx",
-                    "  /notes                        列出当前分区笔记",
-                    "  /delete <id> | /move <id> <课程>  管理笔记（不碰磁盘原文件）",
+                    "  /import --dir <路径> [--course 名]  批量导入 md/pdf/pptx",
+                    "  /notes                        浏览与管理笔记（搜索·多选·移动·删除）",
+                    "  /delete --id <id> | /delete --course <名>  删除笔记",
+                    "  /move --id <id> --course <名>  移动笔记",
                     "  /course <课程|all>            切换分区；-new/-delete 管理",
                     "",
                     "【复习】",
-                    "  /review <课程> [概念] [--n 数量]  出题（选择+简答，掌握度低优先）",
+                    "  /review --course <名> [--concept <概念>] [--n 数量]",
+                    "    出题（选择+简答，掌握度低优先）；无参 /review 走向导",
                     "",
                     "【大纲】",
                     "  /outline [课程] [--export]    生成课程知识大纲",
@@ -209,34 +211,36 @@ impl App {
             self.push_entry(Entry::Error("复习进行中，请先完成或 Esc 退出".into()));
             return;
         }
-
         let known: Vec<String> = self.courses.iter().map(|(_, n)| n.clone()).collect();
-        let spec = match parse_review_action(arg, &known) {
-            Ok(s) => s,
-            Err(e) => {
-                self.push_entry(Entry::Error(e));
-                return;
+        match parse_review_action(arg, &known) {
+            Ok(spec) => {
+                let Some(course_id) = self
+                    .courses
+                    .iter()
+                    .find(|(_, n)| *n == spec.course.as_str())
+                    .map(|(id, _)| *id)
+                else {
+                    self.push_entry(Entry::Error(format!("课程 `{}` 不存在", spec.course)));
+                    return;
+                };
+                self.run_review(course_id, spec.course, spec.scope, spec.n);
             }
-        };
-        let course_name = spec.course;
-        if course_name == "all" {
-            self.push_entry(Entry::Error("复习需指定具体课程，不能为 all".into()));
+            Err(e) => self.push_entry(Entry::Error(e)),
+        }
+    }
+
+    /// 复习执行（结构化入口：手输解析与向导直连共用）。
+    pub(crate) fn run_review(
+        &mut self,
+        course_id: i64,
+        course_name: String,
+        scope: String,
+        n: usize,
+    ) {
+        if self.review.is_some() {
+            self.push_entry(Entry::Error("复习进行中，请先完成或 Esc 退出".into()));
             return;
         }
-
-        let Some(course_id) = self
-            .courses
-            .iter()
-            .find(|(_, n)| *n == course_name.as_str())
-            .map(|(id, _)| *id)
-        else {
-            self.push_entry(Entry::Error(format!("课程 `{course_name}` 不存在")));
-            return;
-        };
-
-        let n = spec.n;
-        let scope = spec.scope;
-
         let provider = self.provider.clone();
         let provider_cfg = self.provider_cfg.clone();
         let store = Arc::clone(&self.store);
@@ -252,7 +256,7 @@ impl App {
                 provider,
                 provider_cfg,
                 course_id,
-                course_name,
+                course_name.to_owned(),
                 scope,
                 n,
                 tx,
@@ -274,52 +278,24 @@ impl App {
 
     /// `/delete <id>` 或 `/delete --course <name>`
     pub(crate) fn handle_delete_command(&mut self, arg: &str) {
-        if arg.is_empty() {
-            self.push_entry(Entry::Error(
-                "用法: /delete <笔记 id> 或 /delete --course <课程名>".into(),
-            ));
-            return;
-        }
-
-        if let Some(course_name) = arg
-            .strip_prefix("--course ")
-            .or_else(|| arg.strip_prefix("--course"))
-        {
-            let name = course_name.trim();
-            if name.is_empty() || name == "all" {
-                self.push_entry(Entry::Error("--course 不能为空或 all".into()));
-                return;
+        // 全旗标：--id <笔记 id>（单删）或 --course <名>（批量删该课笔记）
+        let mut id: Option<i64> = None;
+        let mut course_name: Option<String> = None;
+        collect_flags(arg, &mut |flag, value| match flag {
+            "--id" => id = value.trim().parse::<i64>().ok(),
+            "--course" => course_name = Some(value),
+            _ => {}
+        });
+        match (id, course_name) {
+            (Some(_), Some(_)) => {
+                self.push_entry(Entry::Error("--id 与 --course 只能二选一".into()));
             }
-            let course_id = self
-                .courses
-                .iter()
-                .find(|(_, n)| *n == name)
-                .map(|(id, _)| *id);
-            let Some(cid) = course_id else {
-                self.push_entry(Entry::Error(format!("课程 `{name}` 不存在")));
-                return;
-            };
-            let store = Arc::clone(&self.store);
-            let tx = self.tx.clone();
-            let name = name.to_owned();
-            tokio::spawn(async move {
-                let result = spawn_blocking(move || {
-                    store
-                        .delete_notes_by_course(cid)
-                        .map(|n| n > 0)
-                        .map_err(|e| e.to_string())
-                })
-                .await
-                .map_err(|e| e.to_string())
-                .and_then(|r| r);
-                let _ = tx.send(AppEvent::NotesDeleted(result, format!("课程 {name}")));
-            });
-            return;
-        }
-
-        // 单条删除
-        match arg.parse::<i64>() {
-            Ok(id) => {
+            (None, None) => {
+                self.push_entry(Entry::Error(
+                    "用法: /delete --id <笔记 id> 或 /delete --course <课程名>".into(),
+                ));
+            }
+            (Some(id), None) => {
                 let store = Arc::clone(&self.store);
                 let tx = self.tx.clone();
                 tokio::spawn(async move {
@@ -331,25 +307,52 @@ impl App {
                     let _ = tx.send(AppEvent::NotesDeleted(result, format!("笔记 #{id}")));
                 });
             }
-            Err(_) => {
-                self.push_entry(Entry::Error(format!(
-                    "无法解析 id `{arg}`。用法: /delete <笔记 id>"
-                )));
+            (None, Some(name)) => {
+                let name = name.trim().to_owned();
+                if name.is_empty() || name == "all" {
+                    self.push_entry(Entry::Error("--course 不能为空或 all".into()));
+                    return;
+                }
+                let Some(cid) = self
+                    .courses
+                    .iter()
+                    .find(|(_, n)| *n == name)
+                    .map(|(id, _)| *id)
+                else {
+                    self.push_entry(Entry::Error(format!("课程 `{name}` 不存在")));
+                    return;
+                };
+                let store = Arc::clone(&self.store);
+                let tx = self.tx.clone();
+                tokio::spawn(async move {
+                    let result = spawn_blocking(move || {
+                        store
+                            .delete_notes_by_course(cid)
+                            .map(|n| n > 0)
+                            .map_err(|e| e.to_string())
+                    })
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| r);
+                    let _ = tx.send(AppEvent::NotesDeleted(result, format!("课程 {name}")));
+                });
             }
         }
     }
 
     /// `/move <id> <课程名>`
     pub(crate) fn handle_move_command(&mut self, arg: &str) {
-        let parts: Vec<&str> = arg.split_whitespace().collect();
-        if parts.len() < 2 {
-            self.push_entry(Entry::Error("用法: /move <笔记 id> <目标课程名>".into()));
-            return;
-        }
-        let id = parts[0];
-        let target = parts[1..].join(" ");
-        let Ok(id) = id.parse::<i64>() else {
-            self.push_entry(Entry::Error(format!("无法解析 id `{id}`")));
+        let mut id: Option<i64> = None;
+        let mut target: Option<String> = None;
+        collect_flags(arg, &mut |flag, value| match flag {
+            "--id" => id = value.trim().parse::<i64>().ok(),
+            "--course" => target = Some(value),
+            _ => {}
+        });
+        let (Some(id), Some(target)) = (id, target) else {
+            self.push_entry(Entry::Error(
+                "用法: /move --id <笔记 id> --course <目标课程名>".into(),
+            ));
             return;
         };
         let target_course_id = if target == "all" {
@@ -453,21 +456,7 @@ impl App {
                 self.sync_session_course();
                 self.push_entry(Entry::Info(format!("已切换到课程: {name}")));
             }
-            CourseAction::Create(name) => {
-                let was_current = self.course == name;
-                self.run_course_op(move |store| {
-                    store
-                        .get_or_create_course(&name)
-                        .map_err(|e| e.to_string())?;
-                    let list = store.list_courses().map_err(|e| e.to_string())?;
-                    let verb = if list.iter().any(|(_, n)| n == &name) && was_current {
-                        "已存在，切换到"
-                    } else {
-                        "已创建并切换到"
-                    };
-                    Ok((format!("{verb}课程: {name}"), list, Some(name)))
-                });
-            }
+            CourseAction::Create(name) => self.create_course_flow(name),
             CourseAction::Delete(name) => {
                 let is_current = self.course == name;
                 self.run_course_op(move |store| {
@@ -522,6 +511,23 @@ impl App {
             }
             CourseAction::Invalid(msg) => self.push_entry(Entry::Error(msg)),
         }
+    }
+
+    /// 新建课程（结构化入口：手输解析与向导直连共用）。
+    pub(crate) fn create_course_flow(&mut self, name: String) {
+        let was_current = self.course == name;
+        self.run_course_op(move |store| {
+            store
+                .get_or_create_course(&name)
+                .map_err(|e| e.to_string())?;
+            let list = store.list_courses().map_err(|e| e.to_string())?;
+            let verb = if list.iter().any(|(_, n)| n == &name) && was_current {
+                "已存在，切换到"
+            } else {
+                "已创建并切换到"
+            };
+            Ok((format!("{verb}课程: {name}"), list, Some(name)))
+        });
     }
 
     /// 课程管理操作的统一异步执行壳：DB 进 blocking 线程池（D2），
