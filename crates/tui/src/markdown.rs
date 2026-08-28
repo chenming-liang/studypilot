@@ -50,9 +50,49 @@ pub fn render_markdown(text: &str, width: usize) -> Vec<Line<'static>> {
         };
     }
 
+    // 代码块上下文：Start 记录语言标签，Text 累积进独立缓冲（不走 [n] 解析），
+    // End 拦截整块 → syntect 高亮 → 逐 token 染色渲染
+    let mut code_lang: Option<String> = None;
+    let mut code_buf = String::new();
+
     for event in parser {
+        // 代码块结束：先于通用 drain 拦截——代码文本直接走高亮路径
+        if matches!(&event, Event::End(TagEnd::CodeBlock)) {
+            let code = std::mem::take(&mut code_buf);
+            let lang = code_lang.take().unwrap_or_default();
+            in_code_block = false;
+            // 块首语言标签 + 高亮行 + 块尾分隔线（GPT 第五节"轻量块"）
+            if let Some(tag) = crate::highlight::lang_tag(&lang) {
+                lines.push(Line::from(Span::styled(
+                    format!("── {tag} ──"),
+                    Style::new().fg(theme::MUTED),
+                )));
+            }
+            for hl_row in crate::highlight::highlight_lines(&code, &lang) {
+                let spans: Vec<Span<'static>> =
+                    std::iter::once(Span::styled("  ".to_owned(), Style::new().fg(theme::MUTED)))
+                        .chain(
+                            hl_row
+                                .into_iter()
+                                .map(|(c, t)| Span::styled(t, Style::new().fg(c))),
+                        )
+                        .collect();
+                lines.push(Line::from(spans));
+            }
+            lines.push(Line::from(Span::styled(
+                "────────────".to_owned(),
+                Style::new().fg(theme::MUTED),
+            )));
+            lines.push(Line::default());
+            continue;
+        }
         if let Event::Text(t) = &event {
-            text_acc.push_str(t);
+            // 代码块内文本累积进独立缓冲（不走普通 [n] 聚合）
+            if in_code_block {
+                code_buf.push_str(t);
+            } else {
+                text_acc.push_str(t);
+            }
             continue;
         }
         drain_text!();
@@ -72,17 +112,14 @@ pub fn render_markdown(text: &str, width: usize) -> Vec<Line<'static>> {
                 heading_level = 0;
                 current.clear();
             }
-            Event::Start(Tag::CodeBlock(_)) => {
+            Event::Start(Tag::CodeBlock(kind)) => {
                 in_code_block = true;
-                current.clear();
-            }
-            Event::End(TagEnd::CodeBlock) => {
-                let style = Style::new().fg(Color::White).bg(Color::Black);
-                for l in current.flush_as_lines(width, style) {
-                    lines.push(l);
-                }
-                in_code_block = false;
-                current.clear();
+                code_lang = match kind {
+                    pulldown_cmark::CodeBlockKind::Fenced(info) => {
+                        crate::highlight::lang_tag(&info)
+                    }
+                    pulldown_cmark::CodeBlockKind::Indented => None,
+                };
             }
             Event::Code(code_text) => {
                 current.push_style(Style::new().fg(CODE).bg(Color::DarkGray));
@@ -405,6 +442,44 @@ mod tests {
             rows.iter()
                 .all(|l| plain(std::slice::from_ref(l)).chars().count() == 2),
             "每行应为宽 4（2 个全角字符）"
+        );
+    }
+}
+
+#[cfg(test)]
+mod codeblock_tests {
+    use super::*;
+
+    #[test]
+    fn fenced_rust_block_is_highlighted() {
+        let lines = render_markdown("```rust\nlet x = 1;\n```\n", 80);
+        let text: Vec<String> = lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        // 语言标签行 + 代码行 + 分隔线
+        assert!(text.iter().any(|t| t.contains("── rust ──")), "{text:?}");
+        let code_row = lines
+            .iter()
+            .find(|l| l.spans.iter().any(|s| s.content.contains("let")))
+            .expect("代码行应存在");
+        // let 关键字 token 应为紫系（base16-ocean keyword）
+        let has_keyword_color = code_row
+            .spans
+            .iter()
+            .any(|s| s.style.fg == Some(Color::Rgb(0xB4, 0x8E, 0xAD)) && s.content.contains("let"));
+        assert!(has_keyword_color, "let 未按关键字染色: {code_row:?}");
+        // 分隔线
+        assert!(text.iter().any(|t| t.starts_with("───")));
+    }
+
+    #[test]
+    fn unknown_lang_still_renders() {
+        let lines = render_markdown("```\nplain text\n```\n", 80);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.spans.iter().any(|s| s.content.contains("plain text")))
         );
     }
 }

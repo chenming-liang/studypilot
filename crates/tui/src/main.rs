@@ -4,6 +4,7 @@ mod app;
 mod clipboard;
 mod course_cmd;
 mod events;
+mod highlight;
 mod input_edit;
 mod markdown;
 mod note_browser;

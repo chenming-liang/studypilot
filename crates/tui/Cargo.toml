@@ -14,6 +14,7 @@ ratatui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 storage = { path = "../storage" }
+syntect.workspace = true
 arboard = "3"
 libc.workspace = true
 pulldown-cmark.workspace = true
