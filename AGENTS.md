@@ -90,3 +90,4 @@ cargo test --workspace
 - [x] 收口会话④：回答策略调整为「笔记优先 + 外部补充明示」（prompt/工具描述/评测器三处同步；幻觉重定义为伪装笔记来源或错误事实），评测平均分 6.1→9.3、低分清零、0 幻觉
 - [x] 收口会话⑤：TUI 交互打磨（header 状态可见性 status_label、Ctrl+K 命令面板 19 条、/help 能力化文案）
 - [x] 收口会话⑥：命令面板三修（动态宽度/显示宽度对齐/选中项详情行）+ 参数向导（/review /import 文本步向导，课程取当前分区，Tab 保留文本模式）+ header 左右分区
+- [x] 收口会话⑦：app.rs 拆分重构（14 模块）+ 交互补全（PaletteAction 绑条目、ListPicker 选择器 /course /open、单步向导 /rename /load /course -new、光标编辑、outline --export 直执行）
