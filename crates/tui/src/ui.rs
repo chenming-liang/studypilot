@@ -507,7 +507,7 @@ fn draw_note_browser(f: &mut Frame, app: &mut App) {
     let inner_w = width.saturating_sub(4) as usize;
     let mut title = format!(" 浏览笔记 · 范围: {} ", browser.scope_label);
     let mut body: Vec<Line<'static>> = Vec::new();
-    let footer: String;
+    let footer: String = match browser.mode {
         BrowserMode::Search => {
             title.push_str("· 搜索");
             // 搜索词在光标位插 ▍（共享聊天框缓冲）
@@ -541,7 +541,7 @@ fn draw_note_browser(f: &mut Frame, app: &mut App) {
                     Style::new().fg(Color::Gray),
                 )));
             }
-            footer = " 输入过滤 · Enter 进入选择 · Esc 关闭 ".into();
+            " 输入过滤 · Enter 进入选择 · Esc 关闭 ".into()
         }
         BrowserMode::Select => {
             title.push_str(&format!(
@@ -574,7 +574,7 @@ fn draw_note_browser(f: &mut Frame, app: &mut App) {
                     Style::new().fg(DIM),
                 )));
             }
-            footer = " Space 选中 · Ctrl+A 全选 · m 移动 · d 删除 · / 搜索 · Esc 返回 ".into();
+            " Space 选中 · Ctrl+A 全选 · m 移动 · d 删除 · / 搜索 · Esc 返回 ".into()
         }
         BrowserMode::PickTarget => {
             title.push_str("· 移动到");
@@ -591,7 +591,7 @@ fn draw_note_browser(f: &mut Frame, app: &mut App) {
                 };
                 body.push(Line::from(Span::styled(format!("{mark}{name}"), style)));
             }
-            footer = " ↑↓ 选择 · Enter 确认 · Esc 返回 ".into();
+            " ↑↓ 选择 · Enter 确认 · Esc 返回 ".into()
         }
         BrowserMode::Confirm => {
             let (ids, titles) = browser.action_targets();
@@ -642,15 +642,15 @@ fn draw_note_browser(f: &mut Frame, app: &mut App) {
                     Style::new().fg(DIM),
                 )));
             }
-            footer = if matches!(browser.action, Some(BatchAction::Delete))
+            if matches!(browser.action, Some(BatchAction::Delete))
                 && n > crate::note_browser::STRONG_CONFIRM_THRESHOLD
             {
                 " 输入 DELETE 后 Enter 执行 · Esc 取消 ".into()
             } else {
                 " Enter 执行 · Esc 返回 ".into()
-            };
+            }
         }
-    }
+    };
     let _ = inner_w;
     f.render_widget(
         Paragraph::new(body).block(
