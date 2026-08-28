@@ -7,7 +7,7 @@ use agent_providers::OpenAiClient;
 use tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
 
-use super::{App, AppEvent, CourseOpOutcome, Entry, ModelPicker, SessionState, Wizard};
+use super::{App, AppEvent, CourseOpOutcome, Entry, ModelPicker, SessionState};
 use crate::course_cmd::{CourseAction, parse_course_action, parse_review_action};
 use crate::review;
 use storage::Store;
