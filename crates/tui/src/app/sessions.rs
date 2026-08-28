@@ -817,8 +817,8 @@ mod finish_wizard_tests {
 
     /// 回归：finish_wizard 必须在向导数据读取之后才清理——
     /// 此前调用方先置 None 导致所有向导动作静默失效。
-    #[test]
-    fn finish_dispatches_review_with_data() {
+    #[tokio::test]
+    async fn finish_dispatches_review_with_data() {
         let mut app = test_app();
         app.course = "rust".into();
         app.wizard = Some(crate::wizard::Wizard::new_review(Some(1), "rust".into()));
