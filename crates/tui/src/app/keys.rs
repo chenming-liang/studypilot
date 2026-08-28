@@ -600,11 +600,11 @@ impl App {
                     true
                 }
                 KeyCode::Down => {
-                    if let Some(b) = &mut self.session_browser {
-                        if !b.results.is_empty() {
-                            b.cursor = (b.cursor + 1).min(b.results.len() - 1);
-                            b.ensure_cursor_visible(SESSION_LIST_VISIBLE);
-                        }
+                    if let Some(b) = &mut self.session_browser
+                        && !b.results.is_empty()
+                    {
+                        b.cursor = (b.cursor + 1).min(b.results.len() - 1);
+                        b.ensure_cursor_visible(SESSION_LIST_VISIBLE);
                     }
                     true
                 }
