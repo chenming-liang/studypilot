@@ -30,6 +30,11 @@ impl App {
             self.handle_wizard_key(key);
             return;
         }
+        // 列表选择器（面板 Pick 动作唤起）
+        if self.list_picker.is_some() {
+            self.handle_list_picker_key(key);
+            return;
+        }
         // 命令面板（Ctrl+K 唤起）覆盖普通输入
         if self.palette.is_some() {
             self.handle_palette_key(key);
@@ -346,14 +351,42 @@ impl App {
                 }
             }
             KeyCode::Backspace => {
-                if let Some(p) = &mut self.palette {
-                    p.filter.pop();
+                if let Some(p) = &mut self.palette
+                    && p.cursor > 0
+                {
+                    p.cursor = delete_before(&mut p.filter, p.cursor);
                     p.refilter();
                 }
             }
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(p) = &mut self.palette {
-                    p.filter.push(c);
+                    p.cursor = insert_char(&mut p.filter, p.cursor, c);
+                    p.refilter();
+                }
+            }
+            KeyCode::Left => {
+                if let Some(p) = &mut self.palette {
+                    p.cursor = p.cursor.saturating_sub(1);
+                }
+            }
+            KeyCode::Right => {
+                if let Some(p) = &mut self.palette {
+                    p.cursor = (p.cursor + 1).min(p.filter.chars().count());
+                }
+            }
+            KeyCode::Home => {
+                if let Some(p) = &mut self.palette {
+                    p.cursor = 0;
+                }
+            }
+            KeyCode::End => {
+                if let Some(p) = &mut self.palette {
+                    p.cursor = p.filter.chars().count();
+                }
+            }
+            KeyCode::Delete => {
+                if let Some(p) = &mut self.palette {
+                    delete_at(&mut p.filter, p.cursor);
                     p.refilter();
                 }
             }
@@ -365,9 +398,10 @@ impl App {
         }
     }
 
-    /// 执行面板选中项：/review、/import 走参数向导（Tab 强制填入文本模式），
-    /// 其他带参命令填入输入框等用户补全，无参命令直接提交。
+    /// 执行面板选中项：行为由条目的 PaletteAction 决定（向导/选择器/单步输入/
+    /// 直执行）；Tab 一律填入文本模式（power-user 兜底）。
     pub(crate) fn palette_execute(&mut self, fill_only: bool) {
+        use crate::palette::PaletteAction as A;
         let Some(p) = &self.palette else {
             return;
         };
@@ -375,31 +409,125 @@ impl App {
             return;
         };
         let item = &p.items[idx];
-        let (cmd, needs_arg) = (item.command, item.needs_arg);
+        let (cmd, action) = (item.command, item.action);
         self.palette = None;
 
         if !fill_only {
-            match cmd {
-                c if c.starts_with("/review") => {
+            match action {
+                A::Run => {
+                    self.input = cmd.to_owned();
+                    self.cursor_pos = self.input.chars().count();
+                    self.submit();
+                    return;
+                }
+                A::WizardReview => {
                     self.wizard = Some(Wizard::new_review(self.course.clone()));
                     return;
                 }
-                c if c.starts_with("/import") => {
+                A::WizardImport => {
                     self.wizard = Some(Wizard::new_import(self.course.clone()));
                     return;
                 }
-                _ => {}
-            }
-            if !needs_arg {
-                self.input = cmd.to_owned();
-                self.cursor_pos = self.input.chars().count();
-                self.submit();
-                return;
+                A::Prompt(title, prompt) => {
+                    self.wizard = Some(Wizard::new_prompt(title, prompt, cmd));
+                    return;
+                }
+                A::Pick(kind) => {
+                    self.open_list_picker(kind);
+                    return;
+                }
+                A::Fill => {}
             }
         }
-        // Tab 或带参命令：填入输入框（power-user 文本模式）
+        // Tab 或 Fill：填入输入框（power-user 文本模式）
         self.input = cmd.to_owned();
         self.cursor_pos = self.input.chars().count();
+    }
+
+    /// 打开列表选择器：数据源全部来自内存缓存（courses / sidebar_sessions）。
+    pub(crate) fn open_list_picker(&mut self, kind: crate::palette::PickKind) {
+        use crate::palette::{ListChoice, ListPicker, PickKind as K};
+        let (title, items) = match kind {
+            K::CourseSwitch => {
+                let mut items = vec![ListChoice {
+                    label: "all（全部）".into(),
+                    command: "/course all".into(),
+                }];
+                items.extend(self.courses.iter().map(|(_, name)| ListChoice {
+                    label: name.clone(),
+                    command: format!("/course {name}"),
+                }));
+                ("切换课程分区".to_owned(), items)
+            }
+            K::CourseDelete => (
+                "删除课程（其笔记回落 all 区）".to_owned(),
+                self.courses
+                    .iter()
+                    .map(|(_, name)| ListChoice {
+                        label: name.clone(),
+                        command: format!("/course -delete {name}"),
+                    })
+                    .collect(),
+            ),
+            K::Session => (
+                "恢复历史会话".to_owned(),
+                self.sidebar_sessions
+                    .iter()
+                    .map(|s| {
+                        let title = s.title.as_deref().unwrap_or("(未命名)");
+                        ListChoice {
+                            label: format!("#{id} {title}", id = s.id),
+                            command: format!("/open {}", s.id),
+                        }
+                    })
+                    .collect(),
+            ),
+        };
+        if items.is_empty() {
+            self.push_entry(Entry::Info("暂无可选项".into()));
+            return;
+        }
+        self.list_picker = Some(ListPicker {
+            title,
+            items,
+            selected: 0,
+        });
+    }
+
+    /// 列表选择器按键：↑↓ 选择、Enter 提交绑定命令、Esc 关闭。
+    pub(crate) fn handle_list_picker_key(&mut self, key: KeyEvent) {
+        if key.kind != KeyEventKind::Press {
+            return;
+        }
+        match key.code {
+            KeyCode::Esc => self.list_picker = None,
+            KeyCode::Up => {
+                if let Some(lp) = &mut self.list_picker {
+                    lp.selected = lp.selected.saturating_sub(1);
+                }
+            }
+            KeyCode::Down => {
+                if let Some(lp) = &mut self.list_picker
+                    && !lp.items.is_empty()
+                {
+                    lp.selected = (lp.selected + 1).min(lp.items.len() - 1);
+                }
+            }
+            KeyCode::Enter => {
+                let Some(lp) = &self.list_picker else {
+                    return;
+                };
+                let Some(choice) = lp.items.get(lp.selected) else {
+                    return;
+                };
+                let cmd = choice.command.clone();
+                self.list_picker = None;
+                self.input = cmd;
+                self.cursor_pos = self.input.chars().count();
+                self.submit();
+            }
+            _ => {}
+        }
     }
 
     /// 向导按键：字符进输入缓冲、Enter 推进/完成、Esc 回退/取消。
@@ -425,13 +553,40 @@ impl App {
                 }
             }
             KeyCode::Backspace => {
-                if let Some(w) = &mut self.wizard {
-                    w.input.pop();
+                if let Some(w) = &mut self.wizard
+                    && w.cursor > 0
+                {
+                    w.cursor = delete_before(&mut w.input, w.cursor);
                 }
             }
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(w) = &mut self.wizard {
-                    w.input.push(c);
+                    w.cursor = insert_char(&mut w.input, w.cursor, c);
+                }
+            }
+            KeyCode::Left => {
+                if let Some(w) = &mut self.wizard {
+                    w.cursor = w.cursor.saturating_sub(1);
+                }
+            }
+            KeyCode::Right => {
+                if let Some(w) = &mut self.wizard {
+                    w.cursor = (w.cursor + 1).min(w.input.chars().count());
+                }
+            }
+            KeyCode::Home => {
+                if let Some(w) = &mut self.wizard {
+                    w.cursor = 0;
+                }
+            }
+            KeyCode::End => {
+                if let Some(w) = &mut self.wizard {
+                    w.cursor = w.input.chars().count();
+                }
+            }
+            KeyCode::Delete => {
+                if let Some(w) = &mut self.wizard {
+                    delete_at(&mut w.input, w.cursor);
                 }
             }
             _ => {}

@@ -7,10 +7,14 @@ pub struct WizardStep {
     pub default: String,
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 enum WizardKind {
     Review,
     Import,
+    /// 单步自由文本：完成后合成 `{command} {输入}`
+    Plain {
+        command: String,
+    },
 }
 
 pub struct Wizard {
@@ -24,6 +28,8 @@ pub struct Wizard {
     values: Vec<Option<String>>,
     /// 当前步输入缓冲
     pub input: String,
+    /// 输入缓冲光标（字符索引）
+    pub cursor: usize,
 }
 
 impl Wizard {
@@ -60,8 +66,24 @@ impl Wizard {
         Self::build(WizardKind::Import, course, "导入笔记".to_owned(), steps)
     }
 
+    /// 单步自由文本向导（palette Prompt 动作：/rename /load /course -new）。
+    pub(crate) fn new_prompt(title: &'static str, prompt: &'static str, command: &str) -> Self {
+        Self::build(
+            WizardKind::Plain {
+                command: command.to_owned(),
+            },
+            String::new(),
+            title.to_owned(),
+            vec![WizardStep {
+                prompt,
+                default: String::new(),
+            }],
+        )
+    }
+
     fn build(kind: WizardKind, course: String, title: String, steps: Vec<WizardStep>) -> Self {
         let input = steps[0].default.clone();
+        let cursor = input.chars().count();
         Self {
             kind,
             course,
@@ -70,6 +92,7 @@ impl Wizard {
             steps,
             current: 0,
             input,
+            cursor,
         }
     }
 
@@ -79,6 +102,7 @@ impl Wizard {
         if self.current + 1 < self.steps.len() {
             self.current += 1;
             self.input = self.steps[self.current].default.clone();
+            self.cursor = self.input.chars().count();
             false
         } else {
             true
@@ -94,6 +118,7 @@ impl Wizard {
         self.input = self.values[self.current]
             .clone()
             .unwrap_or_else(|| self.steps[self.current].default.clone());
+        self.cursor = self.input.chars().count();
         false
     }
 
@@ -102,7 +127,7 @@ impl Wizard {
         let v: Vec<String> = (0..self.steps.len())
             .map(|i| self.values[i].clone().unwrap_or_default())
             .collect();
-        match self.kind {
+        match &self.kind {
             WizardKind::Review => {
                 let concept = v[0].trim();
                 let n = v[1].trim().parse::<usize>().unwrap_or(5);
@@ -120,6 +145,15 @@ impl Wizard {
                     format!("/import {dir}")
                 } else {
                     format!("/import {dir} --course {course}")
+                }
+            }
+            WizardKind::Plain { command } => {
+                let command = command.clone();
+                let arg = v[0].trim();
+                if arg.is_empty() {
+                    command
+                } else {
+                    format!("{command} {arg}")
                 }
             }
         }
@@ -191,5 +225,21 @@ mod wizard_tests {
         assert_eq!(b.title, "导入笔记");
         assert_ne!(a.kind, b.kind);
         let _ = WizardKind::Review;
+    }
+
+    #[test]
+    fn plain_prompt_wizard_completes_command() {
+        let mut w = Wizard::new_prompt("重命名会话", "新标题", "/rename");
+        w.input = "讲所有权".into();
+        w.cursor = w.input.chars().count();
+        assert!(w.confirm());
+        assert_eq!(w.command(), "/rename 讲所有权");
+    }
+
+    #[test]
+    fn plain_prompt_empty_input_keeps_bare_command() {
+        let mut w = Wizard::new_prompt("加载会话", "JSON 文件路径", "/load");
+        assert!(w.confirm());
+        assert_eq!(w.command(), "/load");
     }
 }

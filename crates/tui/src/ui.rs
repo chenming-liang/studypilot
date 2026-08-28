@@ -9,6 +9,7 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::app::{App, CommandPalette, Entry, ModelPicker, Wizard};
 use crate::markdown;
+use crate::palette::ListPicker;
 
 const ACCENT: Color = Color::Cyan;
 const DIM: Color = Color::DarkGray;
@@ -42,6 +43,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
     if let Some(palette) = &app.palette {
         draw_command_palette(f, palette);
+    }
+    if let Some(lp) = &app.list_picker {
+        draw_list_picker(f, lp);
     }
     if let Some(wizard) = &app.wizard {
         draw_wizard(f, wizard);
@@ -426,6 +430,49 @@ fn draw_command_palette(f: &mut Frame, palette: &CommandPalette) {
                 .title_bottom(
                     Span::styled(format!(" {detail} "), Style::new().fg(DIM))
                         .into_left_aligned_line(),
+                ),
+        ),
+        pop,
+    );
+}
+
+/// 列表选择器弹窗：↑↓ 选择、Enter 提交绑定命令。
+fn draw_list_picker(f: &mut Frame, lp: &ListPicker) {
+    let area = f.area();
+    let height = (lp.items.len() as u16 + 4).min(area.height.saturating_sub(2));
+    let width = 52u16.min(area.width.saturating_sub(2));
+    let x = area.x + (area.width - width) / 2;
+    let y = area.y + (area.height - height) / 2;
+    let pop = Rect::new(x, y, width, height);
+
+    f.render_widget(ratatui::widgets::Clear, pop);
+
+    let items: Vec<ListItem> = lp
+        .items
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let mark = if i == lp.selected { "▸ " } else { "  " };
+            let label = format!("{mark}{}", c.label);
+            let style = if i == lp.selected {
+                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+            } else {
+                Style::new()
+            };
+            ListItem::new(Span::styled(label, style))
+        })
+        .collect();
+    f.render_widget(
+        List::new(items).block(
+            Block::new()
+                .borders(Borders::ALL)
+                .title(Span::styled(
+                    format!(" {} ", lp.title),
+                    Style::new().fg(ACCENT),
+                ))
+                .title_bottom(
+                    Span::styled(" ↑↓ 选择 · Enter 确认 · Esc 取消 ", Style::new().fg(DIM))
+                        .into_centered_line(),
                 ),
         ),
         pop,

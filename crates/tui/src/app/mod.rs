@@ -23,7 +23,7 @@ mod review_flow;
 mod sessions;
 
 pub use crate::events::{AgentEvent, AppEvent, CourseOpOutcome, Entry};
-pub use crate::palette::{CommandPalette, ModelPicker};
+pub use crate::palette::{CommandPalette, ListPicker, ModelPicker};
 pub use crate::wizard::Wizard;
 
 use storage::Store;
@@ -98,6 +98,8 @@ pub struct App {
     pub palette: Option<CommandPalette>,
     /// 参数向导；Some 时按键路由给向导
     pub wizard: Option<Wizard>,
+    /// 列表选择器；Some 时按键路由给选择器
+    pub list_picker: Option<ListPicker>,
     /// `/sessions` 显式请求后的刷新回调时要打印列表到聊天区（侧栏静默刷新不打印）
     pending_sessions_print: bool,
     should_quit: bool,
@@ -148,6 +150,7 @@ impl App {
             model_picker: None,
             palette: None,
             wizard: None,
+            list_picker: None,
             pending_sessions_print: false,
             should_quit: false,
             tx,

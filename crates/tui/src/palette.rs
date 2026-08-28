@@ -1,18 +1,59 @@
-//! 命令面板与模型弹窗的数据结构。
+//! 命令面板、列表选择器与模型弹窗的数据结构。
 
 use agent_providers::ProviderConfig;
+
 /// 模型选择弹窗状态。
 pub struct ModelPicker {
     pub options: Vec<ProviderConfig>,
     pub selected: usize,
 }
 
-/// 命令面板条目：`needs_arg` 决定 Enter 行为——无参命令直接执行，
-/// 带参命令填入输入框等待用户补全。
+/// 面板条目的 Enter 行为（Tab 一律填入文本模式，power-user 兜底）。
+#[derive(Clone, Copy)]
+pub enum PaletteAction {
+    /// 无参命令，直接执行
+    Run,
+    /// /review 参数向导
+    WizardReview,
+    /// /import 参数向导
+    WizardImport,
+    /// 单步文本向导：(弹窗标题, 输入提示)
+    Prompt(&'static str, &'static str),
+    /// 列表选择器
+    Pick(PickKind),
+    /// 填入输入框（复合参数，如 /delete /move）
+    Fill,
+}
+
+#[derive(Clone, Copy)]
+pub enum PickKind {
+    /// 切换课程分区（all + 全部课程）
+    CourseSwitch,
+    /// 删除课程（仅现有课程）
+    CourseDelete,
+    /// 恢复历史会话
+    Session,
+}
+
+/// 命令面板条目：行为直接绑在条目上（不再是命令字符串前缀分流）。
 pub struct PaletteItem {
     pub command: &'static str,
     pub desc: &'static str,
-    pub needs_arg: bool,
+    pub action: PaletteAction,
+}
+
+/// 通用列表选择器：单列 label，Enter 提交绑定的完整命令。
+pub struct ListPicker {
+    pub title: String,
+    pub items: Vec<ListChoice>,
+    pub selected: usize,
+}
+
+pub struct ListChoice {
+    /// 展示文本
+    pub label: String,
+    /// 选中后提交的完整命令
+    pub command: String,
 }
 
 /// 命令面板（Ctrl+K）：可发现性入口——把"项目有什么能力"直接摆在眼前，
@@ -23,107 +64,110 @@ pub struct CommandPalette {
     pub filtered: Vec<usize>,
     pub selected: usize,
     pub filter: String,
+    /// 过滤串光标（字符索引，支持左右编辑）
+    pub cursor: usize,
 }
 
 impl CommandPalette {
     /// 全量命令表（与 /help 能力文案一一对应）。
     fn all_items() -> Vec<PaletteItem> {
+        use PaletteAction as A;
         use PaletteItem as P;
         vec![
             P {
                 command: "/help",
                 desc: "我能做什么（能力总览）",
-                needs_arg: false,
+                action: A::Run,
             },
             P {
                 command: "/outline",
                 desc: "生成当前课程知识大纲",
-                needs_arg: false,
+                action: A::Run,
             },
             P {
-                command: "/outline <课程> --export",
+                command: "/outline --export",
                 desc: "生成大纲并导出 Markdown",
-                needs_arg: true,
+                action: A::Run,
             },
             P {
                 command: "/review <课程> [概念] [--n 数量]",
                 desc: "出题复习（掌握度低优先）",
-                needs_arg: true,
+                action: A::WizardReview,
             },
             P {
                 command: "/import <目录> [--course 名]",
                 desc: "批量导入 md/pdf/pptx",
-                needs_arg: true,
+                action: A::WizardImport,
             },
             P {
                 command: "/notes",
                 desc: "列出当前分区的笔记",
-                needs_arg: false,
+                action: A::Run,
             },
             P {
                 command: "/course",
-                desc: "查看课程分区",
-                needs_arg: false,
-            },
-            P {
-                command: "/model",
-                desc: "切换模型（弹窗）",
-                needs_arg: false,
-            },
-            P {
-                command: "/budget",
-                desc: "查看预算花费",
-                needs_arg: false,
-            },
-            P {
-                command: "/sessions",
-                desc: "历史会话列表",
-                needs_arg: false,
-            },
-            P {
-                command: "/new",
-                desc: "开启新会话",
-                needs_arg: false,
-            },
-            P {
-                command: "/export",
-                desc: "导出当前会话为 JSON",
-                needs_arg: false,
-            },
-            P {
-                command: "/load <文件>",
-                desc: "加载导出的会话 JSON",
-                needs_arg: true,
-            },
-            P {
-                command: "/open <id>",
-                desc: "恢复指定历史会话",
-                needs_arg: true,
-            },
-            P {
-                command: "/rename <标题>",
-                desc: "重命名当前会话",
-                needs_arg: true,
-            },
-            P {
-                command: "/delete <id>",
-                desc: "删除笔记（不碰磁盘原文件）",
-                needs_arg: true,
-            },
-            P {
-                command: "/move <id> <课程>",
-                desc: "迁移笔记到另一课程",
-                needs_arg: true,
+                desc: "切换课程分区（选择列表）",
+                action: A::Pick(PickKind::CourseSwitch),
             },
             P {
                 command: "/course -new <名>",
                 desc: "新建课程分区",
-                needs_arg: true,
+                action: A::Prompt("新建课程", "课程名"),
             },
             P {
                 command: "/course -delete <名>",
                 desc: "删除课程（笔记回落 all 区）",
-                needs_arg: true,
+                action: A::Pick(PickKind::CourseDelete),
+            },
+            P {
+                command: "/model",
+                desc: "切换模型（弹窗）",
+                action: A::Run,
+            },
+            P {
+                command: "/budget",
+                desc: "查看预算花费",
+                action: A::Run,
+            },
+            P {
+                command: "/sessions",
+                desc: "历史会话列表",
+                action: A::Run,
+            },
+            P {
+                command: "/new",
+                desc: "开启新会话",
+                action: A::Run,
+            },
+            P {
+                command: "/export",
+                desc: "导出当前会话为 JSON",
+                action: A::Run,
+            },
+            P {
+                command: "/open <id>",
+                desc: "恢复指定历史会话（选择列表）",
+                action: A::Pick(PickKind::Session),
+            },
+            P {
+                command: "/rename <标题>",
+                desc: "重命名当前会话",
+                action: A::Prompt("重命名会话", "新标题"),
+            },
+            P {
+                command: "/load <文件>",
+                desc: "加载导出的会话 JSON",
+                action: A::Prompt("加载会话", "JSON 文件路径"),
+            },
+            P {
+                command: "/delete <id>",
+                desc: "删除笔记（不碰磁盘原文件）",
+                action: A::Fill,
+            },
+            P {
+                command: "/move <id> <课程>",
+                desc: "迁移笔记到另一课程",
+                action: A::Fill,
             },
         ]
     }
@@ -136,6 +180,7 @@ impl CommandPalette {
             filtered,
             selected: 0,
             filter: String::new(),
+            cursor: 0,
         }
     }
 
