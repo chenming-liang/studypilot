@@ -607,7 +607,6 @@ mod course_delete_tests {
 #[cfg(test)]
 mod selection_mapping_tests {
     use super::*;
-    use crate::app::AppEvent;
 
     fn test_app() -> App {
         let cfg = agent_providers::ProviderConfig {
