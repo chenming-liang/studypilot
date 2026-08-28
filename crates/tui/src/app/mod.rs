@@ -9,6 +9,7 @@ use agent_providers::{OpenAiClient, ProviderConfig};
 use crossterm::event::Event as CtEvent;
 use ratatui::DefaultTerminal;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
 
 use crate::review;
@@ -111,6 +112,35 @@ pub struct App {
 }
 
 impl App {
+    /// 课程列表+统计刷新（D2）：导入流水线可能在 DB 里新建课程，
+    /// 内存列表与侧栏统计需要与库对齐。
+    pub(crate) fn request_courses_refresh(&self) {
+        let store = Arc::clone(&self.store);
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = spawn_blocking(
+                move || -> Result<Vec<(i64, String, usize, usize)>, String> {
+                    let courses = store.list_courses().map_err(|e| e.to_string())?;
+                    courses
+                        .into_iter()
+                        .map(|(id, name)| {
+                            let (n, c) = store.course_stats(id).unwrap_or((0, 0));
+                            Ok((id, name, n, c))
+                        })
+                        .collect()
+                },
+            )
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r);
+            if let Ok(rows) = result {
+                let list = rows.iter().map(|(id, n, _, _)| (*id, n.clone())).collect();
+                let stats = rows.into_iter().map(|(id, _, a, b)| (id, (a, b))).collect();
+                let _ = tx.send(AppEvent::CoursesRefreshed(list, stats));
+            }
+        });
+    }
+
     /// 覆盖层接管聊天框输入：备份原内容并清空（fzf 风格——覆盖层与聊天框共享同一缓冲）。
     pub(crate) fn take_input_for_overlay(&mut self) {
         self.input_backup = Some(std::mem::take(&mut self.input));
@@ -321,6 +351,10 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
                 app.push_entry(Entry::Error(format!("数据写入失败: {msg}")))
             }
             AppEvent::CostSynced(total) => app.total_cost = app.total_cost.max(total),
+            AppEvent::CoursesRefreshed(list, stats) => {
+                app.courses = list;
+                app.sidebar_course_stats = stats;
+            }
             AppEvent::ImportProgress(ev) => app.handle_import_event(ev),
             AppEvent::NotesListed(result) => match result {
                 Ok(notes) => {
@@ -346,12 +380,18 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
                 Err(e) => app.push_entry(Entry::Error(format!("列出笔记失败: {e}"))),
             },
             AppEvent::NotesDeleted(result, desc) => match result {
-                Ok(true) => app.push_entry(Entry::Info(format!("已删除: {desc}"))),
+                Ok(true) => {
+                    app.push_entry(Entry::Info(format!("已删除: {desc}")));
+                    app.request_courses_refresh();
+                }
                 Ok(false) => app.push_entry(Entry::Error(format!("{desc} 不存在或已删除"))),
                 Err(e) => app.push_entry(Entry::Error(format!("删除失败: {e}"))),
             },
             AppEvent::NotesMoved(result, desc) => match result {
-                Ok(true) => app.push_entry(Entry::Info(format!("已移动: {desc}"))),
+                Ok(true) => {
+                    app.push_entry(Entry::Info(format!("已移动: {desc}")));
+                    app.request_courses_refresh();
+                }
                 Ok(false) => app.push_entry(Entry::Error(format!("{desc} 不存在"))),
                 Err(e) => app.push_entry(Entry::Error(format!("移动失败: {e}"))),
             },

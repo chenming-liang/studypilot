@@ -540,6 +540,7 @@ impl App {
                 if let Some(c) = switch_to {
                     self.course = c;
                 }
+                self.request_courses_refresh();
                 self.push_entry(Entry::Info(msg));
             }
             Err(e) => self.push_entry(Entry::Error(format!("课程操作失败: {e}"))),

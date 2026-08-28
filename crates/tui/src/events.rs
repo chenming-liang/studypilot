@@ -63,6 +63,11 @@ pub enum AppEvent {
     DatabaseFailed(String),
     /// usage_log 对账后的累计成本（R6：review/outline/import 的花费也纳入熔断口径）
     CostSynced(f64),
+    /// 课程列表+统计刷新完成（导入可能新建课程；删除/移动笔记改变统计）
+    CoursesRefreshed(
+        Vec<(i64, String)>,
+        std::collections::HashMap<i64, (usize, usize)>,
+    ),
 }
 
 /// 聊天流里的一条内容。

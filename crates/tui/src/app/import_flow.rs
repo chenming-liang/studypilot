@@ -105,6 +105,8 @@ impl App {
             Finished { ok, skipped, fail } => {
                 self.import_cancel = None;
                 self.request_sessions_refresh();
+                // 流水线可能在 DB 里新建课程（归类/收编），内存列表必须对齐
+                self.request_courses_refresh();
                 // 导入期 LLM 调用的花费只落 usage_log，对账进内存熔断口径
                 self.request_cost_sync();
                 self.push_entry(Entry::Info(format!(
@@ -113,6 +115,8 @@ impl App {
             }
             Cancelled => {
                 self.import_cancel = None;
+                // 中断前可能已建课/入库，统计同样要对齐
+                self.request_courses_refresh();
                 self.push_entry(Entry::Info("[导入已中断]".into()));
             }
         }
