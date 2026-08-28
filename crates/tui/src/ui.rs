@@ -142,11 +142,16 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &App) {
     body.push(Line::default());
     body.push(Line::from(tags));
     body.push(Line::default());
-    for seg in wrap(&q.question, inner_w) {
-        body.push(Line::from(Span::styled(
-            format!("  {seg}"),
-            Style::new().fg(theme::FG),
-        )));
+    // 题干走 markdown 管线（与聊天流一致：行内代码/代码块/加粗都有样式）
+    let mut q_lines = markdown::render_markdown(&q.question, inner_w.saturating_sub(2).max(1));
+    // render 段落结束自带空行，去掉尾部空行避免与下方间隔叠加
+    while q_lines.last().is_some_and(|l| l.spans.is_empty()) {
+        q_lines.pop();
+    }
+    for l in q_lines {
+        let mut spans = vec![Span::raw("  ")];
+        spans.extend(l.spans);
+        body.push(Line::from(spans));
     }
     body.push(Line::default());
 
@@ -203,8 +208,19 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &App) {
                 )));
             }
             if let Some(exp) = &q.explanation {
-                for seg in wrap(&format!("  解析: {exp}"), inner_w) {
-                    body.push(Line::from(Span::styled(seg, Style::new().fg(theme::MUTED))));
+                // 解析同样走 markdown 管线（与题干一致，可能含代码）
+                let mut exp_lines =
+                    markdown::render_markdown(exp, inner_w.saturating_sub(2).max(1));
+                while exp_lines.last().is_some_and(|l| l.spans.is_empty()) {
+                    exp_lines.pop();
+                }
+                for (i, l) in exp_lines.into_iter().enumerate() {
+                    let mut spans = vec![Span::styled(
+                        if i == 0 { "  解析: " } else { "        " },
+                        Style::new().fg(theme::MUTED),
+                    )];
+                    spans.extend(l.spans);
+                    body.push(Line::from(spans));
                 }
             }
             if !r.missing.is_empty() {
