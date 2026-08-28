@@ -12,7 +12,6 @@ use crate::theme;
 const HEAD: Color = theme::SECONDARY;
 const HEAD2: Color = theme::SECONDARY_DIM;
 const BODY: Color = theme::FG;
-const CODE: Color = theme::CODE_FG;
 const REF: Color = theme::REFERENCE;
 
 /// 把 Markdown 文本渲染为 ratatui Line 列表（已按显示宽度折行由调用方处理）。
@@ -419,7 +418,6 @@ mod tests {
         assert!(blue_found, "跨事件拆分的 [n] 未识别: {lines:?}");
     }
 
-    #[test]
     #[test]
     fn inline_code_gets_dedicated_fg_no_bg() {
         // 行内代码：无背景 + One Dark 橙前景（DarkGray 打底在黑底终端上刺眼，已移除）
