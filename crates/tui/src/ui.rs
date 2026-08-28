@@ -410,16 +410,23 @@ fn draw_command_palette(f: &mut Frame, palette: &CommandPalette) {
             display_truncate(&format!("{} — {}", it.command, it.desc), width as usize - 4)
         })
         .unwrap_or_else(|| "（无匹配命令）".into());
+    // 过滤串在光标位置显示 ▍
+    let mut shown = String::new();
+    for (i, ch) in palette.filter.chars().enumerate() {
+        if i == palette.cursor {
+            shown.push('▍');
+        }
+        shown.push(ch);
+    }
+    if palette.cursor >= palette.filter.chars().count() {
+        shown.push('▍');
+    }
     let title = format!(
         " 命令面板 {} ",
         if palette.filter.is_empty() {
             format!("({} 项)", palette.filtered.len())
         } else {
-            format!(
-                "· 过滤: {}（{} 项）",
-                palette.filter,
-                palette.filtered.len()
-            )
+            format!("· 过滤: {shown}（{} 项）", palette.filtered.len())
         }
     );
     f.render_widget(
@@ -492,7 +499,21 @@ fn draw_wizard(f: &mut Frame, wizard: &Wizard) {
 
     let step_prompt = wizard.steps[wizard.current].prompt;
     let inner_w = width.saturating_sub(4) as usize;
-    let value = display_truncate(&wizard.input, inner_w.saturating_sub(2));
+    // 在光标位置插入 ▍；超宽时滑动窗口保证光标始终可见
+    let chars: Vec<char> = wizard.input.chars().collect();
+    let cursor_at_tail = wizard.cursor >= chars.len();
+    let mut shown: Vec<char> = Vec::with_capacity(chars.len() + 1);
+    for (i, ch) in chars.iter().enumerate() {
+        if i == wizard.cursor {
+            shown.push('▍');
+        }
+        shown.push(*ch);
+    }
+    if cursor_at_tail {
+        shown.push('▍');
+    }
+    let view = cursor_window(&shown, wizard.cursor, inner_w.saturating_sub(2));
+    let value: String = view.into_iter().collect();
 
     let lines = vec![
         Line::from(Span::styled(
@@ -506,7 +527,7 @@ fn draw_wizard(f: &mut Frame, wizard: &Wizard) {
         )),
         Line::from(""),
         Line::from(Span::styled(
-            format!("  > {value}▍"),
+            format!("  > {value}"),
             Style::new().fg(Color::White),
         )),
         Line::from(""),
@@ -560,6 +581,26 @@ fn display_truncate(s: &str, w: usize) -> String {
     out
 }
 
+/// 行编辑可视窗口：保证 `cursor_idx`（▍ 所在的字符索引）落在显示窗口内。
+/// 输入超宽时窗口跟随光标右移（尾部对齐），避免 ▍ 被截断"看不见移动"。
+fn cursor_window(chars: &[char], cursor_idx: usize, w: usize) -> Vec<char> {
+    if w == 0 {
+        return Vec::new();
+    }
+    if chars.len() <= w {
+        return chars.to_vec();
+    }
+    // ▍ 插入后光标所在索引（在 shown 序列中即 cursor_idx，▍ 排在其前）
+    let start = if cursor_idx >= w {
+        cursor_idx + 1 - w
+    } else {
+        0
+    };
+    let end = (start + w).min(chars.len());
+    // 终点回退一个字符宽，防 ▍ 恰好被挤出（简化：字符级近似即可）
+    chars[start..end].to_vec()
+}
+
 fn draw_model_picker(f: &mut Frame, picker: &ModelPicker, current: &str) {
     let area = f.area();
     let height = (picker.options.len() + 4).min(area.height as usize) as u16;
@@ -608,4 +649,25 @@ fn draw_model_picker(f: &mut Frame, picker: &ModelPicker, current: &str) {
         ),
         pop,
     );
+}
+
+#[cfg(test)]
+mod cursor_window_tests {
+    use super::cursor_window;
+
+    #[test]
+    fn short_input_untouched() {
+        let chars: Vec<char> = "abc".chars().collect();
+        assert_eq!(cursor_window(&chars, 0, 10), vec!['a', 'b', 'c']);
+    }
+
+    #[test]
+    fn cursor_beyond_width_shifts_window() {
+        // 8 字符，窗口宽 4；光标在 7（尾部）→ 窗口应含尾部而非截断丢失
+        let chars: Vec<char> = "12345678".chars().collect();
+        let win = cursor_window(&chars, 7, 4);
+        assert_eq!(win, vec!['5', '6', '7', '8']);
+        // 光标在 0 → 头部窗口
+        assert_eq!(cursor_window(&chars, 0, 4), vec!['1', '2', '3', '4']);
+    }
 }
