@@ -808,6 +808,28 @@ impl Store {
         Ok(rows.flatten().collect())
     }
 
+    /// 取某课程全部笔记的 chunk（出题兜底：概念检索未命中时按课取材）。
+    pub fn chunks_by_course(&self, course_id: i64, limit: usize) -> Result<Vec<ChunkHit>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT c.id, c.note_id, n.title, c.heading, c.content
+             FROM note_chunks c JOIN notes n ON n.id = c.note_id
+             WHERE n.course_id = ?1
+             ORDER BY c.note_id, c.position LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![course_id, limit as i64], |r| {
+            Ok(ChunkHit {
+                chunk_id: r.get(0)?,
+                note_id: r.get(1)?,
+                note_title: r.get(2)?,
+                heading: r.get(3)?,
+                content: r.get(4)?,
+                rank: 0.0,
+            })
+        })?;
+        Ok(rows.flatten().collect())
+    }
+
     /// 按笔记 id 列表批量删除（NoteBrowser 批量动作）。事务内完成，
     /// FTS 无外键级联需显式清理。返回实际删除的篇数。
     pub fn delete_notes_by_ids(&self, ids: &[i64]) -> Result<usize> {

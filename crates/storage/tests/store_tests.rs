@@ -396,3 +396,51 @@ fn course_stats_counts_concepts_by_note_association() {
     assert_eq!(concepts.len(), 1);
     assert_eq!(concepts[0].name, "所有权");
 }
+
+/// 出题兜底取材：概念检索零命中时按课取全部 chunk。
+#[test]
+fn chunks_by_course_returns_all_material() {
+    let store = store();
+    let cid = store.get_or_create_course("rust").unwrap();
+    let n = match store
+        .insert_note(NewNote {
+            course_id: Some(cid),
+            title: "所有权",
+            source_path: None,
+            content: "move 语义 与 借用规则",
+            fts_content: None,
+        })
+        .unwrap()
+    {
+        InsertOutcome::Created(n) => n,
+        InsertOutcome::Duplicate { .. } => panic!(),
+    };
+    store
+        .insert_chunks(
+            n.id,
+            &[
+                NewChunk {
+                    heading: "move",
+                    content: "move 语义 转移所有权",
+                    fts_extra: None,
+                },
+                NewChunk {
+                    heading: "borrow",
+                    content: "借用规则 &mut 独占",
+                    fts_extra: None,
+                },
+            ],
+        )
+        .unwrap();
+
+    // 概念词（"test" 这类无关词）检索零命中
+    assert!(
+        store
+            .search_chunks("无关词xyz", Some(cid), 10)
+            .unwrap()
+            .is_empty()
+    );
+    // 兜底取材：全课 chunk
+    let all = store.chunks_by_course(cid, 24).unwrap();
+    assert_eq!(all.len(), 2, "应取到该课全部 chunk");
+}

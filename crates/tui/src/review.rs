@@ -132,8 +132,35 @@ pub async fn start_review(
         }
     };
 
+    // 兜底：概念/关键词检索未命中时，取该课程全部 chunk（复习整课不该依赖
+    // "概念词恰好能搜到笔记"——课程名作 query 通常零命中）
+    let chunks = if chunks.is_empty() {
+        let fallback = tokio::task::spawn_blocking({
+            let store = Arc::clone(&store);
+            move || {
+                store
+                    .chunks_by_course(course_id, 24)
+                    .map_err(|e| e.to_string())
+            }
+        })
+        .await
+        .map_err(|e| format!("任务错误: {e}"))
+        .and_then(|r| r);
+        match fallback {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = tx.send(AppEvent::ReviewReady(Err(format!("收集资料失败: {e}"))));
+                return;
+            }
+        }
+    } else {
+        chunks
+    };
+
     if chunks.is_empty() {
-        let _ = tx.send(AppEvent::ReviewReady(Err("该课程无笔记，无法出题".into())));
+        let _ = tx.send(AppEvent::ReviewReady(Err(
+            "该课程还没有笔记，先 /import 导入资料".into(),
+        )));
         return;
     }
 
