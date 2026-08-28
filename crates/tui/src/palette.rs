@@ -17,8 +17,9 @@ pub enum PaletteAction {
     WizardReview,
     /// /import 参数向导
     WizardImport,
-    /// 单步文本向导：(弹窗标题, 输入提示)
-    Prompt(&'static str, &'static str),
+    /// 单步文本向导：(弹窗标题, 输入提示, 命令前缀)
+    /// 前缀必须不含占位符——向导完成时用 `prefix + " " + 输入` 合成真实命令
+    Prompt(&'static str, &'static str, &'static str),
     /// 列表选择器
     Pick(PickKind),
     /// 填入输入框（复合参数，如 /delete /move）
@@ -110,7 +111,7 @@ impl CommandPalette {
             P {
                 command: "/course -new <名>",
                 desc: "新建课程分区",
-                action: A::Prompt("新建课程", "课程名"),
+                action: A::Prompt("新建课程", "课程名", "/course -new"),
             },
             P {
                 command: "/course -delete <名>",
@@ -150,12 +151,12 @@ impl CommandPalette {
             P {
                 command: "/rename <标题>",
                 desc: "重命名当前会话",
-                action: A::Prompt("重命名会话", "新标题"),
+                action: A::Prompt("重命名会话", "新标题", "/rename"),
             },
             P {
                 command: "/load <文件>",
                 desc: "加载导出的会话 JSON",
-                action: A::Prompt("加载会话", "JSON 文件路径"),
+                action: A::Prompt("加载会话", "JSON 文件路径", "/load"),
             },
             P {
                 command: "/delete <id>",

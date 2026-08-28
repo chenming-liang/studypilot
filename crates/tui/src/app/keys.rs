@@ -415,8 +415,9 @@ impl App {
                     self.wizard = Some(Wizard::new_import(self.course.clone()));
                     return;
                 }
-                A::Prompt(title, prompt) => {
-                    self.wizard = Some(Wizard::new_prompt(title, prompt, cmd));
+                A::Prompt(title, prompt, prefix) => {
+                    // 前缀不含占位符——条目 command 文本仅用于列表展示
+                    self.wizard = Some(Wizard::new_prompt(title, prompt, prefix));
                     self.enter_wizard_step();
                     return;
                 }
