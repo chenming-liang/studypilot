@@ -367,7 +367,6 @@ fn title_search_and_batch_delete() {
 #[test]
 fn course_stats_counts_concepts_by_note_association() {
     let store = store();
-    let rust = store.get_or_create_course("rust").unwrap();
 
     // 还原真实时序：无课导入 → 笔记与概念都归 NULL（all 区）
     let n1 = match store
