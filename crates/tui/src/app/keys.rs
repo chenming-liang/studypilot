@@ -39,6 +39,10 @@ impl App {
         if self.note_browser.is_some() && self.handle_browser_key(key) {
             return;
         }
+        // 会话浏览器：Search/Rename 编辑键落入普通路径
+        if self.session_browser.is_some() && self.handle_session_browser_key(key) {
+            return;
+        }
         // 命令面板（Ctrl+K 唤起）：导航键拦截，编辑键落入普通路径
         if self.palette.is_some() && self.handle_palette_key(key) {
             return;
@@ -62,6 +66,7 @@ impl App {
             && self.palette.is_none()
             && self.wizard.is_none()
             && self.note_browser.is_none()
+            && self.session_browser.is_none()
         {
             self.toggle_selection_mode();
             return;
@@ -94,11 +99,13 @@ impl App {
                 self.cursor_pos = delete_before(&mut self.input, self.cursor_pos);
                 self.sync_palette_filter();
                 self.sync_browser_search();
+                self.sync_session_browser_search();
             }
             KeyCode::Delete => {
                 delete_at(&mut self.input, self.cursor_pos);
                 self.sync_palette_filter();
                 self.sync_browser_search();
+                self.sync_session_browser_search();
             }
             KeyCode::PageUp => self.scroll_up = self.scroll_up.saturating_add(10),
             KeyCode::PageDown => self.scroll_up = self.scroll_up.saturating_sub(10),
@@ -106,6 +113,7 @@ impl App {
                 self.cursor_pos = insert_char(&mut self.input, self.cursor_pos, c);
                 self.sync_palette_filter();
                 self.sync_browser_search();
+                self.sync_session_browser_search();
             }
             _ => {}
         }
@@ -120,6 +128,18 @@ impl App {
             .unwrap_or(false);
         if in_search {
             self.browser_search();
+        }
+    }
+
+    /// 会话浏览器搜索模式下同步过滤
+    fn sync_session_browser_search(&mut self) {
+        let in_search = self
+            .session_browser
+            .as_ref()
+            .map(|b| b.mode == crate::session_browser::SessionBrowserMode::Search)
+            .unwrap_or(false);
+        if in_search {
+            self.session_browser_search();
         }
     }
 
@@ -528,6 +548,128 @@ impl App {
         }
     }
 
+    /// 会话浏览器按键：返回 true 表示已消费。
+    pub(crate) fn handle_session_browser_key(&mut self, key: KeyEvent) -> bool {
+        use crate::session_browser::{SESSION_LIST_VISIBLE, SessionBrowserMode};
+        if key.kind != KeyEventKind::Press {
+            return false;
+        }
+        let Some(b) = &self.session_browser else {
+            return false;
+        };
+        match b.mode {
+            SessionBrowserMode::Search => match key.code {
+                KeyCode::Esc => {
+                    self.session_browser = None;
+                    self.restore_input_backup();
+                    true
+                }
+                KeyCode::Enter => {
+                    if let Some(b) = &mut self.session_browser {
+                        b.mode = SessionBrowserMode::Select;
+                        b.clamp_cursor();
+                    }
+                    true
+                }
+                KeyCode::Up | KeyCode::Down => {
+                    if let Some(b) = &mut self.session_browser {
+                        b.scroll_preview(
+                            if key.code == KeyCode::Up { -3 } else { 3 },
+                            SESSION_LIST_VISIBLE,
+                        );
+                    }
+                    true
+                }
+                _ => false,
+            },
+            SessionBrowserMode::Select => match key.code {
+                KeyCode::Esc => {
+                    if let Some(b) = &mut self.session_browser {
+                        b.mode = SessionBrowserMode::Search;
+                        self.input.clear();
+                        self.cursor_pos = 0;
+                        self.session_browser_search();
+                    }
+                    true
+                }
+                KeyCode::Up => {
+                    if let Some(b) = &mut self.session_browser {
+                        b.cursor = b.cursor.saturating_sub(1);
+                        b.ensure_cursor_visible(SESSION_LIST_VISIBLE);
+                    }
+                    true
+                }
+                KeyCode::Down => {
+                    if let Some(b) = &mut self.session_browser {
+                        if !b.results.is_empty() {
+                            b.cursor = (b.cursor + 1).min(b.results.len() - 1);
+                            b.ensure_cursor_visible(SESSION_LIST_VISIBLE);
+                        }
+                    }
+                    true
+                }
+                KeyCode::Enter | KeyCode::Char('o') => {
+                    self.session_browser_open();
+                    true
+                }
+                KeyCode::Char('r') => {
+                    self.session_browser_begin_rename();
+                    true
+                }
+                KeyCode::Char('d') => {
+                    self.session_browser_begin_delete();
+                    true
+                }
+                KeyCode::Char('/') => {
+                    if let Some(b) = &mut self.session_browser {
+                        b.mode = SessionBrowserMode::Search;
+                        self.take_input_for_overlay();
+                    }
+                    true
+                }
+                _ => true,
+            },
+            SessionBrowserMode::Rename => match key.code {
+                KeyCode::Esc => {
+                    // 取消：恢复搜索词
+                    if let Some(b) = &mut self.session_browser {
+                        b.mode = SessionBrowserMode::Select;
+                        self.input = b.rename_old.clone();
+                        self.cursor_pos = self.input.chars().count();
+                    }
+                    true
+                }
+                KeyCode::Enter => {
+                    self.session_browser_confirm_rename();
+                    true
+                }
+                KeyCode::Backspace => {
+                    self.cursor_pos = delete_before(&mut self.input, self.cursor_pos);
+                    true
+                }
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.cursor_pos = insert_char(&mut self.input, self.cursor_pos, c);
+                    true
+                }
+                _ => true,
+            },
+            SessionBrowserMode::ConfirmDelete => match key.code {
+                KeyCode::Esc => {
+                    if let Some(b) = &mut self.session_browser {
+                        b.mode = SessionBrowserMode::Select;
+                    }
+                    self.input.clear();
+                    true
+                }
+                KeyCode::Enter => {
+                    self.session_browser_confirm_delete();
+                    true
+                }
+                _ => true,
+            },
+        }
+    }
+
     /// PickTarget 的候选列表（all + 全部课程），渲染与按键共用。
     fn pick_items(&self) -> Vec<(i64, String)> {
         let mut items = vec![(-1i64, "all（全部）".to_owned())];
@@ -645,19 +787,6 @@ impl App {
                     .map(|(id, name)| ListChoice {
                         label: name.clone(),
                         command: format!("/course -delete --id {id}"),
-                    })
-                    .collect(),
-            ),
-            K::Session => (
-                "恢复历史会话".to_owned(),
-                self.sidebar_sessions
-                    .iter()
-                    .map(|s| {
-                        let title = s.title.as_deref().unwrap_or("(未命名)");
-                        ListChoice {
-                            label: format!("#{id} {title}", id = s.id),
-                            command: format!("/open {}", s.id),
-                        }
                     })
                     .collect(),
             ),

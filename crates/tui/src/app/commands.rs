@@ -101,13 +101,22 @@ impl App {
             "/model" => self.handle_model_command(arg.trim()),
             "/new" => self.start_new_session(),
             "/sessions" => {
-                // 不直接打印缓存的旧列表：等 SessionsLoaded 事件回来再展示最新数据
-                self.pending_sessions_print = true;
-                self.request_sessions_refresh();
+                // 打开会话浏览器（搜索/恢复/重命名/删除）
+                self.take_input_for_overlay();
+                self.session_browser = Some(crate::session_browser::SessionBrowser::new());
+                self.session_browser_search();
             }
             "/open" => match arg.trim().parse::<i64>() {
                 Ok(id) => self.open_session(id),
-                Err(_) => self.push_entry(Entry::Error("用法: /open <会话 id>".into())),
+                Err(_) if arg.trim().is_empty() => {
+                    // 无参 = 打开会话浏览器（与 /sessions 同一入口）
+                    self.take_input_for_overlay();
+                    self.session_browser = Some(crate::session_browser::SessionBrowser::new());
+                    self.session_browser_search();
+                }
+                Err(_) => self.push_entry(Entry::Error(
+                    "用法: /open <会话 id>（无参数打开浏览器）".into(),
+                )),
             },
             "/export" => self.export_session(),
             "/rename" => self.rename_session(arg.trim()),

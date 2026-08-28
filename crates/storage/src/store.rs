@@ -832,6 +832,35 @@ impl Store {
     }
 }
 
+impl Store {
+    /// 会话浏览器：按标题搜索（空串=全部），按 id 倒序（新会话在前）。
+    pub fn search_sessions(&self, query: &str, limit: usize) -> Result<Vec<SessionMeta>> {
+        let conn = self.conn.lock().unwrap();
+        let pattern = format!("%{}%", query);
+        let mut stmt = conn.prepare(
+            "SELECT id, title, course_id FROM sessions
+             WHERE COALESCE(title, '') LIKE ?1
+             ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![pattern, limit as i64], |r| {
+            Ok(SessionMeta {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                course_id: r.get(2)?,
+            })
+        })?;
+        Ok(rows.flatten().collect())
+    }
+
+    /// 删除会话（SessionBrowser）。messages 由外键 ON DELETE CASCADE 级联清理，
+    /// 即会话聊天记录一并删除且不可恢复。返回是否真的删了。
+    pub fn delete_session(&self, id: i64) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn.execute("DELETE FROM sessions WHERE id = ?1", [id])?;
+        Ok(affected > 0)
+    }
+}
+
 #[cfg(test)]
 mod schema_v3_tests {
     use super::*;

@@ -53,6 +53,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.note_browser.is_some() {
         draw_note_browser(f, app);
     }
+    if app.session_browser.is_some() {
+        draw_session_browser(f, app);
+    }
 }
 
 fn draw_header(f: &mut Frame, area: Rect, app: &App) {
@@ -538,6 +541,155 @@ fn draw_list_picker(f: &mut Frame, lp: &ListPicker) {
                     Span::styled(" ↑↓ 选择 · Enter 确认 · Esc 取消 ", Style::new().fg(DIM))
                         .into_centered_line(),
                 ),
+        ),
+        pop,
+    );
+}
+
+/// 会话浏览器：搜索 → 选择（恢复/重命名/删除）。
+fn draw_session_browser(f: &mut Frame, app: &App) {
+    use crate::session_browser::{SESSION_LIST_VISIBLE, SessionBrowserMode};
+    let Some(browser) = app.session_browser.as_mut() else {
+        return;
+    };
+    let area = f.area();
+    let width = 60u16.min(area.width.saturating_sub(2));
+    let height = 20u16.min(area.height.saturating_sub(2));
+    let x = area.x + (area.width - width) / 2;
+    let y = area.y + (area.height - height) / 2;
+    let pop = Rect::new(x, y, width, height);
+    f.render_widget(ratatui::widgets::Clear, pop);
+
+    let current_id = app.current_session_id();
+    let mut title = format!(" 会话浏览器 · {} ", browser.results.len());
+    let mut body: Vec<Line<'static>> = Vec::new();
+    let footer: String = match browser.mode {
+        SessionBrowserMode::Search => {
+            title.push_str("· 搜索");
+            let mut shown = String::new();
+            for (i, ch) in app.input.chars().enumerate() {
+                if i == app.cursor_pos {
+                    shown.push('▍');
+                }
+                shown.push(ch);
+            }
+            if app.cursor_pos >= app.input.chars().count() {
+                shown.push('▍');
+            }
+            body.push(Line::from(Span::styled(
+                format!("  > {shown}"),
+                Style::new().fg(Color::White),
+            )));
+            body.push(Line::default());
+            if browser.loading {
+                body.push(Line::from(Span::styled("  搜索中…", Style::new().fg(DIM))));
+            }
+            let visible = SESSION_LIST_VISIBLE.saturating_sub(3);
+            for m in browser.results.iter().skip(browser.scroll).take(visible) {
+                let course = app.course_label(m.course_id);
+                let t = m.title.as_deref().unwrap_or("(未命名)");
+                body.push(Line::from(Span::styled(
+                    format!("  #{id} {t} · {course}", id = m.id),
+                    Style::new().fg(Color::Gray),
+                )));
+            }
+            let total = browser.results.len();
+            if total > visible {
+                body.push(Line::from(Span::styled(
+                    format!(
+                        "  … {}/{}（↑↓ 滚动）",
+                        (browser.scroll + visible).min(total),
+                        total
+                    ),
+                    Style::new().fg(DIM),
+                )));
+            }
+            " 输入过滤 · Enter 进入选择 · Esc 关闭 ".into()
+        }
+        SessionBrowserMode::Select => {
+            title.push_str("· 选择");
+            browser.ensure_cursor_visible(SESSION_LIST_VISIBLE);
+            for (i, m) in browser
+                .results
+                .iter()
+                .enumerate()
+                .skip(browser.scroll)
+                .take(SESSION_LIST_VISIBLE)
+            {
+                let mark = if i == browser.cursor { "▸ " } else { "  " };
+                let course = app.course_label(m.course_id);
+                let t = m.title.as_deref().unwrap_or("(未命名)");
+                let is_current = current_id == Some(m.id);
+                let style = if i == browser.cursor {
+                    Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+                } else if is_current {
+                    Style::new().fg(ACCENT)
+                } else {
+                    Style::new().fg(Color::Gray)
+                };
+                let cur_mark = if is_current { "（当前）" } else { "" };
+                body.push(Line::from(Span::styled(
+                    format!("{mark}#{id} {t}{cur_mark} · {course}", id = m.id),
+                    style,
+                )));
+            }
+            if browser.results.is_empty() {
+                body.push(Line::from(Span::styled(
+                    "  （无会话）",
+                    Style::new().fg(DIM),
+                )));
+            }
+            " Enter 恢复 · r 重命名 · d 删除 · / 搜索 · Esc 返回 ".into()
+        }
+        SessionBrowserMode::Rename => {
+            title.push_str("· 重命名");
+            body.push(Line::from(Span::styled(
+                format!("  会话 #{}", browser.rename_id.unwrap_or(0)),
+                Style::new().fg(DIM),
+            )));
+            body.push(Line::default());
+            let mut shown = String::new();
+            for (i, ch) in app.input.chars().enumerate() {
+                if i == app.cursor_pos {
+                    shown.push('▍');
+                }
+                shown.push(ch);
+            }
+            if app.cursor_pos >= app.input.chars().count() {
+                shown.push('▍');
+            }
+            body.push(Line::from(Span::styled(
+                format!("  新标题 > {shown}"),
+                Style::new().fg(Color::White),
+            )));
+            " Enter 确认 · Esc 取消 ".into()
+        }
+        SessionBrowserMode::ConfirmDelete => {
+            let meta = browser.current();
+            title.push_str("· ⚠ 确认删除");
+            if let Some(m) = meta {
+                body.push(Line::from(Span::styled(
+                    format!(
+                        "  删除会话 #{id} {t}？",
+                        id = m.id,
+                        t = m.title.as_deref().unwrap_or("(未命名)")
+                    ),
+                    Style::new().fg(Color::Red).add_modifier(Modifier::BOLD),
+                )));
+            }
+            body.push(Line::from(Span::styled(
+                "  ⚠ 该会话的全部聊天记录将被删除且无法恢复。",
+                Style::new().fg(DIM),
+            )));
+            " Enter 确认删除 · Esc 取消 ".into()
+        }
+    };
+    f.render_widget(
+        Paragraph::new(body).block(
+            Block::new()
+                .borders(Borders::ALL)
+                .title(Span::styled(title, Style::new().fg(ACCENT)))
+                .title_bottom(Span::styled(footer, Style::new().fg(DIM)).into_left_aligned_line()),
         ),
         pop,
     );

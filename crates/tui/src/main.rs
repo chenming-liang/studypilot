@@ -10,6 +10,7 @@ mod note_browser;
 mod outline_render;
 mod palette;
 mod review;
+mod session_browser;
 mod ui;
 mod wizard;
 

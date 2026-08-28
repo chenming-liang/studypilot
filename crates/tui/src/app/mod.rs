@@ -106,6 +106,8 @@ pub struct App {
     pub list_picker: Option<ListPicker>,
     /// 笔记浏览器（Search→Select→Act）；Some 时按键路由给浏览器
     pub note_browser: Option<crate::note_browser::NoteBrowser>,
+    /// 会话浏览器；Some 时按键路由给会话浏览器
+    pub session_browser: Option<crate::session_browser::SessionBrowser>,
     /// `/sessions` 显式请求后的刷新回调时要打印列表到聊天区（侧栏静默刷新不打印）
     pending_sessions_print: bool,
     should_quit: bool,
@@ -216,6 +218,7 @@ impl App {
             wizard: None,
             list_picker: None,
             note_browser: None,
+            session_browser: None,
             pending_sessions_print: false,
             should_quit: false,
             tx,
@@ -374,6 +377,9 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
             } => app.on_browser_action_done(scope_label, result),
             AppEvent::ImportProgress(ev) => app.handle_import_event(ev),
             AppEvent::BrowserResults { seq, result } => app.on_browser_results(seq, result),
+            AppEvent::SessionBrowserResults { seq, result } => {
+                app.on_session_browser_results(seq, result)
+            }
             AppEvent::NotesDeleted(result, desc) => match result {
                 Ok(true) => {
                     app.push_entry(Entry::Info(format!("已删除: {desc}")));

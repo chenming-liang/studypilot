@@ -76,6 +76,11 @@ pub enum AppEvent {
         scope_label: String,
         result: Result<String, String>,
     },
+    /// 会话浏览器异步搜索结果（seq 丢弃过期响应）
+    SessionBrowserResults {
+        seq: u64,
+        result: Result<Vec<storage::SessionMeta>, String>,
+    },
 }
 
 /// 聊天流里的一条内容。

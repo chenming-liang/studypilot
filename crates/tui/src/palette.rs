@@ -52,8 +52,6 @@ pub enum PickKind {
     CourseSwitch,
     /// 删除课程（仅现有课程）
     CourseDelete,
-    /// 恢复历史会话
-    Session,
 }
 
 /// 命令面板条目：行为直接绑在条目上（不再是命令字符串前缀分流）。

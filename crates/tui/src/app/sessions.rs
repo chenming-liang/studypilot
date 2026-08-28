@@ -442,3 +442,216 @@ impl App {
 
     // ---- R6：usage 落库 ----
 }
+
+impl App {
+    /// 会话浏览器：发起异步搜索（搜索词 = 聊天框共享缓冲）。
+    pub(crate) fn session_browser_search(&mut self) {
+        let Some(b) = &mut self.session_browser else {
+            return;
+        };
+        let seq = b.next_search_seq();
+        b.loading = true;
+        let query = self.input.clone();
+        let store = Arc::clone(&self.store);
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = spawn_blocking(move || {
+                store
+                    .search_sessions(&query, 200)
+                    .map_err(|e| e.to_string())
+            })
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r);
+            let _ = tx.send(AppEvent::SessionBrowserResults { seq, result });
+        });
+    }
+
+    pub(crate) fn on_session_browser_results(
+        &mut self,
+        seq: u64,
+        result: Result<Vec<storage::SessionMeta>, String>,
+    ) {
+        let Some(b) = &mut self.session_browser else {
+            return;
+        };
+        if seq != b.search_seq {
+            return;
+        }
+        match result {
+            Ok(rows) => b.results = rows,
+            Err(e) => {
+                b.loading = false;
+                b.clamp_cursor();
+                let msg = format!("搜索会话失败: {e}");
+                self.push_entry(Entry::Error(msg));
+                return;
+            }
+        }
+        b.loading = false;
+        b.clamp_cursor();
+    }
+
+    /// o/Enter：恢复光标会话（关闭浏览器 → 走原有 open_session 流程）。
+    pub(crate) fn session_browser_open(&mut self) {
+        let Some(b) = &self.session_browser else {
+            return;
+        };
+        let Some(meta) = b.current() else {
+            return;
+        };
+        let id = meta.id;
+        self.session_browser = None;
+        self.restore_input_backup();
+        self.open_session(id);
+    }
+
+    /// r：进入重命名子状态（搜索词暂存，输入缓冲腾给新标题）。
+    pub(crate) fn session_browser_begin_rename(&mut self) {
+        let (id, old_title) = {
+            let Some(b) = &self.session_browser else {
+                return;
+            };
+            match b.current() {
+                Some(meta) => (meta.id, meta.title.clone().unwrap_or_default()),
+                None => return,
+            }
+        };
+        let Some(b) = &mut self.session_browser else {
+            return;
+        };
+        b.rename_id = Some(id);
+        b.rename_old = old_title;
+        b.mode = crate::session_browser::SessionBrowserMode::Rename;
+        self.input = b.rename_old.clone();
+        self.cursor_pos = self.input.chars().count();
+    }
+
+    /// 重命名确认（Enter）：写库 → 刷新列表 → 返回 Select。
+    pub(crate) fn session_browser_confirm_rename(&mut self) {
+        let Some(b) = &self.session_browser else {
+            return;
+        };
+        let Some(id) = b.rename_id else {
+            return;
+        };
+        let new_title = self.input.trim().to_owned();
+        if new_title.is_empty() {
+            return;
+        }
+        self.input.clear();
+        self.cursor_pos = 0;
+        let store = Arc::clone(&self.store);
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = spawn_blocking({
+                let store = Arc::clone(&store);
+                move || {
+                    store
+                        .set_session_title(id, &new_title)
+                        .map(|ok| ok && !new_title.is_empty())
+                        .map_err(|e| e.to_string())
+                }
+            })
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r);
+            match result {
+                Ok(true) => {
+                    let _ = tx.send(AppEvent::BrowserActionDone {
+                        scope_label: "会话".into(),
+                        result: Ok(format!("会话 #{id} 已重命名")),
+                    });
+                    if let Ok(list) =
+                        spawn_blocking(move || store.list_sessions().map_err(|e| e.to_string()))
+                            .await
+                            .map_err(|e| e.to_string())
+                            .and_then(|r| r)
+                    {
+                        let _ = tx.send(AppEvent::SessionsLoaded(list));
+                    }
+                }
+                _ => {
+                    let _ = tx.send(AppEvent::BrowserActionDone {
+                        scope_label: "会话".into(),
+                        result: Err("重命名失败：会话不存在".into()),
+                    });
+                }
+            }
+        });
+    }
+
+    /// d：进入删除确认（当前打开的会话禁止删除）。
+    pub(crate) fn session_browser_begin_delete(&mut self) {
+        if self.current_session_id()
+            == self
+                .session_browser
+                .as_ref()
+                .and_then(|b| b.current().map(|m| m.id))
+        {
+            self.push_entry(Entry::Error(
+                "这是当前打开的会话，请先切换到其他会话再删除".into(),
+            ));
+            return;
+        }
+        if let Some(b) = &mut self.session_browser
+            && b.current().is_some()
+        {
+            b.mode = crate::session_browser::SessionBrowserMode::ConfirmDelete;
+            self.input.clear();
+            self.cursor_pos = 0;
+        }
+    }
+
+    /// 删除确认（Enter）：级联删聊天记录 → 刷新列表 → 返回 Select。
+    pub(crate) fn session_browser_confirm_delete(&mut self) {
+        let Some(b) = &self.session_browser else {
+            return;
+        };
+        let Some(meta) = b.current() else {
+            return;
+        };
+        let id = meta.id;
+        let title = meta.title.clone().unwrap_or_else(|| "(未命名)".into());
+        self.session_browser = None;
+        self.restore_input_backup();
+        let store = Arc::clone(&self.store);
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = spawn_blocking({
+                let store = Arc::clone(&store);
+                move || store.delete_session(id).map_err(|e| e.to_string())
+            })
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r);
+            match result {
+                Ok(true) => {
+                    let _ = tx.send(AppEvent::BrowserActionDone {
+                        scope_label: "会话".into(),
+                        result: Ok(format!("已删除会话 #{id} {title}（聊天记录一并清除）")),
+                    });
+                    if let Ok(list) =
+                        spawn_blocking(move || store.list_sessions().map_err(|e| e.to_string()))
+                            .await
+                            .map_err(|e| e.to_string())
+                            .and_then(|r| r)
+                    {
+                        let _ = tx.send(AppEvent::SessionsLoaded(list));
+                    }
+                }
+                other => {
+                    let msg = match other {
+                        Ok(false) => format!("会话 #{id} 不存在"),
+                        Err(e) => format!("删除失败: {e}"),
+                        Ok(true) => unreachable!(),
+                    };
+                    let _ = tx.send(AppEvent::BrowserActionDone {
+                        scope_label: "会话".into(),
+                        result: Err(msg),
+                    });
+                }
+            }
+        });
+    }
+}
