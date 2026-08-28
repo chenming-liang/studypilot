@@ -677,7 +677,7 @@ mod selection_mapping_tests {
 
 #[cfg(test)]
 mod overlay_backup_tests {
-    use super::super::course_delete_tests::test_app;
+    use super::course_delete_tests::test_app;
     use super::*;
 
     /// 回归：覆盖层备份嵌套守卫——二次 take 不得覆盖首次备份，
