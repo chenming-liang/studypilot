@@ -202,6 +202,27 @@ async fn process_one(
                 existing_title,
                 existing_course_id,
             } => {
+                // 收编语义：已有笔记躺在 all 区（course_id 为 NULL，LLM 归类时未定）
+                // 而本次导入有明确归类（--course 指定或 LLM 抽取），则把旧笔记
+                // 迁入目标课程而非跳过——"重新导入 + 指定课程 = 纠正分类"。
+                // 已归属具体课程的笔记不会被收编（避免跨课搬运）。
+                if let (Some(target), None) = (course_id, existing_course_id) {
+                    match store.move_note(existing_id, Some(target)) {
+                        Ok(true) => {
+                            let target_name = store
+                                .list_courses()
+                                .ok()
+                                .and_then(|ls| {
+                                    ls.into_iter().find(|(i, _)| *i == target).map(|(_, n)| n)
+                                })
+                                .unwrap_or_default();
+                            return Ok(ProcessOutcome::SkippedWith(format!(
+                                "原在 all 区，已归入课程 {target_name}：#{existing_id} {existing_title}"
+                            )));
+                        }
+                        _ => tracing::warn!(existing_id, "收编 all 区笔记失败，按去重跳过处理"),
+                    }
+                }
                 // 透明化：全局 content_hash 去重下，用户需要知道存活位置才能删干净再导
                 let at = existing_course_id.and_then(|cid| {
                     store
@@ -212,7 +233,7 @@ async fn process_one(
                         .map(|(_, name)| name)
                 });
                 let detail = match at {
-                    Some(name) => format!("已存在：{name}#{existing_id} {existing_title}"),
+                    Some(name) => format!("已存在：{name}#{} {existing_title}", existing_id),
                     None => format!("已存在：all#{existing_id} {existing_title}"),
                 };
                 Ok(ProcessOutcome::SkippedWith(detail))

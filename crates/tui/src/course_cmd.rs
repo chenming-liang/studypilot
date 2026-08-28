@@ -22,7 +22,11 @@ pub(crate) fn parse_course_action(arg: &str, known: &[String]) -> CourseAction {
         return CourseAction::List;
     }
 
-    let tokens: Vec<&str> = arg.split_whitespace().collect();
+    // 容错：剥掉照抄文档产生的 <名>/<课程> 占位符 token
+    let tokens: Vec<&str> = arg
+        .split_whitespace()
+        .filter(|t| !(t.starts_with('<') && t.ends_with('>')))
+        .collect();
     match tokens.as_slice() {
         // -new / -delete：旗标后的全部 token 重新拼接为课程名（允许多词）
         ["-new", rest @ ..] if !rest.is_empty() => CourseAction::Create(rest.join(" ")),
@@ -63,7 +67,7 @@ pub(crate) fn parse_course_action(arg: &str, known: &[String]) -> CourseAction {
 mod tests {
     use super::*;
 
-    fn known() -> Vec<String> {
+    pub(super) fn known() -> Vec<String> {
         vec!["rust".into(), "csapp".into()]
     }
 
@@ -292,5 +296,33 @@ mod review_tests {
         let e = parse_review_action("不存在的课", &known()).unwrap_err();
         assert!(e.contains("不存在"), "{e}");
         assert!(e.contains("程序设计训练"), "{e}");
+    }
+}
+
+#[cfg(test)]
+mod placeholder_tests {
+    use super::tests::known;
+    use super::*;
+
+    /// 容错：照抄文档占位符（`-new <名> rust`）应剥掉占位符正常创建。
+    #[test]
+    fn placeholder_tokens_are_stripped() {
+        assert_eq!(
+            parse_course_action("-new <名> rust", &known()),
+            CourseAction::Create("rust".into())
+        );
+        assert_eq!(
+            parse_course_action("-delete <名> rust", &known()),
+            CourseAction::Delete("rust".into())
+        );
+        // 占位符剥掉后剩余部分照常走切换/报错逻辑
+        assert_eq!(
+            parse_course_action("<课程> rust", &known()),
+            CourseAction::Switch("rust".into())
+        );
+        assert!(matches!(
+            parse_course_action("<课程> 不存在", &known()),
+            CourseAction::Invalid(_)
+        ));
     }
 }
