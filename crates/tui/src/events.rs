@@ -43,8 +43,11 @@ pub enum AppEvent {
     TitleRenamed(bool, String),
     /// 导入进度事件
     ImportProgress(importer::ImportEvent),
-    /// /notes 列表查询完成
-    NotesListed(Result<Vec<storage::NoteSummary>, String>),
+    /// 笔记浏览器异步搜索结果（seq 丢弃过期响应）
+    BrowserResults {
+        seq: u64,
+        result: Result<Vec<storage::NoteSummary>, String>,
+    },
     /// /delete 完成：(是否成功, 描述)
     NotesDeleted(Result<bool, String>, String),
     /// /move 完成：(是否成功, 描述)
@@ -68,6 +71,11 @@ pub enum AppEvent {
         Vec<(i64, String)>,
         std::collections::HashMap<i64, (usize, usize)>,
     ),
+    /// 浏览器批量动作完成：(范围名, 结果消息)
+    BrowserActionDone {
+        scope_label: String,
+        result: Result<String, String>,
+    },
 }
 
 /// 聊天流里的一条内容。

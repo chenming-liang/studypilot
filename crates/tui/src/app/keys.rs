@@ -35,6 +35,10 @@ impl App {
             self.handle_list_picker_key(key);
             return;
         }
+        // 笔记浏览器：Search 模式编辑键落入普通路径（共享输入缓冲）
+        if self.note_browser.is_some() && self.handle_browser_key(key) {
+            return;
+        }
         // 命令面板（Ctrl+K 唤起）：导航键拦截，编辑键落入普通路径
         if self.palette.is_some() && self.handle_palette_key(key) {
             return;
@@ -57,6 +61,7 @@ impl App {
             && !key.modifiers.contains(KeyModifiers::CONTROL)
             && self.palette.is_none()
             && self.wizard.is_none()
+            && self.note_browser.is_none()
         {
             self.toggle_selection_mode();
             return;
@@ -88,18 +93,33 @@ impl App {
             KeyCode::Backspace => {
                 self.cursor_pos = delete_before(&mut self.input, self.cursor_pos);
                 self.sync_palette_filter();
+                self.sync_browser_search();
             }
             KeyCode::Delete => {
                 delete_at(&mut self.input, self.cursor_pos);
                 self.sync_palette_filter();
+                self.sync_browser_search();
             }
             KeyCode::PageUp => self.scroll_up = self.scroll_up.saturating_add(10),
             KeyCode::PageDown => self.scroll_up = self.scroll_up.saturating_sub(10),
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.cursor_pos = insert_char(&mut self.input, self.cursor_pos, c);
                 self.sync_palette_filter();
+                self.sync_browser_search();
             }
             _ => {}
+        }
+    }
+
+    /// 浏览器搜索模式下，聊天框缓冲即搜索词——编辑后重新发起异步搜索
+    fn sync_browser_search(&mut self) {
+        let in_search = self
+            .note_browser
+            .as_ref()
+            .map(|b| b.mode == crate::note_browser::BrowserMode::Search)
+            .unwrap_or(false);
+        if in_search {
+            self.browser_search();
         }
     }
 
@@ -344,6 +364,160 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// 浏览器按键：返回 true 表示已消费（导航/动作键）；
+    /// Search 模式的编辑键返回 false 落入普通聊天框编辑路径。
+    pub(crate) fn handle_browser_key(&mut self, key: KeyEvent) -> bool {
+        use crate::note_browser::BrowserMode;
+        if key.kind != KeyEventKind::Press {
+            return false;
+        }
+        let Some(b) = &self.note_browser else {
+            return false;
+        };
+        match b.mode {
+            BrowserMode::Search => match key.code {
+                KeyCode::Esc => {
+                    self.note_browser = None;
+                    self.restore_input_backup();
+                    true
+                }
+                KeyCode::Enter => {
+                    if let Some(b) = &mut self.note_browser {
+                        b.mode = BrowserMode::Select;
+                        b.clamp_cursor();
+                    }
+                    true
+                }
+                _ => false, // 编辑键 → 普通路径（sync_browser_search 已挂）
+            },
+            BrowserMode::Select => match key.code {
+                KeyCode::Esc => {
+                    if let Some(b) = &mut self.note_browser {
+                        b.mode = BrowserMode::Search;
+                        b.selected.clear();
+                        self.input.clear();
+                        self.cursor_pos = 0;
+                        self.browser_search();
+                    }
+                    true
+                }
+                KeyCode::Up => {
+                    if let Some(b) = &mut self.note_browser {
+                        b.cursor = b.cursor.saturating_sub(1);
+                    }
+                    true
+                }
+                KeyCode::Down => {
+                    if let Some(b) = &mut self.note_browser
+                        && !b.results.is_empty()
+                    {
+                        b.cursor = (b.cursor + 1).min(b.results.len() - 1);
+                    }
+                    true
+                }
+                KeyCode::Char(' ') => {
+                    if let Some(b) = &mut self.note_browser {
+                        b.toggle_current();
+                    }
+                    true
+                }
+                KeyCode::Char('a') | KeyCode::Char('A')
+                    if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    if let Some(b) = &mut self.note_browser {
+                        b.select_all_results();
+                    }
+                    true
+                }
+                KeyCode::Char('/') | KeyCode::Enter => {
+                    if let Some(b) = &mut self.note_browser {
+                        b.mode = BrowserMode::Search;
+                        self.take_input_for_overlay();
+                    }
+                    true
+                }
+                KeyCode::Char('m') => {
+                    self.browser_begin_move();
+                    true
+                }
+                KeyCode::Char('d') => {
+                    self.browser_begin_delete();
+                    true
+                }
+                _ => true, // Select 模式其余键不落到聊天框
+            },
+            BrowserMode::PickTarget => match key.code {
+                KeyCode::Esc => {
+                    if let Some(b) = &mut self.note_browser {
+                        b.mode = BrowserMode::Select;
+                        b.action = None;
+                    }
+                    self.input.clear();
+                    true
+                }
+                KeyCode::Up | KeyCode::Down => {
+                    // 光标由渲染层维护 pick_cursor
+                    let len = self.pick_items().len();
+                    if let (Some(b), true) = (&mut self.note_browser, len > 0) {
+                        b.pick_cursor = match key.code {
+                            KeyCode::Up => b.pick_cursor.saturating_sub(1),
+                            _ => (b.pick_cursor + 1).min(len - 1),
+                        };
+                    }
+                    true
+                }
+                KeyCode::Enter => {
+                    let pick_cursor = self
+                        .note_browser
+                        .as_ref()
+                        .map(|b| b.pick_cursor)
+                        .unwrap_or(0);
+                    let picked = self.pick_items().into_iter().nth(pick_cursor);
+                    let (id, label) = match picked {
+                        Some((i, n)) => (i, n),
+                        None => return true,
+                    };
+                    // all 哨兵 id=-1 → None（course_id IS NULL 即 all 区）
+                    let target = if id < 0 { None } else { Some(id) };
+                    self.browser_set_move_target(target, label);
+                    true
+                }
+                _ => true,
+            },
+            BrowserMode::Confirm => match key.code {
+                KeyCode::Esc => {
+                    if let Some(b) = &mut self.note_browser {
+                        b.mode = BrowserMode::Select;
+                        b.action = None;
+                    }
+                    self.input.clear();
+                    true
+                }
+                KeyCode::Enter => {
+                    self.browser_confirm();
+                    true
+                }
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    // 强确认需要输入 DELETE
+                    self.cursor_pos = insert_char(&mut self.input, self.cursor_pos, c);
+                    true
+                }
+                KeyCode::Backspace => {
+                    self.cursor_pos = delete_before(&mut self.input, self.cursor_pos);
+                    true
+                }
+                _ => true,
+            },
+        }
+    }
+
+    /// PickTarget 的候选列表（all + 全部课程），渲染与按键共用。
+    fn pick_items(&self) -> Vec<(i64, String)> {
+        let mut items = vec![(-1i64, "all（全部）".to_owned())];
+        items.extend(self.courses.iter().cloned());
+        items
     }
 
     /// 面板导航键（编辑键由普通聊天框路径处理——共享同一输入缓冲）。

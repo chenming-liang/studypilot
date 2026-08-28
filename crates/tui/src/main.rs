@@ -6,6 +6,7 @@ mod course_cmd;
 mod events;
 mod input_edit;
 mod markdown;
+mod note_browser;
 mod outline_render;
 mod palette;
 mod review;

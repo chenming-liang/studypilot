@@ -253,26 +253,14 @@ impl App {
         });
     }
 
-    /// `/notes`：列出当前课程（或 all）的笔记摘要。
+    /// `/notes`：打开笔记浏览器（搜索 → 多选 → m 移动 / d 删除）。
+    /// 范围固化为打开时的分区；搜索词走聊天框共享缓冲。
     pub(crate) fn handle_notes_command(&mut self) {
-        let cid = if self.course == "all" {
-            None
-        } else {
-            self.courses
-                .iter()
-                .find(|(_, n)| *n == self.course)
-                .map(|(id, _)| *id)
-        };
-        let store = Arc::clone(&self.store);
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let result =
-                spawn_blocking(move || store.list_notes(cid, 50).map_err(|e| e.to_string()))
-                    .await
-                    .map_err(|e| e.to_string())
-                    .and_then(|r| r);
-            let _ = tx.send(AppEvent::NotesListed(result));
-        });
+        let scope = self.current_course_id();
+        let label = self.course.clone();
+        self.take_input_for_overlay();
+        self.note_browser = Some(crate::note_browser::NoteBrowser::new(scope, label));
+        self.browser_search();
     }
 
     /// `/delete <id>` 或 `/delete --course <name>`

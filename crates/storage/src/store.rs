@@ -752,6 +752,68 @@ pub fn content_hash(content: &str) -> String {
     digest[..8].iter().map(|b| format!("{b:02x}")).collect()
 }
 
+impl Store {
+    /// 笔记标题搜索（NoteBrowser 用）：LIKE %q% 匹配标题，
+    /// 范围语义与检索一致——course_id=None 为全部，Some 为该课（不含 all 区）。
+    /// 与 chunk 级 FTS 检索是两回事：这里是对象浏览，不是内容检索。
+    pub fn search_note_titles(
+        &self,
+        query: &str,
+        course_id: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<NoteSummary>> {
+        let conn = self.conn.lock().unwrap();
+        let pattern = format!("%{}%", query);
+        let sql = match course_id {
+            Some(_) => {
+                "SELECT id, course_id, title, content_hash FROM notes
+                 WHERE title LIKE ?1 AND course_id = ?2 ORDER BY id LIMIT ?3"
+            }
+            None => {
+                "SELECT id, course_id, title, content_hash FROM notes
+                 WHERE title LIKE ?1 ORDER BY id LIMIT ?2"
+            }
+        };
+        let mut stmt = conn.prepare(sql)?;
+        let map = |r: &rusqlite::Row<'_>| -> rusqlite::Result<NoteSummary> {
+            Ok(NoteSummary {
+                id: r.get(0)?,
+                course_id: r.get(1)?,
+                title: r.get(2)?,
+                short_id: r.get::<_, String>(3)?[..4].to_owned(),
+            })
+        };
+        let rows = match course_id {
+            Some(cid) => stmt.query_map(rusqlite::params![pattern, cid, limit as i64], map)?,
+            None => stmt.query_map(rusqlite::params![pattern, limit as i64], map)?,
+        };
+        Ok(rows.flatten().collect())
+    }
+
+    /// 按笔记 id 列表批量删除（NoteBrowser 批量动作）。事务内完成，
+    /// FTS 无外键级联需显式清理。返回实际删除的篇数。
+    pub fn delete_notes_by_ids(&self, ids: &[i64]) -> Result<usize> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let mut deleted = 0usize;
+        for id in ids {
+            tx.execute("DELETE FROM notes_fts WHERE rowid = ?1", [id])?;
+            tx.execute(
+                "DELETE FROM note_chunks_fts WHERE rowid IN
+                 (SELECT id FROM note_chunks WHERE note_id = ?1)",
+                [id],
+            )?;
+            tx.execute("DELETE FROM note_chunks WHERE note_id = ?1", [id])?;
+            deleted += tx.execute("DELETE FROM notes WHERE id = ?1", [id])?;
+        }
+        tx.commit()?;
+        Ok(deleted)
+    }
+}
+
 #[cfg(test)]
 mod schema_v3_tests {
     use super::*;

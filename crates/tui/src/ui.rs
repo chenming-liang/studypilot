@@ -50,6 +50,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.wizard.is_some() {
         draw_wizard(f, app);
     }
+    if app.note_browser.is_some() {
+        draw_note_browser(f, app);
+    }
 }
 
 fn draw_header(f: &mut Frame, area: Rect, app: &App) {
@@ -485,6 +488,186 @@ fn draw_list_picker(f: &mut Frame, lp: &ListPicker) {
         ),
         pop,
     );
+}
+
+/// 笔记浏览器：搜索 → 多选 → 动作确认，四态渲染。
+fn draw_note_browser(f: &mut Frame, app: &mut App) {
+    use crate::note_browser::{BatchAction, BrowserMode};
+    let Some(browser) = &app.note_browser else {
+        return;
+    };
+    let area = f.area();
+    let width = 66u16.min(area.width.saturating_sub(2));
+    let height = 18u16.min(area.height.saturating_sub(2));
+    let x = area.x + (area.width - width) / 2;
+    let y = area.y + (area.height - height) / 2;
+    let pop = Rect::new(x, y, width, height);
+    f.render_widget(ratatui::widgets::Clear, pop);
+
+    let inner_w = width.saturating_sub(4) as usize;
+    let mut title = format!(" 浏览笔记 · 范围: {} ", browser.scope_label);
+    let mut body: Vec<Line<'static>> = Vec::new();
+    let footer: String;
+        BrowserMode::Search => {
+            title.push_str("· 搜索");
+            // 搜索词在光标位插 ▍（共享聊天框缓冲）
+            let mut shown = String::new();
+            for (i, ch) in app.input.chars().enumerate() {
+                if i == app.cursor_pos {
+                    shown.push('▍');
+                }
+                shown.push(ch);
+            }
+            if app.cursor_pos >= app.input.chars().count() {
+                shown.push('▍');
+            }
+            body.push(Line::from(Span::styled(
+                format!("  > {shown}"),
+                Style::new().fg(Color::White),
+            )));
+            body.push(Line::default());
+            if browser.loading {
+                body.push(Line::from(Span::styled("  搜索中…", Style::new().fg(DIM))));
+            }
+            for n in &browser.results {
+                let course = app
+                    .courses
+                    .iter()
+                    .find(|(id, _)| Some(*id) == n.course_id)
+                    .map(|(_, name)| name.clone())
+                    .unwrap_or_else(|| "all".into());
+                body.push(Line::from(Span::styled(
+                    format!("  {} ({})", n.title, course),
+                    Style::new().fg(Color::Gray),
+                )));
+            }
+            footer = " 输入过滤 · Enter 进入选择 · Esc 关闭 ".into();
+        }
+        BrowserMode::Select => {
+            title.push_str(&format!(
+                "· 结果 {} · 已选 {}",
+                browser.results.len(),
+                browser.selected_count()
+            ));
+            for (i, n) in browser.results.iter().enumerate() {
+                let mark = if i == browser.cursor { "▸ " } else { "  " };
+                let check = if browser.selected.contains(&n.id) {
+                    "[✓] "
+                } else {
+                    "[ ] "
+                };
+                let style = if i == browser.cursor {
+                    Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+                } else if browser.selected.contains(&n.id) {
+                    Style::new().fg(ACCENT)
+                } else {
+                    Style::new().fg(Color::Gray)
+                };
+                body.push(Line::from(Span::styled(
+                    format!("{mark}{check}{}", n.title),
+                    style,
+                )));
+            }
+            if browser.results.is_empty() {
+                body.push(Line::from(Span::styled(
+                    "  （无匹配笔记）",
+                    Style::new().fg(DIM),
+                )));
+            }
+            footer = " Space 选中 · Ctrl+A 全选 · m 移动 · d 删除 · / 搜索 · Esc 返回 ".into();
+        }
+        BrowserMode::PickTarget => {
+            title.push_str("· 移动到");
+            for (i, (_id, name)) in pick_items(app).into_iter().enumerate() {
+                let mark = if i == browser.pick_cursor {
+                    "❯ "
+                } else {
+                    "  "
+                };
+                let style = if i == browser.pick_cursor {
+                    Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::new().fg(Color::Gray)
+                };
+                body.push(Line::from(Span::styled(format!("{mark}{name}"), style)));
+            }
+            footer = " ↑↓ 选择 · Enter 确认 · Esc 返回 ".into();
+        }
+        BrowserMode::Confirm => {
+            let (ids, titles) = browser.action_targets();
+            let n = ids.len();
+            match browser.action {
+                Some(BatchAction::Move) => {
+                    title.push_str("· 确认移动");
+                    body.push(Line::from(Span::styled(
+                        format!("  将移动 {n} 篇笔记 → {}", browser.move_target_label),
+                        Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
+                    )));
+                }
+                Some(BatchAction::Delete) => {
+                    let strong = n > crate::note_browser::STRONG_CONFIRM_THRESHOLD;
+                    title.push_str(if strong {
+                        "· ⚠ 强确认"
+                    } else {
+                        "· 确认删除"
+                    });
+                    body.push(Line::from(Span::styled(
+                        format!("  将删除 {n} 篇笔记"),
+                        Style::new().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    )));
+                    body.push(Line::from(Span::styled(
+                        "  ⚠ 从知识库移除后无法检索；原始文件不会被删除。",
+                        Style::new().fg(DIM),
+                    )));
+                    if strong {
+                        body.push(Line::from(Span::styled(
+                            format!("  请输入 DELETE 确认：{}", app.input),
+                            Style::new().fg(Color::Yellow),
+                        )));
+                    }
+                }
+                None => {}
+            }
+            // 操作预览（前 8 条）
+            body.push(Line::default());
+            for t in titles.iter().take(8) {
+                body.push(Line::from(Span::styled(
+                    format!("  · {t}"),
+                    Style::new().fg(Color::Gray),
+                )));
+            }
+            if n > 8 {
+                body.push(Line::from(Span::styled(
+                    format!("  · …等 {n} 篇"),
+                    Style::new().fg(DIM),
+                )));
+            }
+            footer = if matches!(browser.action, Some(BatchAction::Delete))
+                && n > crate::note_browser::STRONG_CONFIRM_THRESHOLD
+            {
+                " 输入 DELETE 后 Enter 执行 · Esc 取消 ".into()
+            } else {
+                " Enter 执行 · Esc 返回 ".into()
+            };
+        }
+    }
+    let _ = inner_w;
+    f.render_widget(
+        Paragraph::new(body).block(
+            Block::new()
+                .borders(Borders::ALL)
+                .title(Span::styled(title, Style::new().fg(ACCENT)))
+                .title_bottom(Span::styled(footer, Style::new().fg(DIM)).into_left_aligned_line()),
+        ),
+        pop,
+    );
+}
+
+/// pick_items 与 keys.rs 共用（all 哨兵 -1）。
+fn pick_items(app: &App) -> Vec<(i64, String)> {
+    let mut items = vec![(-1i64, "all（全部）".to_owned())];
+    items.extend(app.courses.iter().cloned());
+    items
 }
 
 /// 参数向导弹窗：单步文本输入（预填默认值），Enter 推进 / Esc 回退。

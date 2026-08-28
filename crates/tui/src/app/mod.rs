@@ -15,6 +15,7 @@ use tokio_util::sync::CancellationToken;
 use crate::review;
 
 use crate::ui;
+mod browser_flow;
 mod chat;
 mod commands;
 mod import_flow;
@@ -103,6 +104,8 @@ pub struct App {
     pub wizard: Option<Wizard>,
     /// 列表选择器；Some 时按键路由给选择器
     pub list_picker: Option<ListPicker>,
+    /// 笔记浏览器（Search→Select→Act）；Some 时按键路由给浏览器
+    pub note_browser: Option<crate::note_browser::NoteBrowser>,
     /// `/sessions` 显式请求后的刷新回调时要打印列表到聊天区（侧栏静默刷新不打印）
     pending_sessions_print: bool,
     should_quit: bool,
@@ -212,6 +215,7 @@ impl App {
             palette: None,
             wizard: None,
             list_picker: None,
+            note_browser: None,
             pending_sessions_print: false,
             should_quit: false,
             tx,
@@ -364,30 +368,12 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
                 app.courses = list;
                 app.sidebar_course_stats = stats;
             }
+            AppEvent::BrowserActionDone {
+                scope_label,
+                result,
+            } => app.on_browser_action_done(scope_label, result),
             AppEvent::ImportProgress(ev) => app.handle_import_event(ev),
-            AppEvent::NotesListed(result) => match result {
-                Ok(notes) => {
-                    if notes.is_empty() {
-                        app.push_entry(Entry::Info("当前分区无笔记".into()));
-                    }
-                    for n in notes {
-                        let course_name: String = app
-                            .courses
-                            .iter()
-                            .find(|(id, _)| Some(*id) == n.course_id)
-                            .map(|(_, name)| name.clone())
-                            .unwrap_or("all".into());
-                        app.push_entry(Entry::Info(format!(
-                            "  [{short}] #{id} {title} ({course})",
-                            short = n.short_id,
-                            id = n.id,
-                            title = n.title,
-                            course = course_name
-                        )));
-                    }
-                }
-                Err(e) => app.push_entry(Entry::Error(format!("列出笔记失败: {e}"))),
-            },
+            AppEvent::BrowserResults { seq, result } => app.on_browser_results(seq, result),
             AppEvent::NotesDeleted(result, desc) => match result {
                 Ok(true) => {
                     app.push_entry(Entry::Info(format!("已删除: {desc}")));

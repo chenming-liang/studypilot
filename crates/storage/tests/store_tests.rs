@@ -308,3 +308,55 @@ fn noise_sources_ranked_below_real_notes() {
         "噪声应被降权到第二"
     );
 }
+
+/// NoteBrowser 数据层：标题搜索 + 按 id 批量删除（FTS/chunk 同步清理）。
+#[test]
+fn title_search_and_batch_delete() {
+    let store = store();
+    let cid = store.get_or_create_course("rust").unwrap();
+    let _ = store.get_or_create_course("csapp").unwrap();
+    let mut ids = Vec::new();
+    for (title, course) in [
+        ("所有权基础", Some(cid)),
+        ("所有权与借用", Some(cid)),
+        ("cache 基础", None),
+    ] {
+        match store
+            .insert_note(NewNote {
+                course_id: course,
+                title,
+                source_path: None,
+                content: &format!("{title} 的内容"),
+                fts_content: None,
+            })
+            .unwrap()
+        {
+            InsertOutcome::Created(n) => ids.push(n.id),
+            InsertOutcome::Duplicate { .. } => panic!("不应去重"),
+        }
+    }
+
+    // 标题搜索：范围=该课程（不含 all 区笔记）
+    let hits = store.search_note_titles("所有权", Some(cid), 50).unwrap();
+    assert_eq!(hits.len(), 2);
+    // 范围=全部
+    let all = store.search_note_titles("", None, 50).unwrap();
+    assert_eq!(all.len(), 3);
+
+    // 批量删除前两篇（rust 课的）——FTS/chunk 行同步清理
+    let deleted = store.delete_notes_by_ids(&ids[..2]).unwrap();
+    assert_eq!(deleted, 2);
+    assert_eq!(
+        store
+            .search_note_titles("所有权", Some(cid), 50)
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(
+        store.search_note_titles("cache", None, 50).unwrap().len(),
+        1
+    );
+    // 空列表安全
+    assert_eq!(store.delete_notes_by_ids(&[]).unwrap(), 0);
+}
