@@ -80,10 +80,14 @@ impl App {
         }
     }
 
+    /// 完成整个复习：从状态渲染摘要卡。`advance_review` 到尾题时调用。
     pub(crate) fn finish_review(&mut self) {
-        let rs = self.review.take();
-        let Some(rs) = rs else { return };
+        let Some(rs) = self.review.take() else { return };
+        self.finish_review_state(rs);
+    }
 
+    /// 渲染复习摘要卡（静态）+ 触发异步 LLM 小结建议。按状态渲染，供完成/中途退出共用。
+    fn finish_review_state(&mut self, rs: review::ReviewState) {
         let total = rs.questions.len();
         let correct_count = rs.results.iter().filter(|r| r.correct).count();
         self.push_entry(Entry::Info("══ Review Complete ══".into()));
@@ -221,15 +225,11 @@ impl App {
     }
 
     pub(crate) fn exit_review(&mut self, msg: &str) {
-        // 中途退出：若有进度，同样出摘要卡（部分完成）
-        let has_progress = self
-            .review
-            .as_ref()
-            .map(|rs| !rs.results.is_empty())
-            .unwrap_or(false);
-        self.review = None;
-        if has_progress {
-            self.finish_review();
+        // 中途退出：若有进度，同样出部分摘要卡（finish_review_state 不依赖 self.review）
+        if let Some(rs) = self.review.take()
+            && !rs.results.is_empty()
+        {
+            self.finish_review_state(rs);
         }
         self.push_entry(Entry::Info(msg.to_owned()));
     }
