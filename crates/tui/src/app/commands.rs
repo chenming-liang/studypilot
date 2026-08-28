@@ -518,3 +518,71 @@ impl App {
         }
     }
 }
+
+#[cfg(test)]
+mod course_delete_tests {
+    use super::*;
+    use crate::app::AppEvent;
+
+    fn test_app() -> App {
+        let cfg = agent_providers::ProviderConfig {
+            name: "test".into(),
+            endpoint: "http://localhost".into(),
+            api_key: Some("k".into()),
+            api_key_env: None,
+            model: "m".into(),
+            price_prompt: 0.0,
+            price_completion: 0.0,
+            context_length: 1000,
+            thinking: false,
+        };
+        let store = Arc::new(Store::open_in_memory().unwrap());
+        // 内存库与传入 App 的课程列表保持一致（真实启动时列表来自该库）
+        store.get_or_create_course("rust").unwrap();
+        store.get_or_create_course("csapp").unwrap();
+        let client = Arc::new(OpenAiClient::new(cfg.clone()).unwrap());
+        App::new(
+            client,
+            store,
+            cfg.clone(),
+            vec![cfg],
+            5.0,
+            vec![(1, "rust".into()), (2, "csapp".into())],
+        )
+    }
+
+    fn drain_events(app: &mut App) {
+        while let Ok(ev) = app.rx.try_recv() {
+            if let AppEvent::CourseManaged(o) = ev {
+                app.on_course_managed(o);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_current_course_switches_to_all() {
+        let mut app = test_app();
+        app.course = "rust".into();
+        app.handle_course_command("-delete rust");
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            drain_events(&mut app);
+        }
+        assert_eq!(app.course, "all", "删除当前课程应回落 all 分区");
+        assert!(!app.courses.iter().any(|(_, n)| n == "rust"));
+    }
+
+    #[tokio::test]
+    async fn delete_other_course_keeps_current() {
+        let mut app = test_app();
+        app.course = "csapp".into();
+        app.handle_course_command("-delete rust");
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            drain_events(&mut app);
+        }
+        assert_eq!(app.course, "csapp", "删除其他课程不应改变当前分区");
+    }
+}
