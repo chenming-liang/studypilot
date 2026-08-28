@@ -441,6 +441,7 @@ impl App {
             }
             CourseAction::Switch(name) => {
                 self.course = name.clone();
+                self.sync_session_course();
                 self.push_entry(Entry::Info(format!("已切换到课程: {name}")));
             }
             CourseAction::Create(name) => {
@@ -475,6 +476,7 @@ impl App {
             CourseAction::SwitchById(id) => match self.courses.iter().find(|(i, _)| *i == id) {
                 Some((_, name)) => {
                     self.course = name.clone();
+                    self.sync_session_course();
                     self.push_entry(Entry::Info(format!("已切换到课程: {name}")));
                 }
                 None => self.push_entry(Entry::Error(format!("课程 #{id} 不存在（可能已删除）"))),
@@ -530,29 +532,7 @@ impl App {
                 }
                 self.request_courses_refresh();
                 self.push_entry(Entry::Info(msg));
-                // 会话归属跟随当前分区（含删除课程回落 all 的情况）
-                if let SessionState::Ready { id, .. } = &self.session_state {
-                    let sid = *id;
-                    let new_course = self.current_course_id();
-                    let store = Arc::clone(&self.store);
-                    let tx = self.tx.clone();
-                    tokio::spawn(async move {
-                        let _ = spawn_blocking({
-                            let store = Arc::clone(&store);
-                            move || store.update_session_course(sid, new_course)
-                        })
-                        .await;
-                        if let Ok(list) =
-                            spawn_blocking(move || store.list_sessions().map_err(|e| e.to_string()))
-                                .await
-                                .map_err(|e| e.to_string())
-                                .and_then(|r| r)
-                        {
-                            let _ = tx.send(AppEvent::SessionsLoaded(list));
-                        }
-                    });
-                }
-            }
+                self.sync_session_course();
             Err(e) => self.push_entry(Entry::Error(format!("课程操作失败: {e}"))),
         }
     }

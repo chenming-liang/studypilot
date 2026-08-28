@@ -374,6 +374,33 @@ impl App {
         }
     }
 
+    /// 会话归属跟随当前分区：切换分区后同步 sessions.course_id 并刷新列表。
+    /// Switch（同步分支）与 on_course_managed（异步课程操作）共用。
+    pub(crate) fn sync_session_course(&mut self) {
+        if let SessionState::Ready { id, .. } = &self.session_state {
+            let sid = *id;
+            let new_course = self.current_course_id();
+            let store = Arc::clone(&self.store);
+            let tx = self.tx.clone();
+            tokio::spawn(async move {
+                let _ = spawn_blocking({
+                    let store = Arc::clone(&store);
+                    move || store.update_session_course(sid, new_course)
+                })
+                .await;
+                if let Ok(list) = spawn_blocking(move || {
+                    store.list_sessions().map_err(|e| e.to_string())
+                })
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|r| r)
+                {
+                    let _ = tx.send(AppEvent::SessionsLoaded(list));
+                }
+            });
+        }
+    }
+
     pub(crate) fn print_session_list(&mut self) {
         let lines: Vec<String> = self
             .sidebar_sessions
