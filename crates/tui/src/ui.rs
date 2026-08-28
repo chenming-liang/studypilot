@@ -11,10 +11,14 @@ use crate::app::{App, Entry, ModelPicker};
 use crate::markdown;
 use crate::palette::ListPicker;
 
-const ACCENT: Color = Color::Cyan;
-const DIM: Color = Color::DarkGray;
-const USER: Color = Color::Yellow;
-const ERROR: Color = Color::Red;
+use crate::theme;
+
+// 语义别名（既有代码引用点不动，值全部来自 theme）
+const ACCENT: Color = theme::PRIMARY; // 选中/结构/应用名
+const DIM: Color = theme::MUTED; // metadata/提示
+const USER: Color = theme::USER; // 用户输入/Review
+const ERROR: Color = theme::ERROR; // 错误
+const SUCCESS: Color = theme::SUCCESS; // Ready/✓/成功
 
 /// Braille spinner 字符（8 帧）。
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -73,7 +77,7 @@ fn draw_toast(f: &mut Frame, app: &App) {
     let y = area.y + 4; // header 之下，贴右上
     let pop = Rect::new(x, y, width, height);
     f.render_widget(ratatui::widgets::Clear, pop);
-    let color = if toast.error { ERROR } else { Color::Green };
+    let color = if toast.error { ERROR } else { SUCCESS };
     let remaining = toast
         .expires_at
         .saturating_duration_since(Instant::now())
@@ -127,7 +131,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         Span::raw(" ".repeat(pad)),
         Span::styled(
             format!("{} · ", app.provider_cfg.model),
-            Style::new().fg(Color::Magenta),
+            Style::new().fg(theme::SECONDARY_DIM),
         ),
         Span::styled(
             format!(
@@ -138,7 +142,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
                     "快速"
                 }
             ),
-            Style::new().fg(Color::Magenta),
+            Style::new().fg(theme::SECONDARY_DIM),
         ),
         Span::styled(
             format!("¥{:.2}/{:.0} │ ", app.total_cost, app.max_cost),
@@ -162,9 +166,10 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
     let mut items: Vec<ListItem> = Vec::new();
+    // 分区标题：大写 + 暗色（导航语义，不抢正文注意力）
     items.push(ListItem::new(Line::from(Span::styled(
-        "📚 Courses",
-        Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
+        " COURSES",
+        Style::new().fg(theme::MUTED).add_modifier(Modifier::BOLD),
     ))));
     items.push(ListItem::new(Line::from(Span::styled(
         "  all",
@@ -172,9 +177,11 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
     ))));
 
     for (id, name) in &app.courses {
+        let is_current = *name == app.course;
         let style = sidebar_style(name, &app.course);
+        let mark = if is_current { "●" } else { " " };
         items.push(ListItem::new(Line::from(Span::styled(
-            format!("  {name}"),
+            format!(" {mark} {name}"),
             style,
         ))));
         if let Some((notes, concepts)) = app.sidebar_course_stats.get(id) {
@@ -188,8 +195,8 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
 
     items.push(ListItem::new(Line::default())); // 空行
     items.push(ListItem::new(Line::from(Span::styled(
-        "Recent",
-        Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
+        " RECENT",
+        Style::new().fg(theme::MUTED).add_modifier(Modifier::BOLD),
     ))));
     let row_w = area.width as usize;
     for s in app.sidebar_sessions.iter().take(6) {
@@ -228,7 +235,7 @@ fn sidebar_style(name: &str, current: &str) -> Style {
     if name == current {
         Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
     } else {
-        Style::new()
+        Style::new().fg(theme::MUTED)
     }
 }
 
@@ -253,7 +260,7 @@ fn draw_chat(f: &mut Frame, area: Rect, app: &mut App) {
         if app.is_inflight() {
             let spinner = spinner_char(app.tick);
             lines.push(Line::from(vec![
-                Span::styled(format!("{spinner} "), Style::new().fg(Color::Yellow)),
+                Span::styled(format!("{spinner} "), Style::new().fg(theme::USER)),
                 Span::styled("思考中…", Style::new().fg(DIM)),
             ]));
             text_lines.push(format!("{spinner} 思考中…"));
@@ -292,11 +299,10 @@ fn draw_chat(f: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn append_entry_lines(entry: &Entry, width: usize, out: &mut Vec<Line<'static>>) {
+    // 用户/AI/系统：前缀着色（语义），正文回归浅灰——两套视觉语言
     match entry {
-        Entry::Info(text) => push_styled_wrapped(out, format!("· {text}"), width, Some(DIM), None),
-        Entry::User(text) => {
-            push_styled_wrapped(out, format!("你 › {text}"), width, Some(USER), None)
-        }
+        Entry::Info(text) => push_prefixed_wrapped(out, "· ", DIM, text, theme::FG, width),
+        Entry::User(text) => push_prefixed_wrapped(out, "你 › ", USER, text, theme::FG, width),
         Entry::Assistant {
             content,
             reasoning_chars,
@@ -307,10 +313,12 @@ fn append_entry_lines(entry: &Entry, width: usize, out: &mut Vec<Line<'static>>)
                     Style::new().fg(DIM),
                 )));
             }
-            // Answer 标识（符号+空行，不用横线框）
+            // AI 前缀：Secondary 蓝紫（与用户暖黄形成两套视觉语言）
             out.push(Line::from(Span::styled(
-                "✦ Answer".to_owned(),
-                Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                "StudyPilot ›".to_owned(),
+                Style::new()
+                    .fg(theme::SECONDARY)
+                    .add_modifier(Modifier::BOLD),
             )));
             out.push(Line::default()); // 空行呼吸
             // Markdown 渲染
@@ -318,23 +326,38 @@ fn append_entry_lines(entry: &Entry, width: usize, out: &mut Vec<Line<'static>>)
             out.extend(md_lines);
             out.push(Line::default()); // 空行呼吸
         }
-        Entry::Error(text) => {
-            push_styled_wrapped(out, format!("✗ {text}"), width, Some(ERROR), None)
-        }
+        Entry::Error(text) => push_prefixed_wrapped(out, "✗ ", ERROR, text, theme::FG, width),
     }
 }
 
-/// 带样式折行：首行与续行同色；`suffix_note` 追加在末尾（未用）。
-fn push_styled_wrapped(
+/// 前缀着色 + 正文浅灰的折行：首行带彩色前缀，续行按前缀宽度缩进对齐。
+fn push_prefixed_wrapped(
     out: &mut Vec<Line<'static>>,
-    text: String,
+    prefix: &str,
+    prefix_color: Color,
+    text: &str,
+    body_color: Color,
     width: usize,
-    color: Option<Color>,
-    _unused: Option<()>,
 ) {
-    for l in wrap(&text, width) {
-        let style = Style::new().fg(color.unwrap_or(Color::Reset));
-        out.push(Line::from(Span::styled(l, style)));
+    let pw = display_width(prefix);
+    let body_w = width.saturating_sub(pw);
+    let body_style = Style::new().fg(body_color);
+    let prefix_span = Span::styled(prefix.to_owned(), Style::new().fg(prefix_color));
+    let indent = " ".repeat(pw);
+    let mut first = true;
+    for seg in wrap(text, body_w.max(4)) {
+        if first {
+            out.push(Line::from(vec![
+                prefix_span.clone(),
+                Span::styled(seg, body_style),
+            ]));
+            first = false;
+        } else {
+            out.push(Line::from(vec![
+                Span::raw(indent.clone()),
+                Span::styled(seg, body_style),
+            ]));
+        }
     }
 }
 
@@ -373,12 +396,12 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     let display_input = if app.input.is_empty() && !app.is_inflight() {
         let ph = format!("Ask {}...", app.course);
         vec![
-            Span::styled("> ", Style::new().fg(ACCENT)),
+            Span::styled("› ", Style::new().fg(ACCENT)),
             Span::styled(ph, Style::new().fg(DIM)),
         ]
     } else {
         vec![
-            Span::styled("> ", Style::new().fg(ACCENT)),
+            Span::styled("› ", Style::new().fg(ACCENT)),
             Span::raw(app.input.clone()),
         ]
     };
@@ -392,7 +415,7 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
         area,
     );
 
-    // 光标定位：第 2 行（hint 下方），边框(0) + "> "(2)
+    // 光标定位：第 2 行（hint 下方），前缀 "› "(2)
     let prefix_width: usize = app
         .input
         .chars()
@@ -618,7 +641,7 @@ fn draw_session_browser(f: &mut Frame, app: &App) {
             }
             body.push(Line::from(Span::styled(
                 format!("  > {shown}"),
-                Style::new().fg(Color::White),
+                Style::new().fg(theme::FG),
             )));
             body.push(Line::default());
             if browser.loading {
@@ -699,7 +722,7 @@ fn draw_session_browser(f: &mut Frame, app: &App) {
             }
             body.push(Line::from(Span::styled(
                 format!("  新标题 > {shown}"),
-                Style::new().fg(Color::White),
+                Style::new().fg(theme::FG),
             )));
             " Enter 确认 · Esc 取消 ".into()
         }
@@ -773,7 +796,7 @@ fn draw_note_browser(f: &mut Frame, app: &mut App) {
             }
             body.push(Line::from(Span::styled(
                 format!("  > {shown}"),
-                Style::new().fg(Color::White),
+                Style::new().fg(theme::FG),
             )));
             body.push(Line::default());
             if browser.loading {
@@ -859,7 +882,7 @@ fn draw_note_browser(f: &mut Frame, app: &mut App) {
                     title.push_str("· 确认移动");
                     body.push(Line::from(Span::styled(
                         format!("  将移动 {n} 篇笔记 → {}", browser.move_target_label),
-                        Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
+                        Style::new().fg(theme::FG).add_modifier(Modifier::BOLD),
                     )));
                 }
                 Some(BatchAction::Delete) => {
@@ -880,7 +903,7 @@ fn draw_note_browser(f: &mut Frame, app: &mut App) {
                     if strong {
                         body.push(Line::from(Span::styled(
                             format!("  请输入 DELETE 确认：{}", app.input),
-                            Style::new().fg(Color::Yellow),
+                            Style::new().fg(theme::USER),
                         )));
                     }
                 }
@@ -971,7 +994,7 @@ fn draw_wizard(f: &mut Frame, app: &App) {
         Line::from(""),
         Line::from(Span::styled(
             format!("  > {value}"),
-            Style::new().fg(Color::White),
+            Style::new().fg(theme::FG),
         )),
         Line::from(""),
         Line::from(Span::styled(

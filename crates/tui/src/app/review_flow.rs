@@ -87,17 +87,38 @@ impl App {
             return;
         };
 
+        // 进度圆点：✓ 答对 · ✗ 答错 · ● 当前 · ○ 未到（Review 进度感）
+        let mut dots = String::new();
+        let answered = self
+            .review
+            .as_ref()
+            .map(|rs| rs.results.clone())
+            .unwrap_or_default();
+        for r in &answered {
+            if !dots.is_empty() {
+                dots.push(' ');
+            }
+            dots.push(if r.correct { '✓' } else { '✗' });
+        }
+        for i in answered.len()..total {
+            if !dots.is_empty() {
+                dots.push(' ');
+            }
+            dots.push(if i == current { '●' } else { '○' });
+        }
+        self.push_entry(Entry::Info(format!("Review · {dots}")));
         let type_str = if q.q_type == review::QType::Choice {
             "选择题"
         } else {
             "简答题"
         };
         self.push_entry(Entry::Info(format!(
-            "[{}/{}] {type_str}",
+            "Question {}/{} · {type_str}",
             current + 1,
             total
         )));
-        self.push_entry(Entry::User(q.question.clone()));
+        // 题干用 USER 暖黄（Review 模式语义色）
+        self.entries.push(Entry::User(q.question.clone()));
         if q.q_type == review::QType::Choice {
             for (i, opt) in q.options.iter().enumerate() {
                 self.push_entry(Entry::Info(format!("  {}. {opt}", i + 1)));

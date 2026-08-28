@@ -11,6 +11,7 @@ mod outline_render;
 mod palette;
 mod review;
 mod session_browser;
+mod theme;
 mod ui;
 mod wizard;
 

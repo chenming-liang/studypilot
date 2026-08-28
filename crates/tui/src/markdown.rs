@@ -6,10 +6,14 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const HEAD: Color = Color::White;
-const BODY: Color = Color::Gray;
-const CODE: Color = Color::LightYellow;
-const REF: Color = Color::Blue;
+use crate::theme;
+// Markdown 语义：标题=Secondary 紫（层级渐淡）、正文=FG 浅灰、
+// 行内代码=暖白、[n] 引用=Reference 青（RAG 品牌色）
+const HEAD: Color = theme::SECONDARY;
+const HEAD2: Color = theme::SECONDARY_DIM;
+const BODY: Color = theme::FG;
+const CODE: Color = theme::CODE_FG;
+const REF: Color = theme::REFERENCE;
 
 /// 把 Markdown 文本渲染为 ratatui Line 列表（已按显示宽度折行由调用方处理）。
 pub fn render_markdown(text: &str, width: usize) -> Vec<Line<'static>> {
@@ -58,8 +62,10 @@ pub fn render_markdown(text: &str, width: usize) -> Vec<Line<'static>> {
                 heading_level = level as u32;
                 current.clear();
             }
-            Event::End(TagEnd::Heading(_)) => {
-                let style = Style::new().fg(HEAD).add_modifier(Modifier::BOLD);
+            Event::End(TagEnd::Heading(level)) => {
+                // 层级视觉：H1 紫 + 粗；H2+ 淡紫 + 粗（自然形成 紫→淡紫→正文 渐变）
+                let color = if level as u32 == 1 { HEAD } else { HEAD2 };
+                let style = Style::new().fg(color).add_modifier(Modifier::BOLD);
                 for l in current.flush_as_lines(width, style) {
                     lines.push(l);
                 }
