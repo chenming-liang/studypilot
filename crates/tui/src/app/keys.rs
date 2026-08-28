@@ -878,7 +878,7 @@ impl App {
                 self.cursor_pos = 0;
                 let done = self.wizard.as_mut().unwrap().confirm(value);
                 if done {
-                    self.wizard = None;
+                    // 数据在 finish_wizard 内读取后才清理
                     self.finish_wizard();
                 } else {
                     self.enter_wizard_step();

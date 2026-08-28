@@ -158,6 +158,7 @@ impl App {
     }
 
     pub(crate) fn on_review_ready(&mut self, result: Result<review::ReviewState, String>) {
+        self.inflight = None; // 出题/取消完成
         self.request_cost_sync();
         match result {
             Ok(rs) => {

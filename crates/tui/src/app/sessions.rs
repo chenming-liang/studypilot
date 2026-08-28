@@ -723,6 +723,7 @@ impl App {
         let values = w.values();
         let kind = w.kind().clone();
         let course_name = w.course_name().to_owned();
+        // 数据克隆完毕后才清向导（调用方不得提前置 None）
         self.wizard = None;
         self.drop_input_backup();
         self.input.clear();
@@ -806,5 +807,42 @@ impl App {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod finish_wizard_tests {
+    use super::super::commands::course_delete_tests::test_app;
+    use super::*;
+
+    /// 回归：finish_wizard 必须在向导数据读取之后才清理——
+    /// 此前调用方先置 None 导致所有向导动作静默失效。
+    #[test]
+    fn finish_dispatches_review_with_data() {
+        let mut app = test_app();
+        app.course = "rust".into();
+        app.wizard = Some(crate::wizard::Wizard::new_review(Some(1), "rust".into()));
+        // 模拟两步确认
+        let w = app.wizard.as_mut().unwrap();
+        assert!(!w.confirm("ownership".into()));
+        assert!(w.confirm("3".into()));
+        // 调用方不清 wizard，直接 finish（修复后的顺序）
+        app.finish_wizard();
+
+        assert!(app.wizard.is_none(), "向导应被清理");
+        assert!(
+            app.entries.iter().any(
+                |e| matches!(e, Entry::Info(t) if t.contains("开始出题") && t.contains("ownership"))
+            ),
+            "应执行出题: {:?}",
+            app.entries
+        );
+    }
+
+    #[test]
+    fn finish_without_wizard_is_noop() {
+        let mut app = test_app();
+        app.finish_wizard();
+        assert!(app.wizard.is_none());
     }
 }

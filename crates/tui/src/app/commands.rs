@@ -254,6 +254,9 @@ impl App {
         let provider_cfg = self.provider_cfg.clone();
         let store = Arc::clone(&self.store);
         let tx = self.tx.clone();
+        // 出题期间挂 inflight：header 显示进行中，Ctrl+C 可取消
+        let cancel = CancellationToken::new();
+        self.inflight = Some(cancel.clone());
 
         self.push_entry(Entry::Info(format!(
             "开始出题: 《{course_name}》范围「{scope}」，{n} 题"
@@ -269,7 +272,7 @@ impl App {
                 scope,
                 n,
                 tx,
-                CancellationToken::new(),
+                cancel,
             )
             .await;
         });
@@ -573,7 +576,7 @@ impl App {
 }
 
 #[cfg(test)]
-mod course_delete_tests {
+pub(crate) mod course_delete_tests {
     use super::*;
     use crate::app::AppEvent;
 

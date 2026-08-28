@@ -205,6 +205,8 @@ pub async fn start_review(
 
     // ③ D4 降级链
     let content = if cancel.is_cancelled() {
+        // 取消也要发事件，否则 on_review_ready 不触发、inflight 卡死
+        let _ = tx.send(AppEvent::ReviewReady(Err("已取消".into())));
         return;
     } else {
         match provider.chat_json(&messages).await {
