@@ -8,7 +8,7 @@ use tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
 use tools::{ListCoursesTool, SearchNotesTool};
 
-use super::{AgentEvent, App, AppEvent, Entry, SessionState};
+use super::{AgentEvent, App, AppEvent, Entry, SessionState, extract_citations};
 use storage::Store;
 
 impl App {
@@ -157,10 +157,18 @@ impl App {
                         lines.join("\n")
                     )));
                 }
+                // RAG 来源脚注：把回答里的 [n] 映射到实际笔记（只列被引用的）
+                let citations = extract_citations(&new_messages, &content);
                 self.push_entry(Entry::Assistant {
                     content,
                     reasoning_chars,
                 });
+                if !citations.is_empty() {
+                    self.entries.push(Entry::Info("── 来源 ──".into()));
+                    for (n, src) in citations {
+                        self.entries.push(Entry::Citation(format!("[{n}] {src}")));
+                    }
+                }
                 self.inflight = None;
                 self.record_usage(usage);
             }

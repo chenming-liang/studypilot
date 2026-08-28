@@ -326,6 +326,13 @@ fn append_entry_lines(entry: &Entry, width: usize, out: &mut Vec<Line<'static>>)
             out.extend(md_lines);
             out.push(Line::default()); // 空行呼吸
         }
+        Entry::Citation(text) => {
+            // RAG 品牌色：引用来源行整体 Reference 青
+            out.push(Line::from(Span::styled(
+                format!("  {text}"),
+                Style::new().fg(theme::REFERENCE),
+            )));
+        }
         Entry::Error(text) => push_prefixed_wrapped(out, "✗ ", ERROR, text, theme::FG, width),
     }
 }

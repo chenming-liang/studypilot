@@ -95,5 +95,7 @@ pub enum Entry {
         content: String,
         reasoning_chars: Option<usize>,
     },
+    /// RAG 来源脚注行（"[n] 标题 · 小节"，Reference 青色渲染）
+    Citation(String),
     Error(String),
 }

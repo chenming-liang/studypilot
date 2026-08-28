@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use agent_core::{Message, Usage};
+use agent_core::{Message, Role, Usage};
 use agent_providers::{OpenAiClient, ProviderConfig};
 use crossterm::event::Event as CtEvent;
 use ratatui::DefaultTerminal;
@@ -114,6 +114,66 @@ pub struct App {
 
     tx: UnboundedSender<AppEvent>,
     rx: UnboundedReceiver<AppEvent>,
+}
+
+/// 从文本提取引用编号：`[数字]`（去重升序；[0] 不算——资料编号从 1 起）。
+pub(crate) fn extract_ref_numbers(text: &str) -> Vec<usize> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'[' {
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > i + 1
+                && j < bytes.len()
+                && bytes[j] == b']'
+                && let Ok(n) = text[i + 1..j].parse::<usize>()
+                && n > 0
+            {
+                out.push(n);
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// 从 agent loop 的 tool 消息中提取 search_notes 结果的 (编号 → 来源) 映射，
+/// 返回回答中**实际被引用**的编号及来源（"标题 · 小节"）。
+/// 多次搜索时同编号以最后出现为准（模型按就近的 tool 结果理解 [n]）。
+pub(crate) fn extract_citations(new_messages: &[Message], answer: &str) -> Vec<(usize, String)> {
+    let mut map: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+    for m in new_messages {
+        if m.role != Role::Tool {
+            continue;
+        }
+        let Some(c) = &m.content else { continue };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(c) else {
+            continue;
+        };
+        let Some(results) = v.get("results").and_then(|r| r.as_array()) else {
+            continue;
+        };
+        for r in results {
+            let id = r.get("id").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+            if id == 0 {
+                continue;
+            }
+            let title = r.get("title").and_then(|x| x.as_str()).unwrap_or("");
+            let section = r.get("section").and_then(|x| x.as_str()).unwrap_or("");
+            map.insert(id, format!("{title} · {section}"));
+        }
+    }
+    let mut cited = extract_ref_numbers(answer);
+    cited.retain(|n| map.contains_key(n));
+    cited.into_iter().map(|n| (n, map[&n].clone())).collect()
 }
 
 /// 命令参数规范化：剥掉照抄文档产生的 `<...>` 占位符 token（约定：占位符
