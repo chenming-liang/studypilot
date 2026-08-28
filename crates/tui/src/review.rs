@@ -211,7 +211,7 @@ pub async fn start_review(
 
     let messages = [
         Message::system(
-            "只输出 JSON 本体（不要用代码块包裹整个输出）；题干或解析中需要展示的代码，请用 ```c 等围栏标注。",
+            "只输出 JSON 本体（不要用代码块包裹整个输出）。题干或解析中的代码用 ```c 等围栏包裹（写在 JSON 字符串内，换行用 \\n 转义）。",
         ),
         Message::user(&prompt),
     ];
@@ -469,12 +469,74 @@ pub async fn grade_short_answer(
     ));
 }
 
-/// 解析出题 JSON（D4 降级链：直解 → 截取第一个 {...} 块）。
+/// 解析出题 JSON（D4 降级链：直解 → 截取第一个 {...} 块），并对文本字段
+/// 做 LLM 输出规范化（换行双重转义还原）。
 fn parse_quiz_json(content: &str) -> Option<QuizResponse> {
     let trimmed = agent_core::trim_code_fence(content);
-    serde_json::from_str::<QuizResponse>(trimmed)
-        .ok()
-        .or_else(|| {
-            agent_core::first_json_block(trimmed).and_then(|b| serde_json::from_str(b).ok())
-        })
+    let mut quiz: QuizResponse =
+        serde_json::from_str::<QuizResponse>(trimmed)
+            .ok()
+            .or_else(|| {
+                agent_core::first_json_block(trimmed).and_then(|b| serde_json::from_str(b).ok())
+            })?;
+    for q in &mut quiz.questions {
+        q.question = normalize_text(&q.question);
+        q.explanation = q.explanation.as_deref().map(normalize_text);
+        for o in &mut q.options {
+            *o = normalize_text(o);
+        }
+        for k in &mut q.key_points {
+            *k = normalize_text(k);
+        }
+    }
+    Some(quiz)
+}
+
+/// LLM 输出规范化：模型在 JSON 里常把换行写成 `\\n`（双重转义，JSON 解析后是
+/// 字面反斜杠+n），渲染成一行很丑。这里把字面 `\n`/`\t` 还原为真实换行/制表符。
+/// （已知局限：C 字符串字面量里真正的 `\n` 也会被还原，但实际几乎都是行分隔。）
+fn normalize_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod quiz_parse_tests {
+    use super::*;
+
+    #[test]
+    fn normalize_converts_double_escaped_newline() {
+        // 字面 `\n`（反斜杠+n 两个字符）→ 真实换行；`\t` → 制表符
+        let s = "int main() {\\n    return 0;\\n}";
+        assert_eq!(normalize_text(s), "int main() {\n    return 0;\n}");
+        // 普通反斜杠（如 Windows 路径）不受影响
+        assert_eq!(normalize_text("a\\b"), "a\\b");
+    }
+
+    #[test]
+    fn parse_quiz_json_normalizes_question_text() {
+        // LLM 在 JSON 里把换行双重转义为 \\n（转义反斜杠+n），解析后须还原
+        let json = r#"{"questions":[{"type":"short_answer","question":"执行以下代码：\\nint fd1;\\nprintf(\"c1\");","options":[],"answer":null,"key_points":[],"explanation":null,"concept":null}]}"#;
+        let q = parse_quiz_json(json).unwrap();
+        assert_eq!(
+            q.questions[0].question,
+            "执行以下代码：\nint fd1;\nprintf(\"c1\");"
+        );
+    }
 }
