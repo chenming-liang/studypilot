@@ -678,7 +678,6 @@ mod selection_mapping_tests {
 #[cfg(test)]
 mod overlay_backup_tests {
     use super::course_delete_tests::test_app;
-    use super::*;
 
     /// 回归：覆盖层备份嵌套守卫——二次 take 不得覆盖首次备份，
     /// 否则浏览器 Select→Search 再关闭时，原聊天内容丢失。
