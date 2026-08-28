@@ -484,6 +484,34 @@ impl App {
                     Ok((msg, list, switch_to))
                 });
             }
+            CourseAction::SwitchById(id) => match self.courses.iter().find(|(i, _)| *i == id) {
+                Some((_, name)) => {
+                    self.course = name.clone();
+                    self.push_entry(Entry::Info(format!("已切换到课程: {name}")));
+                }
+                None => self.push_entry(Entry::Error(format!("课程 #{id} 不存在（可能已删除）"))),
+            },
+            CourseAction::DeleteById(id) => {
+                let Some((_, name)) = self.courses.iter().find(|(i, _)| *i == id).cloned() else {
+                    self.push_entry(Entry::Error(format!("课程 #{id} 不存在（可能已删除）")));
+                    return;
+                };
+                let is_current = self.course == name;
+                let name2 = name.clone();
+                self.run_course_op(move |store| {
+                    let deleted = store.delete_course_by_id(id).map_err(|e| e.to_string())?;
+                    if !deleted {
+                        return Err(format!("课程 #{id} 不存在"));
+                    }
+                    let list = store.list_courses().map_err(|e| e.to_string())?;
+                    let switch_to = is_current.then(|| "all".to_owned());
+                    Ok((
+                        format!("已删除课程: {name2}（其笔记已回落 all 区）"),
+                        list,
+                        switch_to,
+                    ))
+                });
+            }
             CourseAction::Invalid(msg) => self.push_entry(Entry::Error(msg)),
         }
     }

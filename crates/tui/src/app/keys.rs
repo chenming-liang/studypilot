@@ -442,9 +442,10 @@ impl App {
                     label: "all（全部）".into(),
                     command: "/course all".into(),
                 }];
-                items.extend(self.courses.iter().map(|(_, name)| ListChoice {
+                items.extend(self.courses.iter().map(|(id, name)| ListChoice {
                     label: name.clone(),
-                    command: format!("/course {name}"),
+                    // id 定位：课程名含任何字符（空格/尖括号）都不影响
+                    command: format!("/course --id {id}"),
                 }));
                 ("切换课程分区".to_owned(), items)
             }
@@ -452,9 +453,9 @@ impl App {
                 "删除课程（其笔记回落 all 区）".to_owned(),
                 self.courses
                     .iter()
-                    .map(|(_, name)| ListChoice {
+                    .map(|(id, name)| ListChoice {
                         label: name.clone(),
-                        command: format!("/course -delete {name}"),
+                        command: format!("/course -delete --id {id}"),
                     })
                     .collect(),
             ),

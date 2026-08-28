@@ -12,22 +12,45 @@ pub(crate) enum CourseAction {
     Create(String),
     /// 删除课程（已校验存在且非 all）
     Delete(String),
+    /// 按 id 切换（ListPicker 产出，名字对解析免疫）
+    SwitchById(i64),
+    /// 按 id 删除课程（ListPicker 产出）
+    DeleteById(i64),
     /// 用法错误（信息即帮助）
     Invalid(String),
 }
 
+/// 解析 `/course`。两条正交规则，无状态依赖：
+/// ① 输入规范化：`<...>` 占位符 token（照抄文档产物）无条件剥除——
+///    课程名里没有任何合理场景需要尖括号；字面含 `<>` 的存量脏课程
+///    经 ListPicker 按 id 定位（见 --id 旗标），不走名字解析。
+/// ② 名字定位：旗标后的 token 重新拼接；切换按整段精确匹配 known 消歧。
 pub(crate) fn parse_course_action(arg: &str, known: &[String]) -> CourseAction {
     let arg = arg.trim();
     if arg.is_empty() || arg == "-list" {
         return CourseAction::List;
     }
 
-    // 容错：剥掉照抄文档产生的 <名>/<课程> 占位符 token
+    // ① 规范化：剥占位符
     let tokens: Vec<&str> = arg
         .split_whitespace()
         .filter(|t| !(t.starts_with('<') && t.ends_with('>')))
         .collect();
+    if tokens.is_empty() {
+        return CourseAction::Invalid(
+            "用法: /course [-list | <课程|all> | -new <名> | -delete <名>]".into(),
+        );
+    }
     match tokens.as_slice() {
+        // ② id 定位（ListPicker 产出）：对课程名的任何字符免疫
+        ["--id", id] => match id.parse::<i64>() {
+            Ok(n) if n > 0 => CourseAction::SwitchById(n),
+            _ => CourseAction::Invalid(format!("非法课程 id `{id}`")),
+        },
+        ["-delete", "--id", id] => match id.parse::<i64>() {
+            Ok(n) if n > 0 => CourseAction::DeleteById(n),
+            _ => CourseAction::Invalid(format!("非法课程 id `{id}`")),
+        },
         // -new / -delete：旗标后的全部 token 重新拼接为课程名（允许多词）
         ["-new", rest @ ..] if !rest.is_empty() => CourseAction::Create(rest.join(" ")),
         ["-new"] => CourseAction::Invalid("用法: /course -new <课程名>".into()),
@@ -303,6 +326,25 @@ mod review_tests {
 mod placeholder_tests {
     use super::tests::known;
     use super::*;
+
+    /// id 定位：ListPicker 产出，与课程名字符无关（含尖括号的脏名也能删）。
+    #[test]
+    fn id_targeting_ignores_name_characters() {
+        let mut k = known();
+        k.push("<名> rust".into());
+        assert_eq!(
+            parse_course_action("--id 1", &k),
+            CourseAction::SwitchById(1)
+        );
+        assert_eq!(
+            parse_course_action("-delete --id 1", &k),
+            CourseAction::DeleteById(1)
+        );
+        assert!(matches!(
+            parse_course_action("-delete --id 0", &k),
+            CourseAction::Invalid(_)
+        ));
+    }
 
     /// 容错：照抄文档占位符（`-new <名> rust`）应剥掉占位符正常创建。
     #[test]

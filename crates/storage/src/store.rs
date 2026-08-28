@@ -230,10 +230,17 @@ impl Store {
         Ok((notes as usize, concepts as usize))
     }
     /// 删除课程。notes/concepts 的 course_id 由 ON DELETE SET NULL 回落 all 区，
-    /// 数据不丢（规划「课程分区」一节）。返回是否真的删了。
+    /// 数据不丢。返回是否真的删了。
     pub fn delete_course(&self, name: &str) -> Result<bool> {
         let conn = self.conn.lock().unwrap();
         let affected = conn.execute("DELETE FROM courses WHERE name = ?1", [name])?;
+        Ok(affected > 0)
+    }
+
+    /// 按 id 删除课程（UI 选择器用——id 对课程名的任何字符免疫）。
+    pub fn delete_course_by_id(&self, id: i64) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn.execute("DELETE FROM courses WHERE id = ?1", [id])?;
         Ok(affected > 0)
     }
 
