@@ -608,7 +608,6 @@ fn draw_session_browser(f: &mut Frame, app: &App) {
         }
         SessionBrowserMode::Select => {
             title.push_str("· 选择");
-            browser.ensure_cursor_visible(SESSION_LIST_VISIBLE);
             for (i, m) in browser
                 .results
                 .iter()
