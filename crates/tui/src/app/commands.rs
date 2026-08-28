@@ -537,9 +537,11 @@ impl App {
                     let store = Arc::clone(&self.store);
                     let tx = self.tx.clone();
                     tokio::spawn(async move {
-                        let _ =
-                            spawn_blocking(move || store.update_session_course(sid, new_course))
-                                .await;
+                        let _ = spawn_blocking({
+                            let store = Arc::clone(&store);
+                            move || store.update_session_course(sid, new_course)
+                        })
+                        .await;
                         if let Ok(list) =
                             spawn_blocking(move || store.list_sessions().map_err(|e| e.to_string()))
                                 .await
