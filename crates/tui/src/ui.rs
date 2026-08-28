@@ -493,6 +493,12 @@ fn draw_list_picker(f: &mut Frame, lp: &ListPicker) {
 /// 笔记浏览器：搜索 → 多选 → 动作确认，四态渲染。
 fn draw_note_browser(f: &mut Frame, app: &mut App) {
     use crate::note_browser::{BatchAction, BrowserMode};
+    // PickTarget 渲染需要 app.courses，先于 browser 可变借用取好
+    let is_pick = matches!(
+        app.note_browser.as_ref().map(|b| b.mode),
+        Some(crate::note_browser::BrowserMode::PickTarget)
+    );
+    let pick_items: Vec<(i64, String)> = if is_pick { pick_items(app) } else { Vec::new() };
     let Some(browser) = app.note_browser.as_mut() else {
         return;
     };
@@ -586,7 +592,7 @@ fn draw_note_browser(f: &mut Frame, app: &mut App) {
         }
         BrowserMode::PickTarget => {
             title.push_str("· 移动到");
-            for (i, (_id, name)) in pick_items(app).into_iter().enumerate() {
+            for (i, (_id, name)) in pick_items.into_iter().enumerate() {
                 let mark = if i == browser.pick_cursor {
                     "❯ "
                 } else {

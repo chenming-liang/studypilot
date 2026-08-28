@@ -117,13 +117,19 @@ impl NoteBrowser {
 
     /// 滚动起点随光标对齐（经典 listbox 逻辑）：保证 cursor 行落在视口内。
     pub fn ensure_cursor_visible(&mut self, visible: usize) {
+        let idx = self.cursor;
+        self.ensure_index_visible(idx, visible);
+    }
+
+    /// 通用：保证第 index 行落在视口内（PickTarget 的 pick_cursor 也用它）。
+    pub fn ensure_index_visible(&mut self, index: usize, visible: usize) {
         if visible == 0 {
             return;
         }
-        if self.cursor < self.scroll {
-            self.scroll = self.cursor;
-        } else if self.cursor >= self.scroll + visible {
-            self.scroll = self.cursor + 1 - visible;
+        if index < self.scroll {
+            self.scroll = index;
+        } else if index >= self.scroll + visible {
+            self.scroll = index + 1 - visible;
         }
         let max_scroll = self.results.len().saturating_sub(visible);
         self.scroll = self.scroll.min(max_scroll);
