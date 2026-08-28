@@ -348,8 +348,11 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
 
 /// /model 弹窗：居中覆盖层，当前 provider 打 →，选中项高亮。
 /// 命令面板弹窗：动态宽度、显示宽度对齐，选中项完整信息在底行展示。
-fn draw_command_palette(f: &mut Frame, app: &App) {
-    let palette = app.palette.as_ref().expect("调用方保证 palette 已打开");
+fn draw_command_palette(f: &mut Frame, app: &mut App) {
+    use crate::palette::{PaletteGroup, PaletteItem};
+    let Some(palette) = app.palette.as_mut() else {
+        return;
+    };
     // 过滤串 = 聊天框共享缓冲，▍ 画在光标位
     let mut shown = String::new();
     for (i, ch) in app.input.chars().enumerate() {
@@ -362,9 +365,41 @@ fn draw_command_palette(f: &mut Frame, app: &App) {
         shown.push('▍');
     }
     let area = f.area();
-    let height = (palette.filtered.len() as u16 + 4).min(area.height.saturating_sub(2));
+    let height = 24u16.min(area.height.saturating_sub(2));
+    let visible = height.saturating_sub(2) as usize;
 
-    // 动态宽度：列表行宽 = 标记 2 + command 显示宽 + 3 + desc 显示宽（截断保护）
+    // 显示行序列：无过滤时插组头分隔行，过滤时纯条目列表
+    enum Disp<'a> {
+        Group(&'a str),
+        Item(usize),
+    }
+    let show_groups = app.input.is_empty();
+    let selected_idx = palette.filtered.get(palette.selected).copied();
+    let mut disp: Vec<Disp> = Vec::new();
+    let mut last_group: Option<PaletteGroup> = None;
+    let mut sel_row = 0usize;
+    for &idx in &palette.filtered {
+        let g = palette.items[idx].group;
+        if show_groups && last_group != Some(g) {
+            disp.push(Disp::Group(g.label()));
+            last_group = Some(g);
+        }
+        if Some(idx) == selected_idx {
+            sel_row = disp.len();
+        }
+        disp.push(Disp::Item(idx));
+    }
+
+    // 滚动窗口：选中条目始终可见
+    let max_scroll = disp.len().saturating_sub(visible);
+    if sel_row < palette.scroll {
+        palette.scroll = sel_row;
+    } else if sel_row >= palette.scroll + visible {
+        palette.scroll = sel_row + 1 - visible;
+    }
+    palette.scroll = palette.scroll.min(max_scroll);
+
+    // 动态宽度：列表行宽 = 标记 2 + command 显示宽 + 3 + desc 显示宽
     let cmd_w = palette
         .items
         .iter()
@@ -378,11 +413,8 @@ fn draw_command_palette(f: &mut Frame, app: &App) {
         .max()
         .unwrap_or(10);
     let list_w = 2 + cmd_w + 3 + desc_w;
-    // 底行宽 = 选中项完整信息
-    let detail_w = palette
-        .filtered
-        .get(palette.selected)
-        .map(|&i| {
+    let detail_w = selected_idx
+        .map(|i| {
             display_width(&format!(
                 "{} — {}",
                 palette.items[i].command, palette.items[i].desc
@@ -398,30 +430,34 @@ fn draw_command_palette(f: &mut Frame, app: &App) {
 
     f.render_widget(ratatui::widgets::Clear, pop);
 
-    // 列表行内 desc 的可用宽：总宽 - 命令列 - 装饰
     let desc_avail = (width as usize).saturating_sub(2 + cmd_w + 3 + 3);
-    let items: Vec<ListItem> = palette
-        .filtered
+    let items: Vec<ListItem> = disp
         .iter()
-        .enumerate()
-        .map(|(i, &idx)| {
-            let item = &palette.items[idx];
-            let mark = if i == palette.selected { "▸ " } else { "  " };
-            let desc = display_truncate(item.desc, desc_avail);
-            let label = format!("{mark}{}  {}", display_pad(item.command, cmd_w), desc);
-            let style = if i == palette.selected {
-                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
-            } else {
-                Style::new()
-            };
-            ListItem::new(Span::styled(label, style))
+        .skip(palette.scroll)
+        .take(visible)
+        .map(|d| match d {
+            Disp::Group(label) => ListItem::new(Span::styled(
+                format!(" ── {label} ──"),
+                Style::new().fg(DIM),
+            )),
+            Disp::Item(idx) => {
+                let item: &PaletteItem = &palette.items[*idx];
+                let is_sel = Some(*idx) == selected_idx;
+                let mark = if is_sel { "▸ " } else { "  " };
+                let desc = display_truncate(item.desc, desc_avail);
+                let label = format!("{mark}{}  {}", display_pad(item.command, cmd_w), desc);
+                let style = if is_sel {
+                    Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::new().fg(Color::Gray)
+                };
+                ListItem::new(Span::styled(label, style))
+            }
         })
         .collect();
 
-    let detail = palette
-        .filtered
-        .get(palette.selected)
-        .map(|&i| {
+    let detail = selected_idx
+        .map(|i| {
             let it = &palette.items[i];
             display_truncate(&format!("{} — {}", it.command, it.desc), width as usize - 4)
         })

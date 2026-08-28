@@ -614,7 +614,6 @@ impl App {
                     self.open_list_picker(kind);
                     return;
                 }
-                A::Fill => {}
             }
         }
         // Tab 或 Fill：填入输入框（power-user 文本模式）
