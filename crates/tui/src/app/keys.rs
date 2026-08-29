@@ -259,10 +259,38 @@ impl App {
             .unwrap_or(false);
 
         if awaiting {
-            // 反馈停留态：Enter 下一题
+            // 追问等待中：Esc 中断追问（留在反馈态），其余按键忽略
+            if self.followup_pending.is_some() {
+                if key.code == KeyCode::Esc
+                    && let Some(token) = self.followup_pending.take()
+                {
+                    token.cancel();
+                }
+                return;
+            }
+            // 反馈停留态：空 Enter 下一题，输入后 Enter 提交追问
             match key.code {
-                KeyCode::Enter => self.advance_review(),
                 KeyCode::Esc => self.exit_review("已退出复习模式"),
+                KeyCode::Enter => {
+                    if self.input.trim().is_empty() {
+                        self.advance_review();
+                    } else {
+                        self.submit_followup();
+                    }
+                }
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.cursor_pos = insert_char(&mut self.input, self.cursor_pos, c);
+                }
+                KeyCode::Backspace => {
+                    self.cursor_pos = delete_before(&mut self.input, self.cursor_pos);
+                }
+                KeyCode::Delete => delete_at(&mut self.input, self.cursor_pos),
+                KeyCode::Left => self.cursor_pos = self.cursor_pos.saturating_sub(1),
+                KeyCode::Right => {
+                    self.cursor_pos = (self.cursor_pos + 1).min(self.input.chars().count());
+                }
+                KeyCode::Home => self.cursor_pos = 0,
+                KeyCode::End => self.cursor_pos = self.input.chars().count(),
                 _ => {}
             }
             return;

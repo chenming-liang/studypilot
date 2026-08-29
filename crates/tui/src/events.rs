@@ -63,6 +63,8 @@ pub enum AppEvent {
     ReviewGraded(usize, Result<(i64, Vec<String>, Option<String>), String>),
     /// 整轮复习结束后的 LLM 小结建议（已格式化文本，多行）
     ReviewAdvice(String),
+    /// 复习追问回答回流：(题目索引, 学生问句, 回答或错误)
+    ReviewFollowup(usize, String, Result<String, String>),
     /// 会话创建失败：Pending 态无法继续落库，状态已回退，需用户重新发消息重试
     SessionCreateFailed(String),
     /// 后台 DB 写入失败（attempts / 掌握度等闭环数据）

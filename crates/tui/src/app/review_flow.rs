@@ -75,9 +75,125 @@ impl App {
         let Some(rs) = &mut self.review else { return };
         rs.current += 1;
         rs.selected_option = None;
+        rs.followups.clear();
         if rs.current >= rs.questions.len() {
             self.finish_review();
         }
+    }
+
+    /// 反馈停留态提交追问：打包题目上下文 + 追问历史 → LLM 回答（Esc 可中断）。
+    /// 追问不改判分、不落库；失败把错误放进该轮对话（workspace 红色可见）。
+    pub(crate) fn submit_followup(&mut self) {
+        let text = self.input.trim().to_owned();
+        if text.is_empty() {
+            return;
+        }
+        let Some(rs) = &self.review else { return };
+        let Some(q) = rs.questions.get(rs.current) else {
+            return;
+        };
+        let idx = rs.current;
+        let result = rs.results.get(rs.current);
+        // 题目上下文快照（借用结束后再 spawn）
+        let question_text = q.question.clone();
+        let options = q.options.clone();
+        let answer_letter = q.answer.map(|a| (b'A' + a as u8) as char);
+        let user_letter = result
+            .and_then(|r| r.user_choice)
+            .map(|c| (b'A' + c as u8) as char);
+        let is_correct = result.map(|r| r.correct).unwrap_or(false);
+        let explanation = q.explanation.clone();
+        let missing = result.map(|r| r.missing.clone()).unwrap_or_default();
+        // 追问历史只喂成功轮
+        let history: Vec<(String, String)> = rs
+            .followups
+            .iter()
+            .filter_map(|t| {
+                t.answer
+                    .as_ref()
+                    .ok()
+                    .map(|a| (t.question.clone(), a.clone()))
+            })
+            .collect();
+
+        self.input.clear();
+        self.cursor_pos = 0;
+        let cancel = tokio_util::sync::CancellationToken::new();
+        self.followup_pending = Some(cancel.clone());
+
+        let provider = self.provider.clone();
+        let provider_cfg = self.provider_cfg.clone();
+        let store = Arc::clone(&self.store);
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let mut ctx = format!("题目：{question_text}\n");
+            for (i, o) in options.iter().enumerate() {
+                ctx.push_str(&format!("  {}. {o}\n", (b'A' + i as u8) as char));
+            }
+            if let Some(a) = answer_letter {
+                ctx.push_str(&format!("正确答案：{a}\n"));
+            }
+            if let Some(u) = user_letter {
+                ctx.push_str(&format!("学生选择：{u}\n"));
+            }
+            ctx.push_str(if is_correct {
+                "本题判定：答对\n"
+            } else {
+                "本题判定：答错\n"
+            });
+            if let Some(e) = &explanation {
+                ctx.push_str(&format!("解析：{e}\n"));
+            }
+            if !missing.is_empty() {
+                ctx.push_str(&format!("缺失要点：{}\n", missing.join("；")));
+            }
+            for (fq, fa) in &history {
+                ctx.push_str(&format!("\n学生此前追问：{fq}\n导师此前回答：{fa}\n"));
+            }
+            let user_msg = format!("{ctx}\n学生追问：{text}");
+            let messages = [
+                Message::system(
+                    "你是课程学习导师，学生刚复习完一道题后来追问。\
+                     回答要简洁准确、切中学生疑问，用 markdown（代码用围栏标注语言）。不要复述整道题。",
+                ),
+                Message::user(&user_msg),
+            ];
+            let resp = agent_providers::with_cancel(provider.chat(&messages, &[]), &cancel).await;
+            match resp {
+                Some(Ok(r)) => {
+                    App::log_llm_usage(&store, &provider_cfg, "review", &r.usage);
+                    let _ = tx.send(AppEvent::ReviewFollowup(idx, text, Ok(r.content)));
+                }
+                Some(Err(e)) => {
+                    let _ = tx.send(AppEvent::ReviewFollowup(idx, text, Err(e.to_string())));
+                }
+                None => {} // 已被 Esc 中断：followup_pending 已清，不打扰
+            }
+        });
+    }
+
+    /// 追问回答回流：校验索引 → 追加进当前题的追问对话（workspace 渲染）。
+    pub(crate) fn on_review_followup(
+        &mut self,
+        idx: usize,
+        question: String,
+        result: Result<String, String>,
+    ) {
+        self.followup_pending = None;
+        let idx_ok = self
+            .review
+            .as_ref()
+            .map(|rs| rs.current == idx)
+            .unwrap_or(false);
+        if !idx_ok {
+            tracing::warn!(idx, "过期追问回答被丢弃");
+            return;
+        }
+        let Some(rs) = &mut self.review else { return };
+        rs.followups.push(review::FollowupTurn {
+            question,
+            answer: result,
+        });
     }
 
     /// 完成整个复习：从状态渲染摘要卡。`advance_review` 到尾题时调用。

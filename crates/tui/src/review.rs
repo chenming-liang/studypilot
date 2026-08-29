@@ -61,6 +61,8 @@ pub struct ReviewState {
     pub results: Vec<ReviewResult>,
     /// 选择题光标（workspace ↑↓ 移动；None = 未开始选择）
     pub selected_option: Option<usize>,
+    /// 当前题的追问对话（切题清空；纯学习辅助，不改判分、不落库）
+    pub followups: Vec<FollowupTurn>,
 }
 
 impl ReviewState {
@@ -68,6 +70,13 @@ impl ReviewState {
     pub fn awaiting_feedback(&self) -> bool {
         self.results.len() > self.current
     }
+}
+
+/// 一轮追问（问，答）。答为 Err 时是获取失败（渲染红色，不喂回 LLM）。
+#[derive(Debug, Clone)]
+pub struct FollowupTurn {
+    pub question: String,
+    pub answer: Result<String, String>,
 }
 
 /// 一道题目（含 DB id）。
@@ -456,6 +465,7 @@ pub async fn start_review(
         current: 0,
         results: Vec::new(),
         selected_option: None,
+        followups: Vec::new(),
     })));
 }
 

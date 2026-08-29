@@ -237,6 +237,44 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &App) {
                 }
             }
         }
+        // ④c 追问对话（当前题，切题清空）：问句 USER 黄，回答走 markdown 管线
+        if !rs.followups.is_empty() {
+            body.push(Line::default());
+            for turn in &rs.followups {
+                body.push(Line::from(Span::styled(
+                    format!("  你 › {}", turn.question),
+                    Style::new().fg(theme::USER),
+                )));
+                match &turn.answer {
+                    Ok(a) => {
+                        let mut ans_lines =
+                            markdown::render_markdown(a, inner_w.saturating_sub(2).max(1));
+                        while ans_lines.last().is_some_and(|l| l.spans.is_empty()) {
+                            ans_lines.pop();
+                        }
+                        for l in ans_lines {
+                            let mut spans = vec![Span::raw("  ")];
+                            spans.extend(l.spans);
+                            body.push(Line::from(spans));
+                        }
+                    }
+                    Err(e) => {
+                        body.push(Line::from(Span::styled(
+                            format!("  ⚠ {e}"),
+                            Style::new().fg(ERROR),
+                        )));
+                    }
+                }
+                body.push(Line::default());
+            }
+        }
+        // 追问等待中：spinner 行（tick 驱动）
+        if app.followup_pending.is_some() {
+            body.push(Line::from(Span::styled(
+                format!("  {} 正在生成回答…", spinner_char(app.tick)),
+                Style::new().fg(DIM),
+            )));
+        }
         body.push(Line::default());
         body.push(Line::from(Span::styled(
             "  Enter 下一题 · Esc 退出复习",
@@ -275,6 +313,13 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &App) {
             "  在下方输入你的答案，Enter 提交批改 · Esc 退出复习",
             Style::new().fg(theme::MUTED),
         )));
+    }
+
+    // 尾部窗口：内容超出区域时只渲染最后 N 行（追问多轮/长解析不挤爆视口，
+    // 最新内容始终可见；极端情况下题干被顶出属可接受边界）
+    let max_lines = area.height as usize;
+    if body.len() > max_lines {
+        body.drain(..body.len() - max_lines);
     }
 
     f.render_widget(Paragraph::new(body), area);
@@ -654,7 +699,8 @@ fn wrap_input_with_cursor(input: &str, cursor: usize, width: usize) -> (Vec<Stri
 }
 
 fn draw_input(f: &mut Frame, area: Rect, app: &App) {
-    // Review 模式：底部状态栏专属化，只显示当前答题动作的提示，简答时输入行即答案框
+    // Review 模式：底部状态栏专属化；反馈停留态输入行即追问框（前缀"追问："）
+    let in_feedback = app.review.as_ref().is_some_and(|rs| rs.awaiting_feedback());
     let (hint, show_input) = match &app.review {
         Some(rs) => {
             let is_choice = rs
@@ -665,7 +711,7 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
             if app.is_review_grading() {
                 ("批改中…", false)
             } else if rs.awaiting_feedback() {
-                ("Enter 下一题 · Esc 退出复习", false)
+                ("空 Enter 下一题 · Esc 退出复习", true)
             } else if is_choice {
                 ("↑↓ 选择 · A-D 作答 · Enter 提交 · Esc 退出", false)
             } else {
@@ -680,6 +726,9 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
             }
         }
     };
+    // 输入行前缀：反馈停留态 = 追问框，其余 = 普通输入
+    let prefix = if in_feedback { "追问：" } else { "› " };
+    let prefix_w = display_width(prefix);
 
     // 底线样式：上边一条分隔线，无框；输入过长按显示宽度折行（多行渲染 + 光标跟随）
     let input_w = (area.width.saturating_sub(2)).max(4) as usize;
@@ -694,7 +743,9 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
         cursor_line = cl;
         cursor_col = cc;
         if app.input.is_empty() {
-            let ph = if app.review.is_some() {
+            let ph = if in_feedback {
+                String::new() // 追问：前缀本身即说明
+            } else if app.review.is_some() {
                 "输入你的答案…".to_owned()
             } else if app.is_inflight() {
                 String::new()
@@ -703,15 +754,20 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
             };
             if !ph.is_empty() {
                 lines.push(Line::from(vec![
-                    Span::styled("› ", Style::new().fg(ACCENT)),
+                    Span::styled(prefix.to_owned(), Style::new().fg(ACCENT)),
                     Span::styled(ph, Style::new().fg(DIM)),
                 ]));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    prefix.to_owned(),
+                    Style::new().fg(ACCENT),
+                )));
             }
         } else {
             for (i, seg) in vis_lines.iter().enumerate() {
                 if i == 0 {
                     lines.push(Line::from(vec![
-                        Span::styled("› ", Style::new().fg(ACCENT)),
+                        Span::styled(prefix.to_owned(), Style::new().fg(ACCENT)),
                         Span::raw(seg.clone()),
                     ]));
                 } else {
@@ -722,9 +778,9 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     }
     f.render_widget(Paragraph::new(lines), area);
 
-    // 光标定位到折行后的正确可视行/列（首行带 "› " 前缀占 2 列）
+    // 光标定位到折行后的正确可视行/列（首行带前缀，占 prefix_w 列）
     if show_input {
-        let x = area.x + if cursor_line == 0 { 2 } else { 0 } + cursor_col as u16;
+        let x = area.x + if cursor_line == 0 { prefix_w as u16 } else { 0 } + cursor_col as u16;
         let y = area.y + 1 + cursor_line as u16;
         if x < area.right() && y < area.bottom() {
             f.set_cursor_position((x, y));

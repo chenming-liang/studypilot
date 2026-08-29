@@ -80,6 +80,8 @@ pub struct App {
     pub review: Option<review::ReviewState>,
     /// 简答题批改进行中（防并发提交错位）
     review_grading: bool,
+    /// 复习追问回答生成中（防并发；Esc 可中断，留在反馈停留态）
+    pub followup_pending: Option<CancellationToken>,
     /// 鼠标拖选状态：(起始行, 结束行) 在渲染行列表中的索引
     pub text_selection: Option<(usize, usize)>,
     /// 拖选锚点（左键按下时的行；Drag 期间不随方向漂移）
@@ -354,6 +356,7 @@ impl App {
             import_cancel: None,
             review: None,
             review_grading: false,
+            followup_pending: None,
             text_selection: None,
             selection_anchor: None,
             chat_lines: Vec::new(),
@@ -488,7 +491,8 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
             AppEvent::Input(CtEvent::Mouse(m)) => app.handle_mouse(m).await,
             AppEvent::Input(_) => {}
             AppEvent::Tick => {
-                if app.is_inflight() {
+                // inflight（请求/出题）或追问生成中：驱动 spinner 动画
+                if app.is_inflight() || app.followup_pending.is_some() {
                     app.tick += 1;
                 }
                 app.expire_toast();
@@ -541,6 +545,9 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
             AppEvent::ReviewReady(result) => app.on_review_ready(result),
             AppEvent::ReviewGraded(idx, result) => app.on_review_graded(idx, result),
             AppEvent::ReviewAdvice(text) => app.on_review_advice(text),
+            AppEvent::ReviewFollowup(idx, question, result) => {
+                app.on_review_followup(idx, question, result)
+            }
         }
     }
     Ok(())
