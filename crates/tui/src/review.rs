@@ -21,8 +21,9 @@ pub struct QuizQuestion {
     pub question: String,
     #[serde(default)]
     pub options: Vec<String>,
-    /// 正确项字母 A/B/C/D（或旧格式下标数字），解析时统一转下标
-    #[serde(default)]
+    /// 正确项字母 A/B/C/D（或旧格式下标数字），解析时统一转下标。
+    /// LLM 输出字母或数字不稳定，serde 层容错双收。
+    #[serde(default, deserialize_with = "deserialize_answer")]
     pub answer: Option<String>,
     #[serde(default)]
     pub key_points: Vec<String>,
@@ -33,6 +34,22 @@ pub struct QuizQuestion {
     pub concept_id: Option<i64>,
     #[serde(default)]
     pub concept: Option<String>,
+}
+
+/// answer 字段容错：字符串（"B"）或数字（1，旧格式）都收，统一转字符串。
+fn deserialize_answer<'de, D>(d: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = serde_json::Value::deserialize(d)?;
+    match v {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::String(s) => Ok(Some(s)),
+        serde_json::Value::Number(n) => Ok(Some(n.to_string())),
+        other => Err(serde::de::Error::custom(format!(
+            "answer 类型异常: {other}"
+        ))),
+    }
 }
 
 /// LLM 出题结果。
@@ -350,6 +367,11 @@ pub async fn start_review(
     let quiz: QuizResponse = match parse_quiz_json(&resp.content) {
         Some(q) => q,
         None => {
+            // 原始返回进日志：解析失败可诊断（否则每次都是盲查）
+            tracing::warn!(
+                content = %resp.content.chars().take(600).collect::<String>(),
+                "出题返回内容解析失败"
+            );
             let _ = tx.send(AppEvent::ReviewReady(Err("题目 JSON 解析失败".into())));
             return;
         }
@@ -562,12 +584,17 @@ pub async fn grade_short_answer(
 /// 做 LLM 输出规范化（换行双重转义还原）。
 fn parse_quiz_json(content: &str) -> Option<QuizResponse> {
     let trimmed = agent_core::trim_code_fence(content);
-    let mut quiz: QuizResponse =
-        serde_json::from_str::<QuizResponse>(trimmed)
-            .ok()
-            .or_else(|| {
-                agent_core::first_json_block(trimmed).and_then(|b| serde_json::from_str(b).ok())
-            })?;
+    let mut quiz: QuizResponse = serde_json::from_str::<QuizResponse>(trimmed)
+        .ok()
+        .or_else(|| {
+            agent_core::first_json_block(trimmed).and_then(|b| serde_json::from_str(b).ok())
+        })
+        .or_else(|| {
+            // 兜底：模型输出裸数组 [ {...}, ... ]（漏包 questions 对象）
+            serde_json::from_str::<Vec<QuizQuestion>>(trimmed)
+                .ok()
+                .map(|questions| QuizResponse { questions })
+        })?;
     for q in &mut quiz.questions {
         q.question = normalize_text(&q.question);
         q.explanation = q.explanation.as_deref().map(normalize_text);
@@ -701,6 +728,23 @@ mod quiz_parse_tests {
         assert_eq!(answer_to_index("zz"), None);
         // 超出 A-D 的字母 → 越界下标（判分时按"答案非法跳过"兜底）
         assert_eq!(answer_to_index("E"), Some(4));
+    }
+
+    #[test]
+    fn parse_tolerates_numeric_answer() {
+        // 模型可能输出旧格式数字 answer（serde 对 Option<String> 会整包失败）→ 必须容错
+        let json = r#"{"questions":[{"type":"choice","question":"Q","options":["a","b"],"answer":1,"key_points":[],"explanation":null,"concept":null}]}"#;
+        let q = parse_quiz_json(json).unwrap();
+        assert_eq!(q.questions[0].answer.as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn parse_tolerates_bare_array() {
+        // 模型漏包 questions 对象、直接输出数组 → 兜底包装
+        let json = r#"[{"type":"short_answer","question":"Q1","options":[],"answer":null,"key_points":["k"],"explanation":null,"concept":null}]"#;
+        let q = parse_quiz_json(json).unwrap();
+        assert_eq!(q.questions.len(), 1);
+        assert_eq!(q.questions[0].question, "Q1");
     }
 
     #[test]
