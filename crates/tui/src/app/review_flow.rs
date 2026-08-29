@@ -118,6 +118,7 @@ impl App {
 
         self.input.clear();
         self.cursor_pos = 0;
+        self.scroll_up = 0; // 新内容（spinner）吸附底部
         let cancel = tokio_util::sync::CancellationToken::new();
         self.followup_pending = Some(cancel.clone());
 
@@ -180,6 +181,7 @@ impl App {
         result: Result<String, String>,
     ) {
         self.followup_pending = None;
+        self.scroll_up = 0; // 回答到达吸附底部
         let idx_ok = self
             .review
             .as_ref()
@@ -360,6 +362,7 @@ impl App {
             Ok(rs) => {
                 let count = rs.questions.len();
                 self.review = Some(rs);
+                self.scroll_up = 0; // 进 workspace 跟随底部
                 self.push_entry(Entry::Info(format!("· Review started · {count} questions")));
             }
             Err(e) => {

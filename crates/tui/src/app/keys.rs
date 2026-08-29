@@ -243,6 +243,18 @@ impl App {
         if key.kind != KeyEventKind::Press {
             return;
         }
+        // 键盘滚动 workspace（与聊天流 PageUp/Down 同款；任何答题态都可用）
+        match key.code {
+            KeyCode::PageUp => {
+                self.scroll_up = self.scroll_up.saturating_add(10);
+                return;
+            }
+            KeyCode::PageDown => {
+                self.scroll_up = self.scroll_up.saturating_sub(10);
+                return;
+            }
+            _ => {}
+        }
         // 批改进行中：禁止再次提交或切题（并发批改会错位污染 attempts/mastery）
         if self.review_grading {
             if key.code == KeyCode::Esc {

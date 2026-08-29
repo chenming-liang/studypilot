@@ -85,7 +85,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
 /// Review workspace：进度点 → 标签 → 题干 → 选项/反馈 → Sources。
 /// 交互状态语义：蓝=可选项、黄=当前/题目、绿=正确、红=错误、灰=非重点。
-fn draw_review_workspace(f: &mut Frame, area: Rect, app: &App) {
+fn draw_review_workspace(f: &mut Frame, area: Rect, app: &mut App) {
     use crate::review::QType;
     let Some(rs) = app.review.as_ref() else {
         return;
@@ -277,7 +277,7 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &App) {
         }
         body.push(Line::default());
         body.push(Line::from(Span::styled(
-            "  Enter 下一题 · Esc 退出复习",
+            "  空 Enter 下一题 · 输入可追问 · Esc 退出复习",
             Style::new().fg(theme::MUTED),
         )));
     } else if q.q_type == QType::Choice {
@@ -315,14 +315,38 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &App) {
         )));
     }
 
-    // 尾部窗口：内容超出区域时只渲染最后 N 行（追问多轮/长解析不挤爆视口，
-    // 最新内容始终可见；极端情况下题干被顶出属可接受边界）
-    let max_lines = area.height as usize;
-    if body.len() > max_lines {
-        body.drain(..body.len() - max_lines);
-    }
+    // 滚动视口 + 文本行存储：复用聊天流的同一套机制（滚轮/拖选复制都依赖
+    // chat_lines + chat_rect + scroll_up，此前 workspace 没存导致滚不动、
+    // 拖选复制到的是过期聊天内容）。scroll_up=0 跟随最新，向上滚看历史。
+    let viewport = area.height as usize;
+    let max_offset = body.len().saturating_sub(viewport);
+    let top = max_offset.saturating_sub(app.scroll_up as usize);
+    app.chat_lines = body
+        .iter()
+        .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+        .collect();
+    app.chat_rect = area;
+    let sel = app.text_selection;
+    let visible: Vec<Line> = body
+        .into_iter()
+        .enumerate()
+        .skip(top)
+        .take(viewport.max(1))
+        .map(|(i, mut line)| {
+            if let Some((start, end)) = sel
+                && i >= start
+                && i <= end
+            {
+                // 蓝底高亮：与聊天流拖选同款
+                for span in &mut line.spans {
+                    span.style = span.style.fg(Color::White).bg(Color::Blue);
+                }
+            }
+            line
+        })
+        .collect();
 
-    f.render_widget(Paragraph::new(body), area);
+    f.render_widget(Paragraph::new(visible), area);
 }
 
 /// 右上角临时通知：复制成功/失败等一次性反馈，2.5s（错误 4s）自动消失。
@@ -711,7 +735,11 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
             if app.is_review_grading() {
                 ("批改中…", false)
             } else if rs.awaiting_feedback() {
-                ("空 Enter 下一题 · Esc 退出复习", true)
+                if app.followup_pending.is_some() {
+                    ("正在生成回答 · Esc 中断追问", true)
+                } else {
+                    ("空 Enter 下一题 · 输入可追问 · Esc 退出复习", true)
+                }
             } else if is_choice {
                 ("↑↓ 选择 · A-D 作答 · Enter 提交 · Esc 退出", false)
             } else {
