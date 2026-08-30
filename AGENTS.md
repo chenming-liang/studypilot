@@ -4,7 +4,9 @@
 
 ## 项目一句话
 
-StudyPilot（仓库目录 agent）：Rust TUI 个人学习 Agent（导入 → 学习 → 复习三模式），ratatui + SQLite，本地优先。
+StudyPilot（仓库目录 agent）：Rust TUI 个人学习/笔记管理 Agent（导入 → 学习 → 复习三模式），ratatui + SQLite，本地优先。
+
+> **方向回退（2026-08-30，用户决策）**：Web 论文阅读转向（Learning Session + 诊断引擎，66 个提交）经评估判定转向失败，main 已整体回退到 `archive/course-agent-v1`（收口会话⑪ 完整态）。Web 转向的全部工作保留在分支 **`archive/web-pivot`**（tag `web-pivot-final`），需要参考（诊断动作设计/页级 chunk/tool_trace 等经验）时切分支查看，不并入主线。本文件与 docs/核心代码逻辑.md 均已随回退还原为 TUI 版本。注意：`data/mynotes.db` 的 schema user_version 曾被 Web 版升到 5（sessions.document_id 列、diagnosis_stats 表），TUI 版（SCHEMA_VERSION=3）打开会把它写回 3，多余列/表对旧代码无害；若要彻底干净可删掉该文件让 schema 重建（会丢历史数据，删前自行备份）。
 
 ## Workspace 布局
 
