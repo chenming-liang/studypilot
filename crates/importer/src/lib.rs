@@ -10,4 +10,5 @@ mod parser;
 mod pipeline;
 
 pub use events::ImportEvent;
+pub use extract::{extract_concepts, refresh_course_concepts};
 pub use pipeline::{ImportConfig, import_directory};
