@@ -685,15 +685,19 @@ fn append_entry_lines(entry: &Entry, width: usize, out: &mut Vec<Line<'static>>)
                 && !n.trim().is_empty()
             {
                 out.push(head("→ 下一步", theme::SECONDARY));
-                // 建议可能较长：按宽度手动折行
-                let w = width.saturating_sub(8);
+                // 建议较长：按【显示宽度】折行（中文 2 列——此前按字符数导致超宽被裁）
+                let w = width.saturating_sub(8).max(1);
                 let mut cur = String::new();
+                let mut wsum = 0usize;
                 for ch in n.chars() {
-                    cur.push(ch);
-                    if cur.chars().count() >= w {
+                    let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                    if wsum + cw > w && wsum > 0 {
                         out.push(item(&cur));
                         cur.clear();
+                        wsum = 0;
                     }
+                    cur.push(ch);
+                    wsum += cw;
                 }
                 if !cur.is_empty() {
                     out.push(item(&cur));

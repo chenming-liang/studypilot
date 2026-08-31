@@ -402,6 +402,23 @@ impl App {
             KeyCode::Backspace if !is_choice => {
                 self.cursor_pos = delete_before(&mut self.input, self.cursor_pos);
             }
+            // 简答作答态同样可移动光标（问题6：编辑键与反馈态同款）
+            KeyCode::Left if !is_choice => {
+                self.cursor_pos = self.cursor_pos.saturating_sub(1);
+            }
+            KeyCode::Right if !is_choice => {
+                let len = self.input.chars().count();
+                self.cursor_pos = (self.cursor_pos + 1).min(len);
+            }
+            KeyCode::Home if !is_choice => {
+                self.cursor_pos = 0;
+            }
+            KeyCode::End if !is_choice => {
+                self.cursor_pos = self.input.chars().count();
+            }
+            KeyCode::Delete if !is_choice => {
+                delete_at(&mut self.input, self.cursor_pos);
+            }
             _ => {}
         }
     }
@@ -886,6 +903,7 @@ impl App {
             title,
             items,
             selected: 0,
+            filter: String::new(),
         });
     }
 
@@ -899,16 +917,30 @@ impl App {
                 self.list_picker = None;
                 self.restore_input_backup();
             }
+            // 输入过滤（问题10：概念多时打字即筛）
+            KeyCode::Char(c) => {
+                if let Some(lp) = &mut self.list_picker {
+                    lp.filter.push(c);
+                    lp.selected = 0;
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(lp) = &mut self.list_picker {
+                    lp.filter.pop();
+                    lp.selected = 0;
+                }
+            }
             KeyCode::Up => {
                 if let Some(lp) = &mut self.list_picker {
                     lp.selected = lp.selected.saturating_sub(1);
                 }
             }
             KeyCode::Down => {
+                let vis = lp_visible_len(&self.list_picker);
                 if let Some(lp) = &mut self.list_picker
-                    && !lp.items.is_empty()
+                    && vis > 0
                 {
-                    lp.selected = (lp.selected + 1).min(lp.items.len() - 1);
+                    lp.selected = (lp.selected + 1).min(vis - 1);
                 }
             }
             KeyCode::PageUp => {
@@ -917,17 +949,23 @@ impl App {
                 }
             }
             KeyCode::PageDown => {
+                let vis = lp_visible_len(&self.list_picker);
                 if let Some(lp) = &mut self.list_picker
-                    && !lp.items.is_empty()
+                    && vis > 0
                 {
-                    lp.selected = (lp.selected + 10).min(lp.items.len() - 1);
+                    lp.selected = (lp.selected + 10).min(vis - 1);
                 }
             }
             KeyCode::Enter => {
                 let Some(lp) = &self.list_picker else {
                     return;
                 };
-                let Some(choice) = lp.items.get(lp.selected) else {
+                // 提交过滤后可见列表的选中项（filter 为空 = 原始列表）
+                let visible = lp.visible();
+                let Some(&item_idx) = visible.get(lp.selected) else {
+                    return;
+                };
+                let Some(choice) = lp.items.get(item_idx) else {
                     return;
                 };
                 let cmd = choice.command.clone();
@@ -1021,4 +1059,9 @@ impl App {
             _ => {}
         }
     }
+}
+
+/// 列表选择器当前可见条目数（过滤后）。
+fn lp_visible_len(lp: &Option<crate::palette::ListPicker>) -> usize {
+    lp.as_ref().map(|p| p.visible().len()).unwrap_or(0)
 }

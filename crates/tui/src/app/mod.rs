@@ -561,10 +561,7 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
                 match result {
                     Ok(map) => {
                         app.review_map = Some(map.clone());
-                        app.push_entry(Entry::Markdown(map.markdown()));
-                        app.push_entry(Entry::Info(
-                            "· Enter 选中的概念即开始复习 · /outline 重新组织".into(),
-                        ));
+                        // 只弹选择器（问题9：地图已由 /outline 渲染，这里不再打印一遍）
                         app.open_review_map_picker();
                     }
                     Err(e) => app.push_entry(Entry::Error(format!("复习地图加载失败: {e}"))),

@@ -544,22 +544,41 @@ impl Store {
         Ok(())
     }
 
-    /// 课程最近出过的题面（跨轮防重：注入出题 prompt + 相似度检测）。
-    pub fn recent_question_texts(&self, course_id: i64, limit: usize) -> Result<Vec<String>> {
+    /// 课程最近出过的 (题面, 概念名)（跨轮防重：概念级去重 + 相似度检测）。
+    pub fn recent_question_texts(
+        &self,
+        course_id: i64,
+        limit: usize,
+    ) -> Result<Vec<(String, Option<String>)>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT q.question FROM questions q
+            "SELECT q.question, c.name FROM questions q
              JOIN quizzes z ON z.id = q.quiz_id
+             LEFT JOIN concepts c ON c.id = q.concept_id
              WHERE z.course_id = ?1
              ORDER BY q.id DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(rusqlite::params![course_id, limit as i64], |r| {
-            r.get::<_, String>(0)
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
         })?;
         Ok(rows.flatten().collect())
     }
 
-    /// 课程今日作答次数（Anki 式"今日/长期"分层统计的今日侧）。
+    /// 今日已复习的概念 id（去重：这些概念今日已出过题，批量巩固不再重复推）。
+    pub fn concept_ids_reviewed_today(&self, course_id: i64) -> Result<Vec<i64>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT q.concept_id FROM attempts a
+             JOIN questions q ON q.id = a.question_id
+             JOIN quizzes z ON z.id = q.quiz_id
+             WHERE z.course_id = ?1 AND date(a.created_at) = date('now','localtime')
+               AND q.concept_id IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([course_id], |r| r.get::<_, i64>(0))?;
+        Ok(rows.flatten().collect())
+    }
+
+    /// 课程最近出过的题面（跨轮防重：注入出题 prompt + 相似度检测）。
     pub fn attempts_today_by_course(&self, course_id: i64) -> Result<usize> {
         let conn = self.conn.lock().unwrap();
         let n: i64 = conn.query_row(

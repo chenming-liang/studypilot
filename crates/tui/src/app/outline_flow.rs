@@ -31,14 +31,16 @@ async fn ensure_review_map(
 ) -> Result<(ReviewMap, bool), String> {
     // ① 当前概念快照 + 签名 + 今日作答（spawn_blocking，D2）
     let store_g = Arc::clone(&store);
-    let (concepts, today) = spawn_blocking(move || -> storage::Result<(_, usize)> {
-        let concepts = store_g.list_concepts_with_mastery(Some(course_id))?;
-        let today = store_g.attempts_today_by_course(course_id)?;
-        Ok((concepts, today))
-    })
-    .await
-    .map_err(|e| format!("任务错误: {e}"))?
-    .map_err(|e| e.to_string())?;
+    let (concepts, today, today_ids) =
+        spawn_blocking(move || -> storage::Result<(_, usize, Vec<i64>)> {
+            let concepts = store_g.list_concepts_with_mastery(Some(course_id))?;
+            let today = store_g.attempts_today_by_course(course_id)?;
+            let ids = store_g.concept_ids_reviewed_today(course_id)?;
+            Ok((concepts, today, ids))
+        })
+        .await
+        .map_err(|e| format!("任务错误: {e}"))?
+        .map_err(|e| e.to_string())?;
 
     let signature =
         importer::review_map::signature_of(concepts.iter().map(|c| c.name.clone()).collect());
@@ -52,6 +54,7 @@ async fn ensure_review_map(
             .map
             .with_refreshed_status(&concepts)
             .with_today(today)
+            .with_today_reviewed(today_ids.clone())
             .clone();
         return Ok((map, false));
     }

@@ -68,10 +68,29 @@ pub struct PaletteItem {
 }
 
 /// 通用列表选择器：单列 label，Enter 提交绑定的完整命令。
+/// 支持输入过滤（问题10：65+ 概念选择器可搜）。
 pub struct ListPicker {
     pub title: String,
     pub items: Vec<ListChoice>,
     pub selected: usize,
+    /// 过滤串（label 包含匹配，大小写不敏感）；空 = 显示全部
+    pub filter: String,
+}
+
+impl ListPicker {
+    /// 过滤后的可见条目（filter 为空 = 全部）。
+    pub fn visible(&self) -> Vec<usize> {
+        if self.filter.is_empty() {
+            return (0..self.items.len()).collect();
+        }
+        let f = self.filter.to_lowercase();
+        self.items
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.label.to_lowercase().contains(&f))
+            .map(|(i, _)| i)
+            .collect()
+    }
 }
 
 pub struct ListChoice {

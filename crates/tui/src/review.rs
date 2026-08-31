@@ -128,6 +128,8 @@ pub struct ReviewQuestion {
     pub key_points: Vec<String>,
     pub explanation: Option<String>,
     pub concept_id: Option<i64>,
+    /// LLM 输出的概念名（同轮概念级去重用；DB 读回路径可由 concept 关联补）
+    pub concept_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -329,7 +331,7 @@ pub async fn start_review(
 
     // ④ 生成第 1 题（与后续题共用同一套生成逻辑；失败即整体失败）
     let qtype = pick_qtype(n, 0, 0);
-    let Some(q1) = generate_one(
+    let Some((mut q1, concept_name)) = generate_one(
         &store,
         &provider,
         &provider_cfg,
@@ -348,6 +350,7 @@ pub async fn start_review(
         )));
         return;
     };
+    q1.concept_name = concept_name;
 
     let _ = tx.send(AppEvent::ReviewReady(Ok(ReviewState {
         quiz_id,
@@ -362,11 +365,13 @@ pub async fn start_review(
     })));
 }
 
-/// 已出题目快照（逐题生成时防重复考点；题面即考点，概念名不单独带）。
+/// 已出题目快照（逐题生成时防重复考点：概念级为主，题面相似度为辅）。
 #[derive(Debug, Clone)]
 pub struct AskedQuestion {
     pub qtype: &'static str,
     pub text: String,
+    /// 概念名（LLM 输出/DB 关联名）——同概念视为同考点
+    pub concept: Option<String>,
 }
 
 /// 题型分配：选择/简答各半（choice 向上取整），剩余多者优先，持平选选择。
@@ -567,7 +572,7 @@ async fn generate_one(
     qtype: QType,
     asked: &[AskedQuestion],
     cancel: &CancellationToken,
-) -> Option<ReviewQuestion> {
+) -> Option<(ReviewQuestion, Option<String>)> {
     if cancel.is_cancelled() {
         return None;
     }
@@ -615,9 +620,24 @@ async fn generate_one(
             return None;
         }
     };
-    // 同轮去重：与已出题目相似度过高 → 视为失败（触发上层重试，重试仍带
-    // 「已出题目」prompt，LLM 换考点的概率随重试上升）
+    // 同轮去重：
+    // ① 概念级（主判据）：同一概念视为同考点，直接判重——文本相似度对"换皮题"不可靠
+    // ② 文本相似度（辅助）：措辞雷同也拦
     for a in asked {
+        let same_concept = q
+            .concept
+            .as_deref()
+            .zip(a.concept.as_deref())
+            .map(|(x, y)| {
+                let nx = x.trim();
+                let ny = y.trim();
+                !nx.is_empty() && (nx == ny || nx.contains(ny) || ny.contains(nx))
+            })
+            .unwrap_or(false);
+        if same_concept {
+            tracing::warn!(index, concept = ?q.concept, "新题概念与已出题重复，判重重试");
+            return None;
+        }
         if too_similar(&q.question, &a.text) {
             tracing::warn!(index, "新题与已出题面高度相似，判重复重试");
             return None;
@@ -626,16 +646,20 @@ async fn generate_one(
     let (db_id, concept_id) = insert_question_db(store, quiz_id, ctx.course_id, &q)
         .await
         .ok()?;
-    Some(ReviewQuestion {
-        db_id,
-        q_type: qtype,
-        question: q.question,
-        options: q.options,
-        answer: q.answer.as_deref().and_then(answer_to_index),
-        key_points: q.key_points,
-        explanation: q.explanation,
-        concept_id,
-    })
+    Some((
+        ReviewQuestion {
+            db_id,
+            q_type: qtype,
+            question: q.question,
+            options: q.options,
+            answer: q.answer.as_deref().and_then(answer_to_index),
+            key_points: q.key_points,
+            explanation: q.explanation,
+            concept_id,
+            concept_name: q.concept.clone(),
+        },
+        q.concept.clone(),
+    ))
 }
 
 /// 逐题生成入口（App 侧 spawn）：生成第 index 题（0-based），事件回流。
@@ -654,20 +678,21 @@ pub async fn generate_review_question(
     cancel: CancellationToken,
     tx: UnboundedSender<AppEvent>,
 ) {
-    // 跨轮防重：课程最近题目并入 asked（prompt 可见 + 相似度检测）
-    if let Ok(recent) = store.recent_question_texts(ctx.course_id.unwrap_or(0), 8)
-        && ctx.course_id.is_some()
+    // 跨轮防重：课程最近 (题面, 概念名) 并入 asked（prompt 可见 + 概念级/相似度检测）
+    if let Some(cid) = ctx.course_id
+        && let Ok(recent) = store.recent_question_texts(cid, 8)
     {
-        for t in recent {
+        for (t, concept) in recent {
             let short: String = t.chars().take(60).collect();
             asked.push(AskedQuestion {
                 qtype: "跨轮",
                 text: short,
+                concept,
             });
         }
     }
     for attempt in 0..2 {
-        if let Some(q) = generate_one(
+        if let Some((q, concept_name)) = generate_one(
             &store,
             &provider,
             &provider_cfg,
@@ -681,7 +706,7 @@ pub async fn generate_review_question(
         )
         .await
         {
-            let _ = tx.send(AppEvent::ReviewQuestionReady(Ok(q)));
+            let _ = tx.send(AppEvent::ReviewQuestionReady(Ok((q, concept_name))));
             return;
         }
         if attempt == 0 && !cancel.is_cancelled() {

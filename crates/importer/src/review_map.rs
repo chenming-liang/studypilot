@@ -89,6 +89,8 @@ pub struct ReviewMap {
     pub titles: Vec<(i64, String)>,
     /// 今日作答次数（Anki 式今日/长期分层；构建/刷新时填）
     pub today_attempts: usize,
+    /// 今日已复习的概念 id（批量巩固排除，避免刚练过的还推）
+    pub today_reviewed: Vec<i64>,
 }
 
 impl ReviewMap {
@@ -203,6 +205,12 @@ impl ReviewMap {
     /// 回填今日作答数（/review-map 重读时）。
     pub fn with_today(&mut self, n: usize) -> &mut Self {
         self.today_attempts = n;
+        self
+    }
+
+    /// 回填今日已复习概念 id。
+    pub fn with_today_reviewed(&mut self, ids: Vec<i64>) -> &mut Self {
+        self.today_reviewed = ids;
         self
     }
 
@@ -441,7 +449,8 @@ pub async fn build_review_map(
         sections,
         unresolved,
         titles,
-        today_attempts: 0, // 调用方经 with_refreshed_status 回填
+        today_attempts: 0, // 调用方经 with_refreshed_status/with_today_reviewed 回填
+        today_reviewed: Vec::new(),
     })
 }
 
@@ -497,6 +506,7 @@ mod tests {
             unresolved: 0,
             titles: vec![(1, "01-basic".into()), (2, "02-own".into())],
             today_attempts: 0,
+            today_reviewed: Vec::new(),
         };
         let md = map.markdown();
         assert!(md.contains("复习地图"));
@@ -519,6 +529,7 @@ mod tests {
             unresolved: 0,
             titles: vec![(1, "01-basic".into())],
             today_attempts: 0,
+            today_reviewed: Vec::new(),
         };
         let items = map.picker_items(0);
         assert_eq!(items.len(), 3);
@@ -545,6 +556,7 @@ mod tests {
             unresolved: 0,
             titles: vec![],
             today_attempts: 3,
+            today_reviewed: vec![],
         };
         let items = map.picker_items(0);
         // 首项 = 优先巩固批量项（△+○，数量=概念数）
@@ -570,6 +582,7 @@ mod tests {
             unresolved: 0,
             titles: vec![],
             today_attempts: 7,
+            today_reviewed: vec![],
         };
         let md = map.markdown();
         assert!(md.contains("今日作答 7 题"));
@@ -592,6 +605,7 @@ mod tests {
             unresolved: 0,
             titles: vec![],
             today_attempts: 0,
+            today_reviewed: Vec::new(),
         };
         let fresh = vec![storage::ConceptMastery {
             concept_id: 9,
@@ -628,6 +642,7 @@ mod tests {
             unresolved: 0,
             titles: vec![],
             today_attempts: 0,
+            today_reviewed: Vec::new(),
         };
         // 进度（已复习）与掌握（需巩固）分开统计，无百分比
         assert_eq!(map.stats(), (3, 2, 1));

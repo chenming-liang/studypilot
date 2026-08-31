@@ -26,10 +26,10 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let concepts = store.list_concepts_with_mastery(Some(course_id))?;
-    let signature = importer::review_map::signature_of(
-        concepts.iter().map(|c| c.name.clone()).collect(),
-    );
-    let cached = importer::review_map::load_outline_cache(course_id).map_err(|e| anyhow::anyhow!(e))?;
+    let signature =
+        importer::review_map::signature_of(concepts.iter().map(|c| c.name.clone()).collect());
+    let cached =
+        importer::review_map::load_outline_cache(course_id).map_err(|e| anyhow::anyhow!(e))?;
     let map = match cached {
         Some(c) if c.signature == signature => {
             println!("（缓存命中，零 LLM）\n");

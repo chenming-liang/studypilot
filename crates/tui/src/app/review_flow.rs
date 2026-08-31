@@ -496,6 +496,7 @@ impl App {
                         QType::ShortAnswer => "short_answer",
                     },
                     text: q.question.chars().take(60).collect(),
+                    concept: q.concept_name.clone(),
                 })
                 .collect();
             (
@@ -534,7 +535,7 @@ impl App {
     /// 逐题生成回流：追加题目（当前等待态自动显示）；失败重试已耗尽则优雅收束。
     pub(crate) fn on_review_question_ready(
         &mut self,
-        result: Result<review::ReviewQuestion, String>,
+        result: Result<(review::ReviewQuestion, Option<String>), String>,
     ) {
         self.review_gen = None;
         self.request_cost_sync();
@@ -542,7 +543,9 @@ impl App {
             return; // 已退出复习：迟到事件丢弃
         };
         match result {
-            Ok(q) => {
+            Ok((q, concept_name)) => {
+                let mut q = q;
+                q.concept_name = concept_name;
                 rs.questions.push(q);
                 rs.next_pending = false;
                 // 若当前正指向等待槽位，workspace 会自动渲染新题
