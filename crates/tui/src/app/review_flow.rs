@@ -270,10 +270,22 @@ impl App {
         for (i, (q, r)) in rs.questions.iter().zip(rs.results.iter()).enumerate() {
             let mark = if r.correct { "✓" } else { "✗" };
             let score = r.score.map(|s| format!("（{s}/100）")).unwrap_or_default();
-            let short: String = q.question.replace('\n', " ").chars().take(40).collect();
-            md.push_str(&format!("\n{mark} **Q{}** {short}{score}", i + 1));
+            // 题面摘要：剥代码围栏标记（截断后残留未闭合 ``` 会吞掉后续段落分隔）
+            let short: String = q
+                .question
+                .replace("```rust", "")
+                .replace("```c", "")
+                .replace("```", "")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .chars()
+                .take(40)
+                .collect();
+            // 每题独立段落：单 \n 在 markdown 管线是软换行不折行，必须 \n\n
+            md.push_str(&format!("\n\n{mark} **Q{}** {short}{score}", i + 1));
             if !r.missing.is_empty() {
-                md.push_str(&format!("\n   - 缺失: {}", r.missing.join("；")));
+                md.push_str(&format!("\n\n   缺失: {}", r.missing.join("；")));
             }
         }
         self.push_entry(Entry::Markdown(md));

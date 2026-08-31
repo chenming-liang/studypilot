@@ -652,7 +652,7 @@ fn append_entry_lines(entry: &Entry, width: usize, out: &mut Vec<Line<'static>>)
             consolidate,
             next,
         } => {
-            // 复习小结：分组着色（绿/黄/蓝），无 markdown——三行语义一目了然
+            // 复习小结：标题行分组着色（绿/黄/蓝），内容行默认前景色（用户反馈：内容也上色太花）
             let head = |mark: &'static str, color: ratatui::style::Color| {
                 Line::from(vec![
                     Span::styled("▎ ", Style::new().fg(theme::PRIMARY)),
@@ -662,23 +662,23 @@ fn append_entry_lines(entry: &Entry, width: usize, out: &mut Vec<Line<'static>>)
                     ),
                 ])
             };
-            let item = |color: ratatui::style::Color, text: &str| {
+            let item = |text: &str| {
                 Line::from(vec![
                     Span::styled("▎ ", Style::new().fg(theme::PRIMARY)),
-                    Span::styled(format!("    {text}"), Style::new().fg(color)),
+                    Span::styled(format!("    {text}"), Style::new().fg(theme::FG)),
                 ])
             };
             out.push(head("── 复习小结 ──", theme::PRIMARY));
             if !mastered.is_empty() {
                 out.push(head("✓ 已掌握", theme::SUCCESS));
                 for t in mastered {
-                    out.push(item(theme::SUCCESS, t));
+                    out.push(item(t));
                 }
             }
             if !consolidate.is_empty() {
                 out.push(head("△ 需巩固", theme::USER));
                 for t in consolidate {
-                    out.push(item(theme::USER, t));
+                    out.push(item(t));
                 }
             }
             if let Some(n) = next
@@ -691,12 +691,12 @@ fn append_entry_lines(entry: &Entry, width: usize, out: &mut Vec<Line<'static>>)
                 for ch in n.chars() {
                     cur.push(ch);
                     if cur.chars().count() >= w {
-                        out.push(item(theme::SECONDARY, &cur));
+                        out.push(item(&cur));
                         cur.clear();
                     }
                 }
                 if !cur.is_empty() {
-                    out.push(item(theme::SECONDARY, &cur));
+                    out.push(item(&cur));
                 }
             }
             out.push(Line::default());

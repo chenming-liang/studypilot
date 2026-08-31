@@ -15,7 +15,7 @@ use tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
 
 /// 概念复习状态（依据实际作答记录）。
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ReviewStatus {
     /// ○ 零作答
     Unreviewed,
@@ -56,7 +56,7 @@ impl ReviewStatus {
 }
 
 /// 地图上的一个知识点（= 概念表实体）。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ConceptNode {
     #[allow(dead_code)]
     pub concept_id: Option<i64>,
@@ -71,7 +71,7 @@ impl ConceptNode {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OutlineSection {
     pub title: String,
     pub nodes: Vec<ConceptNode>,
@@ -79,7 +79,7 @@ pub struct OutlineSection {
     pub refs: Vec<usize>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ReviewMap {
     pub course: String,
     pub sections: Vec<OutlineSection>,
@@ -266,6 +266,8 @@ impl ReviewMap {
 pub struct OutlinePayload {
     pub map: ReviewMap,
     pub export: bool,
+    /// 本次是否实际跑了 LLM（缓存未命中/签名变化/强制重跑）
+    pub regenerated: bool,
 }
 
 /// LLM 大纲输出（organize not invent：concepts 逐字取自概念清单）。
@@ -630,4 +632,47 @@ mod tests {
         // 进度（已复习）与掌握（需巩固）分开统计，无百分比
         assert_eq!(map.stats(), (3, 2, 1));
     }
+}
+
+/// 概念清单签名：概念名排序后 hash。概念集任何变化（导入/刷新/删除）都会改变签名。
+pub fn signature_of(mut names: Vec<String>) -> u64 {
+    names.sort();
+    names.join("\u{1}");
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    names.hash(&mut h);
+    h.finish()
+}
+
+/// 持久缓存的地图条目（data/outline/{course_id}.json）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CachedOutline {
+    pub signature: u64,
+    pub map: ReviewMap,
+}
+
+/// 读取持久缓存。None = 无缓存。
+pub fn load_outline_cache(course_id: i64) -> Result<Option<CachedOutline>, String> {
+    let path = std::path::Path::new("data/outline").join(format!("{course_id}.json"));
+    let raw = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+    };
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|e| format!("大纲缓存解析失败: {e}"))
+}
+
+/// 写持久缓存（覆盖式）。
+pub fn save_outline_cache(course_id: i64, signature: u64, map: &ReviewMap) -> Result<(), String> {
+    let dir = std::path::Path::new("data/outline");
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!("{course_id}.json"));
+    let cached = CachedOutline {
+        signature,
+        map: map.clone(),
+    };
+    let json = serde_json::to_string_pretty(&cached).map_err(|e| e.to_string())?;
+    std::fs::write(path, json).map_err(|e| e.to_string())
 }

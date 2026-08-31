@@ -25,22 +25,38 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!("课程 `{course_name}` 不存在");
     };
 
-    println!(
-        "生成复习地图（{} / {}，组织 {} 个概念）…\n",
-        pc.name,
-        pc.model,
-        store.list_concepts_with_mastery(Some(course_id))?.len()
+    let concepts = store.list_concepts_with_mastery(Some(course_id))?;
+    let signature = importer::review_map::signature_of(
+        concepts.iter().map(|c| c.name.clone()).collect(),
     );
-    let map = importer::review_map::build_review_map(
-        Arc::clone(&store),
-        provider,
-        pc,
-        course_id,
-        course_name,
-        &CancellationToken::new(),
-    )
-    .await
-    .map_err(|e| anyhow::anyhow!(e))?;
+    let cached = importer::review_map::load_outline_cache(course_id).map_err(|e| anyhow::anyhow!(e))?;
+    let map = match cached {
+        Some(c) if c.signature == signature => {
+            println!("（缓存命中，零 LLM）\n");
+            c.map
+        }
+        _ => {
+            println!(
+                "（缓存未命中/概念变化，调 LLM：{} / {}，组织 {} 个概念）\n",
+                pc.name,
+                pc.model,
+                concepts.len()
+            );
+            let map = importer::review_map::build_review_map(
+                Arc::clone(&store),
+                provider,
+                pc,
+                course_id,
+                course_name,
+                &CancellationToken::new(),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+            importer::review_map::save_outline_cache(course_id, signature, &map)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            map
+        }
+    };
 
     println!("{}", map.markdown());
     println!("══ 选择器条目（前 10）══");
