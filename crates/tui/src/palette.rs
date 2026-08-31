@@ -118,6 +118,12 @@ impl CommandPalette {
                 action: A::WizardReview,
                 group: G::Learn,
             },
+            P {
+                command: "/review-map",
+                desc: "复习地图：选知识点开复习（△ 巩固优先）",
+                action: A::Run,
+                group: G::Learn,
+            },
             // ---- 知识库 ----
             P {
                 command: "/notes",
