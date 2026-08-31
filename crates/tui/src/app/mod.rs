@@ -407,9 +407,14 @@ impl App {
             } else {
                 ""
             };
-            let cur = (rs.current + 1).min(rs.questions.len());
+            let generating = if !self.review_grading && rs.questions.get(rs.current).is_none() {
+                " · Generating…"
+            } else {
+                ""
+            };
+            let cur = (rs.current + 1).min(rs.planned);
             return (
-                format!("◌ Review {cur}/{}{grading}", rs.questions.len()),
+                format!("◌ Review {cur}/{}{grading}{generating}", rs.planned),
                 theme::USER,
             );
         }
