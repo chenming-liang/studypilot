@@ -56,7 +56,8 @@ pub enum AppEvent {
     /// /budget reset 完成
     BudgetReset(Result<(), String>),
     /// /outline 完成：(LLM 返回的 JSON 文本, 课程名, 是否导出, 笔记标题列表)
-    OutlineGenerated(Option<String>, String, bool, Vec<(i64, String)>),
+    /// /outline 完成：概念驱动的复习地图（组织既有概念 + 状态渲染）
+    OutlineReady(Result<crate::outline_render::OutlinePayload, String>),
     /// /review 出题完成（首题；后续题走 ReviewQuestionReady）
     ReviewReady(Result<review::ReviewState, String>),
     /// 复习逐题生成的后续题目回流（用户作答当前题时后台预取）

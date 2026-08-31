@@ -8,7 +8,9 @@ mod events;
 mod extract;
 mod parser;
 mod pipeline;
+pub mod review_map;
 
 pub use events::ImportEvent;
 pub use extract::{extract_concepts, refresh_course_concepts};
 pub use pipeline::{ImportConfig, import_directory};
+pub use review_map::{ReviewMap, build_review_map};
