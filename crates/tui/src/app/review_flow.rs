@@ -5,6 +5,7 @@ use std::sync::Arc;
 use agent_core::{Message, Provider};
 use serde::Deserialize;
 use tokio::task::spawn_blocking;
+use tools::SearchNotesTool;
 
 use super::{App, AppEvent, Entry};
 use crate::review;
@@ -84,8 +85,8 @@ impl App {
         // current < planned 但 questions.len() == current：等待态，不 finish
     }
 
-    /// 反馈停留态提交追问：打包题目上下文 + 追问历史 → LLM 回答（Esc 可中断）。
-    /// 追问不改判分、不落库；失败把错误放进该轮对话（workspace 红色可见）。
+    /// 反馈停留态提交追问：问题即时显示（思考行占位），后台 agent loop（带
+    /// search_notes 工具）回答后填充。追问不改判分、不落库；失败放红色可见。
     pub(crate) fn submit_followup(&mut self) {
         let text = self.input.trim().to_owned();
         if text.is_empty() {
@@ -107,23 +108,31 @@ impl App {
         let is_correct = result.map(|r| r.correct).unwrap_or(false);
         let explanation = q.explanation.clone();
         let missing = result.map(|r| r.missing.clone()).unwrap_or_default();
-        // 追问历史只喂成功轮
+        // 追问历史只喂成功轮（Option 化后过滤 pending/失败轮）
         let history: Vec<(String, String)> = rs
             .followups
             .iter()
             .filter_map(|t| {
                 t.answer
                     .as_ref()
-                    .ok()
+                    .and_then(|r| r.as_ref().ok())
                     .map(|a| (t.question.clone(), a.clone()))
             })
             .collect();
+        let course_id = rs.ctx.course_id;
 
         self.input.clear();
         self.cursor_pos = 0;
-        self.scroll_up = 0; // 新内容（spinner）吸附底部
+        self.scroll_up = 0; // 新内容（追问行 + 思考行）吸附底部
         let cancel = tokio_util::sync::CancellationToken::new();
         self.followup_pending = Some(cancel.clone());
+        // 问题即时显示 + 思考行占位（问题 5：不再等回答一起出现）
+        if let Some(rs) = &mut self.review {
+            rs.followups.push(review::FollowupTurn {
+                question: text.clone(),
+                answer: None,
+            });
+        }
 
         let provider = self.provider.clone();
         let provider_cfg = self.provider_cfg.clone();
@@ -154,29 +163,43 @@ impl App {
             for (fq, fa) in &history {
                 ctx.push_str(&format!("\n学生此前追问：{fq}\n导师此前回答：{fa}\n"));
             }
-            let user_msg = format!("{ctx}\n学生追问：{text}");
-            let messages = [
-                Message::system(
+            let user_msg = format!(
+                "{ctx}\n学生追问：{text}\n\n\
+                 （回答前先用 search_notes 查笔记是否覆盖该知识点：\
+                 查到的内容按笔记回答并标明出处；笔记没覆盖的部分用你的知识补充并明示「笔记外补充」。）"
+            );
+            let agent = agent_core::Agent::new(provider)
+                .with_tools(
+                    agent_core::ToolBox::new().register(Box::new(SearchNotesTool::new(
+                        Arc::clone(&store),
+                        course_id,
+                    ))),
+                )
+                .with_system_prompt(
                     "你是课程学习导师，学生刚复习完一道题后来追问。\
-                     回答要简洁准确、切中学生疑问，用 markdown（代码用围栏标注语言）。不要复述整道题。",
-                ),
-                Message::user(&user_msg),
-            ];
-            let resp = agent_providers::with_cancel(provider.chat(&messages, &[]), &cancel).await;
-            match resp {
-                Some(Ok(r)) => {
-                    App::log_llm_usage(&store, &provider_cfg, "review", &r.usage);
-                    let _ = tx.send(AppEvent::ReviewFollowup(idx, text, Ok(r.content)));
+                     回答要简洁准确、切中学生疑问，用 markdown（代码用围栏标注语言）。不要复述整道题。\
+                     涉及「笔记里有没有讲」的问题必须先查笔记（search_notes），不许凭空判断。",
+                );
+            let history = [Message::user(&user_msg)];
+            tokio::select! {
+                res = agent.run_messages(&history) => match res {
+                    Ok(result) => {
+                        App::log_llm_usage(&store, &provider_cfg, "review", &result.total_usage);
+                        let _ = tx.send(AppEvent::ReviewFollowup(idx, text, Ok(result.content)));
+                    }
+                    Err(e) => {
+                        let _ = tx.send(AppEvent::ReviewFollowup(idx, text, Err(e.to_string())));
+                    }
+                },
+                _ = cancel.cancelled() => {
+                    // Esc 中断：填充占位行为中断标记（workspace 红色可见）
+                    let _ = tx.send(AppEvent::ReviewFollowup(idx, text, Err("（已中断）".into())));
                 }
-                Some(Err(e)) => {
-                    let _ = tx.send(AppEvent::ReviewFollowup(idx, text, Err(e.to_string())));
-                }
-                None => {} // 已被 Esc 中断：followup_pending 已清，不打扰
             }
         });
     }
 
-    /// 追问回答回流：校验索引 → 追加进当前题的追问对话（workspace 渲染）。
+    /// 追问回答回流：校验索引 → 填充当前题的追问对话（workspace 渲染）。
     pub(crate) fn on_review_followup(
         &mut self,
         idx: usize,
@@ -195,10 +218,13 @@ impl App {
             return;
         }
         let Some(rs) = &mut self.review else { return };
-        rs.followups.push(review::FollowupTurn {
-            question,
-            answer: result,
-        });
+        // 填充最后一条 pending 的追问（按问句匹配，防错位）
+        if let Some(turn) = rs.followups.last_mut()
+            && turn.answer.is_none()
+            && turn.question == question
+        {
+            turn.answer = Some(result);
+        }
     }
 
     /// 完成整个复习：从状态渲染摘要卡。`advance_review` 到尾题时调用。
@@ -207,32 +233,27 @@ impl App {
         self.finish_review_state(rs);
     }
 
-    /// 渲染复习摘要卡（静态）+ 触发异步 LLM 小结建议。按状态渲染，供完成/中途退出共用。
+    /// 渲染复习摘要卡（markdown 富文本）+ 触发异步 LLM 小结建议。按状态渲染，供完成/中途退出共用。
     fn finish_review_state(&mut self, rs: review::ReviewState) {
         let total = rs.questions.len();
         let correct_count = rs.results.iter().filter(|r| r.correct).count();
-        self.push_entry(Entry::Info("══ Review Complete ══".into()));
-        self.push_entry(Entry::Info(format!("正确 {correct_count}/{total}")));
+        let rate = if total > 0 {
+            correct_count as f64 * 100.0 / total as f64
+        } else {
+            0.0
+        };
+        let mut md =
+            format!("## 复习完成\n\n**正确 {correct_count}/{total}** · 正确率 {rate:.0}%\n");
         for (i, (q, r)) in rs.questions.iter().zip(rs.results.iter()).enumerate() {
             let mark = if r.correct { "✓" } else { "✗" };
-            let score = r.score.map(|s| format!(" · {s}/100")).unwrap_or_default();
-            self.push_entry(Entry::Info(format!(
-                "{mark} Q{} · {}{score}",
-                i + 1,
-                q.question.chars().take(24).collect::<String>()
-            )));
+            let score = r.score.map(|s| format!("（{s}/100）")).unwrap_or_default();
+            let short: String = q.question.replace('\n', " ").chars().take(40).collect();
+            md.push_str(&format!("\n{mark} **Q{}** {short}{score}", i + 1));
             if !r.missing.is_empty() {
-                self.push_entry(Entry::Info(format!("   缺失: {}", r.missing.join("；"))));
+                md.push_str(&format!("\n   - 缺失: {}", r.missing.join("；")));
             }
         }
-        self.push_entry(Entry::Info(format!(
-            "正确率 {:.0}%",
-            if total > 0 {
-                correct_count as f64 * 100.0 / total as f64
-            } else {
-                0.0
-            }
-        )));
+        self.push_entry(Entry::Markdown(md));
 
         // 异步 LLM 小结建议（Observe 整轮结果 → Decide 下一步；不阻塞已显示的静态卡）
         self.spawn_review_advice(&rs);
@@ -340,9 +361,13 @@ impl App {
     }
 
     pub(crate) fn on_review_advice(&mut self, text: String) {
-        for line in text.lines() {
-            self.push_entry(Entry::Info(line.to_owned()));
+        // 小结建议走 markdown 富文本（标题/分组着色），不再灰色信息流
+        let mut md = String::from("### 复习小结\n");
+        for line in text.lines().skip(1) {
+            md.push_str(line);
+            md.push('\n');
         }
+        self.push_entry(Entry::Markdown(md));
     }
 
     pub(crate) fn exit_review(&mut self, msg: &str) {

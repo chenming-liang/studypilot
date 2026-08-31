@@ -108,11 +108,12 @@ pub struct QuizContext {
     pub concept_list: String,
 }
 
-/// 一轮追问（问，答）。答为 Err 时是获取失败（渲染红色，不喂回 LLM）。
+/// 一轮追问（问，答）。answer 为 None 表示回答生成中（workspace 显示思考行）；
+/// Err 是获取失败（渲染红色，不喂回 LLM）。
 #[derive(Debug, Clone)]
 pub struct FollowupTurn {
     pub question: String,
-    pub answer: Result<String, String>,
+    pub answer: Option<Result<String, String>>,
 }
 
 /// 一道题目（含 DB id）。
@@ -408,10 +409,10 @@ fn build_question_messages(
          # 已出过的题目（本题必须避开这些考点，同一概念尽量只出一题）\n{asked}\n\n\
          # 本题要求\n\
          - 题型固定为：{type_name}\n\
-         - P1 考知识，不考材料：好题的判据是——把题干里「根据笔记」「第X章」「某示例」这类前缀删掉后依然成立。素材只支撑答案，禁止出现在题干里。禁止问「笔记/章节/示例讲了什么」。\n\
+         - P1 考知识，不考材料：好题的判据是——把题干里「根据笔记」「第X章」「某示例」这类前缀删掉后依然成立。素材只支撑答案，禁止出现在题干里。禁止问「笔记/章节/示例讲了什么」。考点必须能在素材中找到依据；素材不足以支撑的考点，换素材覆盖的知识点，禁止凭空考察素材外的语言细节。\\n\\
          - P2 认知层级：本题应是 Recall（什么是 X）/ Explain（为什么 X，机制）/ Predict（如果…会怎样，可给代码预测输出）/ Apply（X 和 Y 的区别，用 X 解决…）之一，禁止纯复述。\n\
          - P3 选择题：单选唯一正确、四个选项互斥；干扰项与正确项同质（长度句式相近、源于常见误区、看起来都像对的）；禁止「以上都对/都不对」。\n\
-         - P4 简答题：key_points 给 2~4 个可独立判分的要点；问题要引发解释或推理，不能一句话答完。\n\
+         - P4 简答题：一题一个焦点——只考一个认知任务，禁止复合句式（「并说明…并给出…」必须拆开或砍掉）；key_points 是答案必须包含的核心事实点（1~3 个），不是完整回答的每个组成部分；好题标准：真实考试会出现、认真学过的学生 2~3 句话能答完。\\n\\
          - P5 针对性：优先考察掌握度低（次数少或正确率低）的概念；每题 concept 必须取自概念列表。\n\n\
          # 禁止事项（反例，禁止照此出题）\n\
          ✗ 「根据笔记，第 9 章主要讲什么？」——考材料\n\
@@ -661,9 +662,17 @@ pub async fn grade_short_answer(
     let key_points = question.key_points.join("；");
     let question_text = &question.question;
     let prompt = format!(
-        "批改简答题。\n题目: {question_text}\n参考要点: {key_points}\n用户答案: {user_answer}\n\n\
-         输出 JSON：{{\"score\": 0-100, \"missing\": [\"缺失要点\"], \"comment\": \"评语\"}}\n\
-         评分标准：完全正确 90-100，大部分正确 70-89，部分正确 40-69，错误 0-39。"
+        "批改简答题。\n题目: {question_text}\n判分要点（答案必须包含的核心事实）: {key_points}\n用户答案: {user_answer}\n\n\
+         评分标准：\n\
+         - score 反映答案的【正确性】，不是完整性。\n\
+         - 核心结论正确且无事实性错误 → 90-100。\n\
+         - 有事实性错误或核心结论错误 → 按严重程度 0-69。\n\
+         - 禁止把「同一事实的另一种说法」「更详细的展开」「不同但等价的表述」算作缺失要点。\n\
+         - 禁止要求学生复述解析里的完整推理过程——答对结论就是答对。\n\
+         - score >= 85 时 missing 必须为空数组。\n\
+         - missing 只列真正缺失或错误的核心事实点，至多 2 条；没有就给空数组。\n\
+         - comment 一句话，针对答案本身。\n\n\
+         输出 JSON：{{\"score\": 0-100, \"missing\": [\"缺失要点\"], \"comment\": \"评语\"}}"
     );
 
     let messages = [

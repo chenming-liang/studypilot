@@ -273,8 +273,15 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &mut App) {
                     format!("  你 › {}", turn.question),
                     Style::new().fg(theme::USER),
                 )));
-                match &turn.answer {
-                    Ok(a) => {
+                match turn.answer.as_ref() {
+                    None => {
+                        // 回答生成中：占位思考行（问题 5：问句先显示）
+                        body.push(Line::from(Span::styled(
+                            format!("  {} 正在生成回答…", spinner_char(app.tick)),
+                            Style::new().fg(DIM),
+                        )));
+                    }
+                    Some(Ok(a)) => {
                         let mut ans_lines =
                             markdown::render_markdown(a, inner_w.saturating_sub(2).max(1));
                         while ans_lines.last().is_some_and(|l| l.spans.is_empty()) {
@@ -286,7 +293,7 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &mut App) {
                             body.push(Line::from(spans));
                         }
                     }
-                    Err(e) => {
+                    Some(Err(e)) => {
                         body.push(Line::from(Span::styled(
                             format!("  ⚠ {e}"),
                             Style::new().fg(ERROR),
@@ -295,13 +302,6 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &mut App) {
                 }
                 body.push(Line::default());
             }
-        }
-        // 追问等待中：spinner 行（tick 驱动）
-        if app.followup_pending.is_some() {
-            body.push(Line::from(Span::styled(
-                format!("  {} 正在生成回答…", spinner_char(app.tick)),
-                Style::new().fg(DIM),
-            )));
         }
         body.push(Line::default());
         body.push(Line::from(Span::styled(
@@ -632,6 +632,17 @@ fn append_entry_lines(entry: &Entry, width: usize, out: &mut Vec<Line<'static>>)
                 out.push(Line::from(spans));
             }
             out.push(Line::default()); // 块间空行：紫条与下一条消息隔开
+        }
+        Entry::Markdown(text) => {
+            // 富文本块（摘要卡/大纲）：PRIMARY 色条 + markdown 管线
+            let md_lines = markdown::render_markdown(text, w);
+            for l in md_lines {
+                let mut spans: Vec<Span<'static>> =
+                    vec![Span::styled("▎ ", Style::new().fg(theme::PRIMARY))];
+                spans.extend(l.spans);
+                out.push(Line::from(spans));
+            }
+            out.push(Line::default());
         }
         Entry::Tool { text, ok } => {
             // 工具活动：◌ 蓝紫进行中 / ✓ 绿 / ✗ 红
