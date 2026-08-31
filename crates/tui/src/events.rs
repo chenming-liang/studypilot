@@ -64,6 +64,8 @@ pub enum AppEvent {
     ReviewQuestionReady(Result<review::ReviewQuestion, String>),
     /// /refresh-concepts 完成：(汇总消息)——逐篇重抽概念 + 清理废弃概念
     ConceptsRefreshed(Result<String, String>),
+    /// /review-map 完成：状态重读后的复习地图（渲染 + 弹选择器）
+    ReviewMapReady(Result<crate::outline_render::ReviewMap, String>),
     /// 简答题批改完成：(题目索引, (score, missing, comment))
     ReviewGraded(usize, Result<(i64, Vec<String>, Option<String>), String>),
     /// 整轮复习结束后的 LLM 小结建议（已格式化文本，多行）

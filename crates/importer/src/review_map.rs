@@ -87,6 +87,8 @@ pub struct ReviewMap {
     pub unresolved: usize,
     /// 笔记编号 → 标题
     pub titles: Vec<(i64, String)>,
+    /// 今日作答次数（Anki 式今日/长期分层；构建/刷新时填）
+    pub today_attempts: usize,
 }
 
 impl ReviewMap {
@@ -116,6 +118,9 @@ impl ReviewMap {
             "## {} · 复习地图\n\n**{total}** 个知识点 · 已复习 {reviewed} · 需巩固 {weak}\n",
             self.course
         );
+        if self.today_attempts > 0 {
+            md.push_str(&format!("\n今日作答 {} 题\n", self.today_attempts));
+        }
         for s in &self.sections {
             let (mut sc, mut sw) = (0usize, 0usize);
             for n in &s.nodes {
@@ -178,24 +183,79 @@ impl ReviewMap {
         md
     }
 
-    /// 选择器条目：(label, command)——Enter 直接对单概念发起复习。
+    /// 从 DB 概念清单刷新状态（结构不变，掌握度重读）——/review-map 秒开无 LLM。
+    pub fn with_refreshed_status(mut self, concepts: &[storage::ConceptMastery]) -> Self {
+        let by_id: HashMap<i64, &storage::ConceptMastery> =
+            concepts.iter().map(|c| (c.concept_id, c)).collect();
+        for s in &mut self.sections {
+            for n in &mut s.nodes {
+                if let Some(id) = n.concept_id
+                    && let Some(c) = by_id.get(&id)
+                {
+                    n.attempts = c.attempts as usize;
+                    n.correct = c.correct as usize;
+                }
+            }
+        }
+        self
+    }
+
+    /// 回填今日作答数（/review-map 重读时）。
+    pub fn with_today(&mut self, n: usize) -> &mut Self {
+        self.today_attempts = n;
+        self
+    }
+
+    /// 选择器条目（状态驱动行动，Anki 式"状态 = 下一步"）：
+    /// 首项 = 「优先巩固」批量出题（△ + ○ 一起，数量 = 概念数），其余按 △ → ○ → ✓
+    /// 排序（组内保持大纲序）。Enter 直接发起复习。
     pub fn picker_items(&self) -> Vec<(String, String)> {
-        self.sections
-            .iter()
-            .flat_map(|s| {
-                s.nodes.iter().map(move |n| {
-                    let m = if n.attempts > 0 {
-                        format!(" ({}/{})", n.correct, n.attempts)
-                    } else {
-                        String::new()
-                    };
-                    (
-                        format!("{} {}{}", n.status().mark(), n.name, m),
-                        format!("/review --course {} --concept {}", self.course, n.name),
-                    )
-                })
-            })
-            .collect()
+        let mut weak: Vec<&ConceptNode> = Vec::new();
+        let mut fresh: Vec<&ConceptNode> = Vec::new();
+        let mut mastered: Vec<&ConceptNode> = Vec::new();
+        for s in &self.sections {
+            for n in &s.nodes {
+                match n.status() {
+                    ReviewStatus::Weak => weak.push(n),
+                    ReviewStatus::Unreviewed => fresh.push(n),
+                    ReviewStatus::Mastered => mastered.push(n),
+                }
+            }
+        }
+        let mut items: Vec<(String, String)> = Vec::new();
+        let pending: Vec<&ConceptNode> = weak.iter().chain(fresh.iter()).copied().collect();
+        if !pending.is_empty() {
+            let names: Vec<String> = pending.iter().map(|n| n.name.clone()).collect();
+            items.push((
+                format!(
+                    "▶ 优先巩固（{} 个：△{} ○{}）",
+                    pending.len(),
+                    weak.len(),
+                    fresh.len()
+                ),
+                format!(
+                    "/review --course {} --concept {} --n {}",
+                    self.course,
+                    names.join("、"),
+                    pending.len()
+                ),
+            ));
+        }
+        for n in weak.iter().chain(fresh.iter()).chain(mastered.iter()) {
+            let m = if n.attempts > 0 {
+                format!(" ({}/{})", n.correct, n.attempts)
+            } else {
+                String::new()
+            };
+            items.push((
+                format!("{} {}{}", n.status().mark(), n.name, m),
+                format!(
+                    "/review --course {} --concept {} --n 5",
+                    self.course, n.name
+                ),
+            ));
+        }
+        items
     }
 }
 
@@ -377,6 +437,7 @@ pub async fn build_review_map(
         sections,
         unresolved,
         titles,
+        today_attempts: 0, // 调用方经 with_refreshed_status 回填
     })
 }
 
@@ -431,6 +492,7 @@ mod tests {
             }],
             unresolved: 0,
             titles: vec![(1, "01-basic".into()), (2, "02-own".into())],
+            today_attempts: 0,
         };
         let md = map.markdown();
         assert!(md.contains("复习地图"));
@@ -452,12 +514,98 @@ mod tests {
             }],
             unresolved: 0,
             titles: vec![(1, "01-basic".into())],
+            today_attempts: 0,
         };
         let items = map.picker_items();
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0].0, "○ 所有权");
-        assert_eq!(items[0].1, "/review --course rust --concept 所有权");
+        assert_eq!(items.len(), 3);
+        // 首项 = 优先巩固批量（△+○ 全部待巩固概念）
+        assert!(items[0].1.contains("--concept 借用、所有权 --n 2"));
+        // 状态排序：△ 优先于 ○
         assert_eq!(items[1].0, "△ 借用 (0/1)");
+        assert_eq!(items[2].0, "○ 所有权");
+    }
+
+    #[test]
+    fn picker_sorted_weak_first_with_batch_item() {
+        let map = ReviewMap {
+            course: "rust".into(),
+            sections: vec![OutlineSection {
+                title: "s".into(),
+                nodes: vec![
+                    node("已掌握", 2, 2), // ✓
+                    node("薄弱", 2, 1),   // △
+                    node("未学", 0, 0),   // ○
+                ],
+                refs: vec![],
+            }],
+            unresolved: 0,
+            titles: vec![],
+            today_attempts: 3,
+        };
+        let items = map.picker_items();
+        // 首项 = 优先巩固批量项（△+○，数量=概念数）
+        assert_eq!(items[0].0, "▶ 优先巩固（2 个：△1 ○1）");
+        assert!(items[0].1.contains("--concept 薄弱、未学 --n 2"));
+        // 排序：△ → ○ → ✓
+        assert_eq!(items[1].0, "△ 薄弱 (1/2)");
+        assert_eq!(items[2].0, "○ 未学");
+        assert_eq!(items[3].0, "✓ 已掌握 (2/2)");
+        // 普通行显式带默认数量
+        assert!(items[1].1.ends_with("--n 5"));
+    }
+
+    #[test]
+    fn markdown_shows_today_line() {
+        let map = ReviewMap {
+            course: "rust".into(),
+            sections: vec![OutlineSection {
+                title: "s".into(),
+                nodes: vec![node("a", 0, 0)],
+                refs: vec![],
+            }],
+            unresolved: 0,
+            titles: vec![],
+            today_attempts: 7,
+        };
+        let md = map.markdown();
+        assert!(md.contains("今日作答 7 题"));
+    }
+
+    #[test]
+    fn with_refreshed_status_keeps_structure() {
+        let mut map = ReviewMap {
+            course: "rust".into(),
+            sections: vec![OutlineSection {
+                title: "s".into(),
+                nodes: vec![ConceptNode {
+                    concept_id: Some(9),
+                    name: "所有权".into(),
+                    attempts: 0,
+                    correct: 0,
+                }],
+                refs: vec![],
+            }],
+            unresolved: 0,
+            titles: vec![],
+            today_attempts: 0,
+        };
+        let fresh = vec![storage::ConceptMastery {
+            concept_id: 9,
+            name: "所有权".into(),
+            attempts: 3,
+            correct: 1,
+        }];
+        let checked = map
+            .clone()
+            .with_refreshed_status(&fresh)
+            .with_today(2)
+            .clone();
+        let n = &checked.sections[0].nodes[0];
+        assert_eq!((n.attempts, n.correct), (3, 1));
+        assert_eq!(n.status(), ReviewStatus::Weak);
+        assert_eq!(checked.today_attempts, 2);
+        // 章节结构/名字不变（LLM 组织不重跑）
+        assert_eq!(checked.sections[0].title, "s");
     }
 
     #[test]
@@ -475,6 +623,7 @@ mod tests {
             }],
             unresolved: 0,
             titles: vec![],
+            today_attempts: 0,
         };
         // 进度（已复习）与掌握（需巩固）分开统计，无百分比
         assert_eq!(map.stats(), (3, 2, 1));
