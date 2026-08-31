@@ -544,6 +544,17 @@ impl Store {
         Ok(())
     }
 
+    /// 课程内概念→笔记 id 关联（Review Map 的章节 refs 聚合用）。
+    pub fn concept_note_pairs(&self, course_id: i64) -> Result<Vec<(i64, i64)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT nc.concept_id, nc.note_id FROM note_concepts nc
+             JOIN concepts c ON c.id = nc.concept_id WHERE c.course_id = ?1",
+        )?;
+        let rows = stmt.query_map([course_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.flatten().collect())
+    }
+
     /// 解除笔记的全部概念关联（概念刷新第一步）。
     pub fn unlink_note_concepts(&self, note_id: i64) -> Result<usize> {
         let conn = self.conn.lock().unwrap();
