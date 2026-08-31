@@ -29,6 +29,15 @@ async fn main() -> anyhow::Result<()> {
 
     // D2：DB 操作走 spawn_blocking；这里启动时同步读一次课程列表+统计与累计成本
     let store = Arc::new(storage::Store::open("data/mynotes.db")?);
+    // 预算上限：config.toml 的 max_cost 为默认，data/budget.json（/budget 设置）覆盖
+    let mut max_cost = cfg.max_cost;
+    if let Ok(raw) = std::fs::read_to_string("data/budget.json")
+        && let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw)
+        && let Some(m) = v.get("max_cost").and_then(serde_json::Value::as_f64)
+        && m > 0.0
+    {
+        max_cost = m;
+    }
     let courses = store.list_courses()?;
     let mut course_stats = std::collections::HashMap::new();
     for (id, _) in &courses {
@@ -50,14 +59,7 @@ async fn main() -> anyhow::Result<()> {
         crossterm::cursor::SetCursorStyle::SteadyBlock
     )?;
     let result = {
-        let mut app = app::App::new(
-            client,
-            store,
-            pc,
-            cfg.providers.clone(),
-            cfg.max_cost,
-            courses,
-        );
+        let mut app = app::App::new(client, store, pc, cfg.providers.clone(), max_cost, courses);
         app.sidebar_course_stats = course_stats;
         // R6：状态栏显示含历史的累计成本，预算熔断按累计值判断
         app.total_cost = recorded_cost;

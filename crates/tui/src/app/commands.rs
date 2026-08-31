@@ -219,11 +219,17 @@ impl App {
             return;
         }
 
-        // 设置新上限
+        // 设置新上限（持久化到 data/budget.json——重启后保留，问题16）
         match arg.parse::<f64>() {
             Ok(val) if val > 0.0 => {
                 self.max_cost = val;
-                self.push_entry(Entry::Info(format!("预算上限已设为 ¥{val:.2}")));
+                let dir = std::path::Path::new("data");
+                let _ = std::fs::create_dir_all(dir);
+                let _ =
+                    std::fs::write(dir.join("budget.json"), format!(r#"{{"max_cost": {val}}}"#));
+                self.push_entry(Entry::Info(format!(
+                    "预算上限已设为 ¥{val:.2}（已保存，重启保留）"
+                )));
             }
             _ => {
                 self.push_entry(Entry::Error(
