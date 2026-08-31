@@ -85,9 +85,10 @@ impl App {
                     "【复习】",
                     "  /review --course <名> [--concept <概念>] [--n 数量]",
                     "    出题（选择+简答，掌握度低优先）；无参 /review 走向导",
+                    "  /review-map                   复习地图：选知识点开复习",
                     "",
                     "【大纲】",
-                    "  /outline [课程] [--export]    生成课程知识大纲",
+                    "  /outline [课程] [--export]    生成课程知识大纲（复习地图）",
                     "",
                     "【系统】",
                     "  /model 切换模型 · /budget 预算 · /new /sessions /open /rename 会话",
@@ -137,6 +138,7 @@ impl App {
             "/outline" => self.handle_outline_command(arg.trim()),
             "/search" => self.not_implemented("/search", "M7（检索能力经 agent 工具自动调度）"),
             "/refresh-concepts" => self.handle_refresh_concepts(),
+            "/review-map" => self.handle_review_map_command(),
             "/review" => self.handle_review_command(arg.trim()),
             _ => {
                 self.push_entry(Entry::Error(format!(

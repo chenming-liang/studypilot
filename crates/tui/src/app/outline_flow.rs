@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use tokio::task::spawn_blocking;
+
 use tokio_util::sync::CancellationToken;
 
 use super::{App, AppEvent, Entry};
@@ -57,11 +59,43 @@ impl App {
         });
     }
 
-    /// 复习地图选择器（方案 A：复用 ListPicker，Enter = 对该概念出题）。
+    /// 复习地图选择器（复用 ListPicker，Enter = 对该概念出题）。
     pub(crate) fn open_review_map_picker(&mut self) {
         if self.review_map.is_some() {
             self.open_list_picker(crate::palette::PickKind::ReviewMap);
         }
+    }
+
+    /// /review-map —— 从缓存章节结构重读掌握度（无 LLM，秒开）+ 渲染 + 弹选择器。
+    pub(crate) fn handle_review_map_command(&mut self) {
+        let Some(map) = &self.review_map else {
+            self.push_entry(Entry::Error(
+                "还没有复习地图：先 /outline 生成（章节结构来自 LLM 组织）".into(),
+            ));
+            return;
+        };
+        let course_id = self
+            .courses
+            .iter()
+            .find(|(_, n)| *n == map.course.as_str())
+            .map(|(id, _)| *id);
+        let Some(course_id) = course_id else {
+            self.push_entry(Entry::Error(format!("课程 `{}` 不存在", map.course)));
+            return;
+        };
+        let store = Arc::clone(&self.store);
+        let map = map.clone();
+        let tx = self.tx.clone();
+        spawn_blocking(move || {
+            let concepts = store.list_concepts_with_mastery(Some(course_id));
+            let today = store.attempts_today_by_course(course_id);
+            let _ = tx.send(AppEvent::ReviewMapReady(
+                concepts
+                    .and_then(|c| today.map(|t| (c, t)))
+                    .map(|(c, t)| map.with_refreshed_status(&c).with_today(t).clone())
+                    .map_err(|e| e.to_string()),
+            ));
+        });
     }
 
     pub(crate) fn on_outline_ready(&mut self, result: Result<OutlinePayload, String>) {
@@ -85,10 +119,7 @@ impl App {
                     }
                 } else {
                     self.push_entry(Entry::Markdown(payload.map.markdown()));
-                    self.push_entry(Entry::Info(
-                        "· 选中一个知识点开始复习（选择器中 Enter = 对该概念出题）".into(),
-                    ));
-                    self.open_review_map_picker();
+                    self.push_entry(Entry::Info("· 输入 /review-map 选择知识点开始复习".into()));
                 }
             }
             Err(e) => {

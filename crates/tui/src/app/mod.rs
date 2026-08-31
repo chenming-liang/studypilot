@@ -553,6 +553,20 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
             AppEvent::OutlineReady(result) => app.on_outline_ready(result),
             AppEvent::ReviewReady(result) => app.on_review_ready(result),
             AppEvent::ReviewQuestionReady(result) => app.on_review_question_ready(result),
+            AppEvent::ReviewMapReady(result) => {
+                app.inflight = None;
+                match result {
+                    Ok(map) => {
+                        app.review_map = Some(map.clone());
+                        app.push_entry(Entry::Markdown(map.markdown()));
+                        app.push_entry(Entry::Info(
+                            "· Enter 选中的概念即开始复习 · /outline 重新组织".into(),
+                        ));
+                        app.open_review_map_picker();
+                    }
+                    Err(e) => app.push_entry(Entry::Error(format!("复习地图加载失败: {e}"))),
+                }
+            }
             AppEvent::ConceptsRefreshed(result) => {
                 app.inflight = None;
                 app.request_cost_sync();

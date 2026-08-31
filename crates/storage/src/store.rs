@@ -544,6 +544,20 @@ impl Store {
         Ok(())
     }
 
+    /// 课程今日作答次数（Anki 式"今日/长期"分层统计的今日侧）。
+    pub fn attempts_today_by_course(&self, course_id: i64) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM attempts a
+             JOIN questions q ON q.id = a.question_id
+             JOIN quizzes z ON z.id = q.quiz_id
+             WHERE z.course_id = ?1 AND date(a.created_at) = date('now','localtime')",
+            [course_id],
+            |r| r.get(0),
+        )?;
+        Ok(n as usize)
+    }
+
     /// 课程内概念→笔记 id 关联（Review Map 的章节 refs 聚合用）。
     pub fn concept_note_pairs(&self, course_id: i64) -> Result<Vec<(i64, i64)>> {
         let conn = self.conn.lock().unwrap();
