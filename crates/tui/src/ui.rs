@@ -90,28 +90,27 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &mut App) {
     let Some(rs) = app.review.as_ref() else {
         return;
     };
-    let Some(q) = rs.questions.get(rs.current) else {
-        return;
-    };
     let inner_w = area.width.saturating_sub(4) as usize;
     let awaiting = rs.awaiting_feedback();
+    let total = rs.planned;
 
-    // ① 进度圆点：✓ 绿 ✗ 红 ● 黄 ○ 暗灰（每颗独立染色，直接拼进行）
-    let total = rs.questions.len();
+    // 进度圆点（总槽位 = planned；未生成的槽位画 ○）
     let mut dots: Vec<Span<'static>> = Vec::new();
-    for (i, r) in rs.results.iter().enumerate() {
+    for r in rs.results.iter() {
         dots.push(Span::styled(
             if r.correct { "✓" } else { "✗" },
             Style::new().fg(if r.correct { theme::SUCCESS } else { ERROR }),
         ));
-        if i + 1 < total {
-            dots.push(Span::raw(" "));
-        }
+        dots.push(Span::raw(" "));
     }
     for i in rs.results.len()..total {
         dots.push(Span::styled(
-            if i == rs.current { "●" } else { "○" },
-            Style::new().fg(if i == rs.current {
+            if i == rs.current && !awaiting {
+                "●"
+            } else {
+                "○"
+            },
+            Style::new().fg(if i == rs.current && !awaiting {
                 theme::USER
             } else {
                 theme::MUTED
@@ -121,6 +120,35 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &mut App) {
             dots.push(Span::raw(" "));
         }
     }
+
+    // 逐题生成等待态：下一题尚未到位
+    let Some(q) = rs.questions.get(rs.current) else {
+        let mut body: Vec<Line<'static>> = Vec::new();
+        let mut dots_line = vec![Span::raw("  ")];
+        dots_line.extend(dots);
+        body.push(Line::from(dots_line));
+        body.push(Line::default());
+        body.push(Line::from(vec![
+            Span::styled(
+                format!("Question {}/{}", rs.current + 1, total),
+                Style::new().fg(theme::USER).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  ·  出题中…", Style::new().fg(theme::MUTED)),
+        ]));
+        body.push(Line::default());
+        body.push(Line::from(Span::styled(
+            "  下一题正在后台生成（你作答时即已开始）…",
+            Style::new().fg(theme::MUTED),
+        )));
+        body.push(Line::from(Span::styled(
+            "  Esc 退出复习",
+            Style::new().fg(theme::MUTED),
+        )));
+        let para = Paragraph::new(body);
+        f.render_widget(para, area);
+        return;
+    };
+
     // ② 标签行
     let type_str = if q.q_type == QType::Choice {
         "选择题"

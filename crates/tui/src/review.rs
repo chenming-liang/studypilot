@@ -80,6 +80,12 @@ pub struct ReviewState {
     pub selected_option: Option<usize>,
     /// 当前题的追问对话（切题清空；纯学习辅助，不改判分、不落库）
     pub followups: Vec<FollowupTurn>,
+    /// 计划总题数（逐题生成：questions 逐个到位，到位数 ≤ planned）
+    pub planned: usize,
+    /// 下一题是否正在后台生成
+    pub next_pending: bool,
+    /// 出题上下文（素材/范围/概念，逐题生成共用；Arc 保证 Clone 廉价）
+    pub ctx: std::sync::Arc<QuizContext>,
 }
 
 impl ReviewState {
@@ -87,6 +93,19 @@ impl ReviewState {
     pub fn awaiting_feedback(&self) -> bool {
         self.results.len() > self.current
     }
+}
+
+/// 出题上下文：素材收集一次，逐题生成共用（保证整轮范围一致）。
+#[derive(Debug, Clone)]
+pub struct QuizContext {
+    pub course_id: Option<i64>,
+    pub course_name: String,
+    /// 范围指令（自由文本解析或随机概念集）
+    pub directive: String,
+    /// 素材块（笔记片段预览）
+    pub material: String,
+    /// 概念+掌握度列表（"名(对/总)"逗号串）
+    pub concept_list: String,
 }
 
 /// 一轮追问（问，答）。答为 Err 时是获取失败（渲染红色，不喂回 LLM）。
@@ -253,9 +272,7 @@ pub async fn start_review(
         return;
     }
 
-    // ② 构建出题 prompt（重构：考知识不考材料 + 认知层级 + 选项/简答质量 + 范围指令）
-    let choice_n = n.div_ceil(2);
-    let short_n = n / 2;
+    // ② 出题上下文（素材一次收集，逐题生成共用，保证整轮范围一致）
     let material: String = chunks
         .iter()
         .enumerate()
@@ -283,70 +300,269 @@ pub async fn start_review(
         .collect::<Vec<_>>()
         .join("、");
 
+    let ctx = Arc::new(QuizContext {
+        course_id,
+        course_name: course_name.clone(),
+        directive,
+        material,
+        concept_list,
+    });
+
+    // ③ quiz 行提前建（逐题插入 questions）
+    let scope_desc = scope
+        .as_deref()
+        .map(str::to_owned)
+        .unwrap_or_else(|| "random（随机范围）".into());
+    let store_clone = Arc::clone(&store);
+    let quiz_id =
+        match tokio::task::spawn_blocking(move || store_clone.create_quiz(course_id, &scope_desc))
+            .await
+        {
+            Ok(Ok(id)) => id,
+            _ => {
+                let _ = tx.send(AppEvent::ReviewReady(Err("测验存储失败".into())));
+                return;
+            }
+        };
+
+    // ④ 生成第 1 题（与后续题共用同一套生成逻辑；失败即整体失败）
+    let qtype = pick_qtype(n, 0, 0);
+    let Some(q1) = generate_one(
+        &store,
+        &provider,
+        &provider_cfg,
+        &ctx,
+        quiz_id,
+        0,
+        n,
+        qtype,
+        &[],
+        &cancel,
+    )
+    .await
+    else {
+        let _ = tx.send(AppEvent::ReviewReady(Err(
+            "出题失败（LLM 无响应或解析失败）".into(),
+        )));
+        return;
+    };
+
+    let _ = tx.send(AppEvent::ReviewReady(Ok(ReviewState {
+        quiz_id,
+        questions: vec![q1],
+        current: 0,
+        results: Vec::new(),
+        selected_option: None,
+        followups: Vec::new(),
+        planned: n,
+        next_pending: false,
+        ctx,
+    })));
+}
+
+/// 已出题目快照（逐题生成时防重复考点；题面即考点，概念名不单独带）。
+#[derive(Debug, Clone)]
+pub struct AskedQuestion {
+    pub qtype: &'static str,
+    pub text: String,
+}
+
+/// 题型分配：选择/简答各半（choice 向上取整），剩余多者优先，持平选选择。
+pub fn pick_qtype(planned: usize, done_choice: usize, done_short: usize) -> QType {
+    let choice_rem = planned.div_ceil(2).saturating_sub(done_choice);
+    let short_rem = (planned / 2).saturating_sub(done_short);
+    if choice_rem >= short_rem && choice_rem > 0 {
+        QType::Choice
+    } else {
+        QType::ShortAnswer
+    }
+}
+
+/// 构建单题出题 prompt（P1~P5 与批量版一致 + 已出题目防重）。
+fn build_question_messages(
+    ctx: &QuizContext,
+    index: usize,
+    planned: usize,
+    qtype: &QType,
+    asked: &[AskedQuestion],
+) -> [Message; 2] {
+    let asked_text = if asked.is_empty() {
+        "（本题是第一题）".to_string()
+    } else {
+        asked
+            .iter()
+            .enumerate()
+            .map(|(i, a)| format!("{}. [{}] {}", i + 1, a.qtype, a.text))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let type_name = match qtype {
+        QType::Choice => "choice（选择题：四选项单选）",
+        QType::ShortAnswer => "short_answer（简答题：key_points 2~4 个）",
+    };
     let prompt = format!(
-        "你是《{course_name}》课程的复习出题老师，为学生出 {n} 道复习题。\n\n\
+        "你是《{course}》课程的复习出题老师。这是本轮复习的第 {k}/{n} 题。\n\n\
          # 出题范围\n{directive}\n\n\
          # 素材（笔记片段）\n{material}\n\n\
          # 概念与掌握度（名: 答对/总次数）\n{concept_list}\n\n\
-         # 出题要求\n\
-         - 共 {n} 道：{choice_n} 道选择题 + {short_n} 道简答题。\n\
+         # 已出过的题目（本题必须避开这些考点，同一概念尽量只出一题）\n{asked}\n\n\
+         # 本题要求\n\
+         - 题型固定为：{type_name}\n\
          - P1 考知识，不考材料：好题的判据是——把题干里「根据笔记」「第X章」「某示例」这类前缀删掉后依然成立。素材只支撑答案，禁止出现在题干里。禁止问「笔记/章节/示例讲了什么」。\n\
-         - P2 认知层级：覆盖至少 3 种——Recall（什么是 X）、Explain（为什么 X，X 的机制）、Predict（如果…会怎样，可给代码预测输出）、Apply（X 和 Y 的区别，用 X 解决…）。禁止全是「是什么/复述」。\n\
+         - P2 认知层级：本题应是 Recall（什么是 X）/ Explain（为什么 X，机制）/ Predict（如果…会怎样，可给代码预测输出）/ Apply（X 和 Y 的区别，用 X 解决…）之一，禁止纯复述。\n\
          - P3 选择题：单选唯一正确、四个选项互斥；干扰项与正确项同质（长度句式相近、源于常见误区、看起来都像对的）；禁止「以上都对/都不对」。\n\
          - P4 简答题：key_points 给 2~4 个可独立判分的要点；问题要引发解释或推理，不能一句话答完。\n\
-         - P5 针对性：掌握度低的概念优先；同一概念最多出 1 道；每题 concept 必须取自概念列表。\n\n\
+         - P5 针对性：优先考察掌握度低（次数少或正确率低）的概念；每题 concept 必须取自概念列表。\n\n\
          # 禁止事项（反例，禁止照此出题）\n\
          ✗ 「根据笔记，第 9 章主要讲什么？」——考材料\n\
-         ✗ 「在 ffiles1 示例中，abcde.txt 内容为 abcde 时输出是？」——照抄示例\n\
-         ✗ 「为什么 Malloc Lab 必须用 valgrind」——环境安装类琐事\n\
          ✗ 逐字复述笔记原句\n\n\
-         # 输出格式（只输出 JSON 本体，禁止用代码块包裹整个输出）\n\
-         选择题示例：\n\
-         {{\"type\":\"choice\",\"question\":\"题干（不带『根据笔记/第X章』前缀）\",\"options\":[\"正确项\",\"干扰项1\",\"干扰项2\",\"干扰项3\"],\"answer\":\"B\",\"explanation\":\"解析\",\"concept\":\"概念名\"}}\n\
-         简答题示例：\n\
-         {{\"type\":\"short_answer\",\"question\":\"题干\",\"key_points\":[\"要点1\",\"要点2\"],\"explanation\":\"解析\",\"concept\":\"概念名\"}}\n\n\
-         优先考察掌握度低（次数少或正确率低）的概念。"
+         # 输出格式（只输出 JSON 本体，单个题目对象，禁止用代码块包裹）\n\
+         选择题：{{\"type\":\"choice\",\"question\":\"题干（不带『根据笔记/第X章』前缀）\",\"options\":[\"正确项\",\"干扰项1\",\"干扰项2\",\"干扰项3\"],\"answer\":\"B\",\"explanation\":\"解析\",\"concept\":\"概念名\"}}\n\
+         简答题：{{\"type\":\"short_answer\",\"question\":\"题干\",\"key_points\":[\"要点1\",\"要点2\"],\"explanation\":\"解析\",\"concept\":\"概念名\"}}",
+        course = ctx.course_name,
+        k = index + 1,
+        n = planned,
+        directive = ctx.directive,
+        material = ctx.material,
+        concept_list = ctx.concept_list,
+        asked = asked_text,
+        type_name = type_name,
     );
-
-    let messages = [
+    [
         Message::system(
             "只输出 JSON 本体（不要用代码块包裹整个输出）。题干或解析中的代码用 ```c 等围栏包裹（写在 JSON 字符串内，换行用 \\n 转义）。",
         ),
         Message::user(&prompt),
-    ];
+    ]
+}
 
-    // ③ D4 降级链（await 期间观察取消：Ctrl+C 立即中断，不等 LLM 返回）
-    let content = if cancel.is_cancelled() {
-        // 取消也要发事件，否则 on_review_ready 不触发、inflight 卡死
-        let _ = tx.send(AppEvent::ReviewReady(Err("已取消".into())));
-        return;
-    } else {
-        match agent_providers::with_cancel(provider.chat_json(&messages), &cancel).await {
-            Some(Ok(resp)) => Some(resp),
-            Some(Err(e)) if e.is_json_mode_unsupported() => {
-                agent_providers::with_cancel(provider.chat(&messages, &[]), &cancel)
-                    .await
-                    .and_then(|r| r.ok())
-            }
-            Some(Err(e)) => {
-                tracing::warn!("出题失败: {e}");
-                None
-            }
-            None => {
-                let _ = tx.send(AppEvent::ReviewReady(Err("已取消".into())));
-                return;
-            }
+/// 单题解析：裸对象优先，兼容 {"questions":[...]}（批量旧格式）与裸数组。
+/// 解析后对文本字段做 normalize_text（LLM 双重转义换行还原，见收口会话⑩）。
+fn parse_one_question(content: &str) -> Option<QuizQuestion> {
+    let trimmed = agent_core::trim_code_fence(content);
+    let parsed = serde_json::from_str::<QuizQuestion>(trimmed)
+        .ok()
+        .or_else(|| {
+            serde_json::from_str::<QuizResponse>(trimmed)
+                .ok()
+                .and_then(|r| r.questions.into_iter().next())
+        })
+        .or_else(|| {
+            serde_json::from_str::<Vec<QuizQuestion>>(trimmed)
+                .ok()
+                .and_then(|qs| qs.into_iter().next())
+        })
+        .or_else(|| {
+            agent_core::first_json_block(trimmed).and_then(|b| {
+                serde_json::from_str::<QuizQuestion>(b).ok().or_else(|| {
+                    serde_json::from_str::<QuizResponse>(b)
+                        .ok()
+                        .and_then(|r| r.questions.into_iter().next())
+                })
+            })
+        })?;
+    let mut q = parsed;
+    q.question = normalize_text(&q.question);
+    q.explanation = q.explanation.as_deref().map(normalize_text);
+    for o in &mut q.options {
+        *o = normalize_text(o);
+    }
+    for k in &mut q.key_points {
+        *k = normalize_text(k);
+    }
+    Some(q)
+}
+
+/// 单题落库：concept 名匹配 + 插入 questions，返回 (db id, concept db id)。
+async fn insert_question_db(
+    store: &Arc<Store>,
+    quiz_id: i64,
+    course_id: Option<i64>,
+    q: &QuizQuestion,
+) -> Result<(i64, Option<i64>), String> {
+    let store_clone = Arc::clone(store);
+    let q_owned = q.clone();
+    tokio::task::spawn_blocking(move || -> storage::Result<(i64, Option<i64>)> {
+        let options_json = if q_owned.options.is_empty() {
+            None
+        } else {
+            serde_json::to_string(&q_owned.options).ok()
+        };
+        let key_points_json = if q_owned.key_points.is_empty() {
+            None
+        } else {
+            serde_json::to_string(&q_owned.key_points).ok()
+        };
+        let concept_db_id = q_owned.concept.as_deref().and_then(|name| {
+            let list = store_clone
+                .list_concepts_with_mastery(course_id)
+                .unwrap_or_default();
+            list.iter()
+                .find(|c| c.name == name)
+                .or_else(|| {
+                    list.iter()
+                        .find(|c| c.name.contains(name) || name.contains(&c.name))
+                })
+                .map(|c| c.concept_id)
+        });
+        if let Some(name) = &q_owned.concept
+            && concept_db_id.is_none()
+        {
+            tracing::warn!(concept = %name, "概念匹配失败，该题不参与掌握度闭环");
         }
-    };
+        let answer_idx = q_owned.answer.as_deref().and_then(answer_to_index);
+        let db_id = store_clone.insert_question(
+            quiz_id,
+            &q_owned.q_type,
+            &q_owned.question,
+            options_json.as_deref(),
+            answer_idx,
+            key_points_json.as_deref(),
+            q_owned.explanation.as_deref(),
+            concept_db_id,
+        )?;
+        Ok((db_id, concept_db_id))
+    })
+    .await
+    .map_err(|e| format!("任务错误: {e}"))?
+    .map_err(|e| e.to_string())
+}
 
-    let Some(resp) = content else {
-        let _ = tx.send(AppEvent::ReviewReady(Err("LLM 无响应".into())));
-        return;
+/// 一次单题生成（LLM + 解析 + 落库 + 记账）。None = 失败。
+#[allow(clippy::too_many_arguments)]
+async fn generate_one(
+    store: &Arc<Store>,
+    provider: &Arc<OpenAiClient>,
+    provider_cfg: &ProviderConfig,
+    ctx: &QuizContext,
+    quiz_id: i64,
+    index: usize,
+    planned: usize,
+    qtype: QType,
+    asked: &[AskedQuestion],
+    cancel: &CancellationToken,
+) -> Option<ReviewQuestion> {
+    if cancel.is_cancelled() {
+        return None;
+    }
+    let messages = build_question_messages(ctx, index, planned, &qtype, asked);
+    // D4 降级链（await 期间观察取消）
+    let resp = match agent_providers::with_cancel(provider.chat_json(&messages), cancel).await {
+        Some(Ok(r)) => r,
+        Some(Err(e)) if e.is_json_mode_unsupported() => {
+            agent_providers::with_cancel(provider.chat(&messages, &[]), cancel)
+                .await
+                .and_then(|r| r.ok())?
+        }
+        Some(Err(e)) => {
+            tracing::warn!("单题生成失败: {e}");
+            return None;
+        }
+        None => return None,
     };
-
-    // R6：记录 usage
-    let cost = estimate_cost(&provider_cfg, &resp.usage);
-    let store_usage = Arc::clone(&store);
+    // R6 记账
+    let cost = estimate_cost(provider_cfg, &resp.usage);
+    let store_usage = Arc::clone(store);
     let pc_usage = provider_cfg.clone();
     let u = resp.usage;
     tokio::spawn(async move {
@@ -363,132 +579,73 @@ pub async fn start_review(
         .await;
     });
 
-    // ④ 解析题目 JSON
-    let quiz: QuizResponse = match parse_quiz_json(&resp.content) {
+    let q = match parse_one_question(&resp.content) {
         Some(q) => q,
         None => {
-            // 原始返回进日志：解析失败可诊断（否则每次都是盲查）
             tracing::warn!(
                 content = %resp.content.chars().take(600).collect::<String>(),
-                "出题返回内容解析失败"
+                "单题返回内容解析失败"
             );
-            let _ = tx.send(AppEvent::ReviewReady(Err("题目 JSON 解析失败".into())));
+            return None;
+        }
+    };
+    let (db_id, concept_id) = insert_question_db(store, quiz_id, ctx.course_id, &q)
+        .await
+        .ok()?;
+    Some(ReviewQuestion {
+        db_id,
+        q_type: qtype,
+        question: q.question,
+        options: q.options,
+        answer: q.answer.as_deref().and_then(answer_to_index),
+        key_points: q.key_points,
+        explanation: q.explanation,
+        concept_id,
+    })
+}
+
+/// 逐题生成入口（App 侧 spawn）：生成第 index 题（0-based），事件回流。
+/// 失败自动重试一次，再失败发 Err（由调用方优雅收束）。
+#[allow(clippy::too_many_arguments)]
+pub async fn generate_review_question(
+    store: Arc<Store>,
+    provider: Arc<OpenAiClient>,
+    provider_cfg: ProviderConfig,
+    ctx: Arc<QuizContext>,
+    quiz_id: i64,
+    index: usize,
+    planned: usize,
+    qtype: QType,
+    asked: Vec<AskedQuestion>,
+    cancel: CancellationToken,
+    tx: UnboundedSender<AppEvent>,
+) {
+    for attempt in 0..2 {
+        if let Some(q) = generate_one(
+            &store,
+            &provider,
+            &provider_cfg,
+            &ctx,
+            quiz_id,
+            index,
+            planned,
+            qtype.clone(),
+            &asked,
+            &cancel,
+        )
+        .await
+        {
+            let _ = tx.send(AppEvent::ReviewQuestionReady(Ok(q)));
             return;
         }
-    };
-
-    // ⑤ 存入 DB
-    let scope_desc = scope
-        .as_deref()
-        .map(str::to_owned)
-        .unwrap_or_else(|| "random（随机范围）".into());
-    let store_clone = Arc::clone(&store);
-    let quiz_id = tokio::task::spawn_blocking(move || -> storage::Result<i64> {
-        let qid = store_clone.create_quiz(course_id, &scope_desc)?;
-        for q in &quiz.questions {
-            let options_json = if q.options.is_empty() {
-                None
-            } else {
-                serde_json::to_string(&q.options).ok()
-            };
-            let key_points_json = if q.key_points.is_empty() {
-                None
-            } else {
-                serde_json::to_string(&q.key_points).ok()
-            };
-            // 通过 concept 名查 id：精确匹配 → 包含匹配（LLM 拼写不可控）；
-            // 仍失败则记日志——该题游离于掌握度闭环之外需可感知
-            let concept_db_id = q.concept.as_deref().and_then(|name| {
-                let list = store_clone
-                    .list_concepts_with_mastery(course_id)
-                    .unwrap_or_default();
-                list.iter()
-                    .find(|c| c.name == name)
-                    .or_else(|| {
-                        list.iter()
-                            .find(|c| c.name.contains(name) || name.contains(&c.name))
-                    })
-                    .map(|c| c.concept_id)
-            });
-            if let Some(name) = &q.concept
-                && concept_db_id.is_none()
-            {
-                tracing::warn!(concept = %name, "概念匹配失败，该题不参与掌握度闭环");
-            }
-            // answer 字母/数字 → 下标（LLM 数选项下标经常数错，字母更稳）
-            let answer_idx = q.answer.as_deref().and_then(answer_to_index);
-            store_clone.insert_question(
-                qid,
-                &q.q_type,
-                &q.question,
-                options_json.as_deref(),
-                answer_idx,
-                key_points_json.as_deref(),
-                q.explanation.as_deref(),
-                concept_db_id,
-            )?;
+        if attempt == 0 && !cancel.is_cancelled() {
+            continue; // 重试一次
         }
-        Ok(qid)
-    })
-    .await
-    .ok()
-    .and_then(|r| r.ok());
-
-    let Some(quiz_id) = quiz_id else {
-        let _ = tx.send(AppEvent::ReviewReady(Err("测验存储失败".into())));
-        return;
-    };
-
-    // ⑥ 转换为 ReviewQuestion 并发送
-    let store_clone = Arc::clone(&store);
-    let questions = tokio::task::spawn_blocking(move || -> storage::Result<Vec<ReviewQuestion>> {
-        let records = store_clone.get_quiz_questions(quiz_id)?;
-        Ok(records
-            .into_iter()
-            .map(|r| ReviewQuestion {
-                db_id: r.id,
-                q_type: if r.q_type == "choice" {
-                    QType::Choice
-                } else {
-                    QType::ShortAnswer
-                },
-                question: r.question,
-                options: r
-                    .options_json
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default(),
-                answer: r.answer,
-                key_points: r
-                    .key_points_json
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default(),
-                explanation: r.explanation,
-                concept_id: r.concept_id,
-            })
-            .collect())
-    })
-    .await
-    .ok()
-    .and_then(|r| r.ok());
-
-    let Some(questions) = questions else {
-        let _ = tx.send(AppEvent::ReviewReady(Err("题目加载失败".into())));
-        return;
-    };
-
-    if questions.is_empty() {
-        let _ = tx.send(AppEvent::ReviewReady(Err("未生成任何题目".into())));
-        return;
     }
-
-    let _ = tx.send(AppEvent::ReviewReady(Ok(ReviewState {
-        quiz_id,
-        questions,
-        current: 0,
-        results: Vec::new(),
-        selected_option: None,
-        followups: Vec::new(),
-    })));
+    let _ = tx.send(AppEvent::ReviewQuestionReady(Err(format!(
+        "第 {} 题生成失败",
+        index + 1
+    ))));
 }
 
 /// 简答题批改：用户答案 + 笔记原文 + key_points → LLM → score/missing。
@@ -578,34 +735,6 @@ pub async fn grade_short_answer(
         question_index,
         Ok((grade.score, grade.missing.clone(), grade.comment.clone())),
     ));
-}
-
-/// 解析出题 JSON（D4 降级链：直解 → 截取第一个 {...} 块），并对文本字段
-/// 做 LLM 输出规范化（换行双重转义还原）。
-fn parse_quiz_json(content: &str) -> Option<QuizResponse> {
-    let trimmed = agent_core::trim_code_fence(content);
-    let mut quiz: QuizResponse = serde_json::from_str::<QuizResponse>(trimmed)
-        .ok()
-        .or_else(|| {
-            agent_core::first_json_block(trimmed).and_then(|b| serde_json::from_str(b).ok())
-        })
-        .or_else(|| {
-            // 兜底：模型输出裸数组 [ {...}, ... ]（漏包 questions 对象）
-            serde_json::from_str::<Vec<QuizQuestion>>(trimmed)
-                .ok()
-                .map(|questions| QuizResponse { questions })
-        })?;
-    for q in &mut quiz.questions {
-        q.question = normalize_text(&q.question);
-        q.explanation = q.explanation.as_deref().map(normalize_text);
-        for o in &mut q.options {
-            *o = normalize_text(o);
-        }
-        for k in &mut q.key_points {
-            *k = normalize_text(k);
-        }
-    }
-    Some(quiz)
 }
 
 /// LLM 输出规范化：模型在 JSON 里常把换行写成 `\\n`（双重转义，JSON 解析后是
@@ -705,14 +834,11 @@ mod quiz_parse_tests {
     }
 
     #[test]
-    fn parse_quiz_json_normalizes_question_text() {
+    fn parse_one_question_normalizes_question_text() {
         // LLM 在 JSON 里把换行双重转义为 \\n（转义反斜杠+n），解析后须还原
-        let json = r#"{"questions":[{"type":"short_answer","question":"执行以下代码：\\nint fd1;\\nprintf(\"c1\");","options":[],"answer":null,"key_points":[],"explanation":null,"concept":null}]}"#;
-        let q = parse_quiz_json(json).unwrap();
-        assert_eq!(
-            q.questions[0].question,
-            "执行以下代码：\nint fd1;\nprintf(\"c1\");"
-        );
+        let json = r#"{"type":"short_answer","question":"执行以下代码：\\nint fd1;\\nprintf(\"c1\");","options":[],"answer":null,"key_points":[],"explanation":null,"concept":null}"#;
+        let q = parse_one_question(json).unwrap();
+        assert_eq!(q.question, "执行以下代码：\nint fd1;\nprintf(\"c1\");");
     }
 
     #[test]
@@ -733,18 +859,17 @@ mod quiz_parse_tests {
     #[test]
     fn parse_tolerates_numeric_answer() {
         // 模型可能输出旧格式数字 answer（serde 对 Option<String> 会整包失败）→ 必须容错
-        let json = r#"{"questions":[{"type":"choice","question":"Q","options":["a","b"],"answer":1,"key_points":[],"explanation":null,"concept":null}]}"#;
-        let q = parse_quiz_json(json).unwrap();
-        assert_eq!(q.questions[0].answer.as_deref(), Some("1"));
+        let json = r#"{"type":"choice","question":"Q","options":["a","b"],"answer":1,"key_points":[],"explanation":null,"concept":null}"#;
+        let q = parse_one_question(json).unwrap();
+        assert_eq!(q.answer.as_deref(), Some("1"));
     }
 
     #[test]
     fn parse_tolerates_bare_array() {
         // 模型漏包 questions 对象、直接输出数组 → 兜底包装
         let json = r#"[{"type":"short_answer","question":"Q1","options":[],"answer":null,"key_points":["k"],"explanation":null,"concept":null}]"#;
-        let q = parse_quiz_json(json).unwrap();
-        assert_eq!(q.questions.len(), 1);
-        assert_eq!(q.questions[0].question, "Q1");
+        let q = parse_one_question(json).unwrap();
+        assert_eq!(q.question, "Q1");
     }
 
     #[test]

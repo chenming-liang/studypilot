@@ -263,6 +263,13 @@ impl App {
             return;
         }
         let Some(rs) = &self.review else { return };
+        // 逐题生成等待态：当前题尚未生成到位，只允许 Esc 退出 / 翻页
+        if rs.questions.get(rs.current).is_none() {
+            if key.code == KeyCode::Esc {
+                self.exit_review("已退出复习模式");
+            }
+            return;
+        }
         let awaiting = rs.awaiting_feedback();
         let is_choice = rs
             .questions

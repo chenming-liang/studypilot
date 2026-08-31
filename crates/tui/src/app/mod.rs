@@ -76,6 +76,8 @@ pub struct App {
     inflight: Option<CancellationToken>,
     /// 导入任务取消令牌
     import_cancel: Option<CancellationToken>,
+    /// 复习逐题生成的取消令牌（出题中等待态 Esc 退出时取消）
+    review_gen: Option<CancellationToken>,
     /// 复习模式状态；Some 时按键路由给复习逻辑
     pub review: Option<review::ReviewState>,
     /// 简答题批改进行中（防并发提交错位）
@@ -353,6 +355,7 @@ impl App {
             total_cost: 0.0,
             session_cost: 0.0,
             inflight: None,
+            review_gen: None,
             import_cancel: None,
             review: None,
             review_grading: false,
@@ -543,6 +546,7 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
                 app.on_outline_generated(content, course, export, titles)
             }
             AppEvent::ReviewReady(result) => app.on_review_ready(result),
+            AppEvent::ReviewQuestionReady(result) => app.on_review_question_ready(result),
             AppEvent::ReviewGraded(idx, result) => app.on_review_graded(idx, result),
             AppEvent::ReviewAdvice(text) => app.on_review_advice(text),
             AppEvent::ReviewFollowup(idx, question, result) => {
