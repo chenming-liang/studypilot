@@ -492,9 +492,9 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
             style,
         ))));
         if let Some((notes, concepts)) = app.sidebar_course_stats.get(id) {
-            // 紧凑一行，适配窄侧栏
+            // 全拼可读（侧栏宽度足够；窄屏由外层裁切兜底）
             items.push(ListItem::new(Line::from(Span::styled(
-                format!("    {notes}n · {concepts}c"),
+                format!("    {notes} notes · {concepts} concepts"),
                 Style::new().fg(DIM),
             ))));
         }
