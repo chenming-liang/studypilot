@@ -136,6 +136,26 @@ impl App {
 
     /// 鼠标：滚轮滚动 + 左键拖选复制聊天内容。
     pub(crate) async fn handle_mouse(&mut self, event: MouseEvent) {
+        // 列表选择器打开时：滚轮 = 移动选择项（不滚聊天流）
+        if self.list_picker.is_some() {
+            let vis = lp_visible_len(&self.list_picker);
+            match event.kind {
+                MouseEventKind::ScrollDown => {
+                    if let Some(lp) = &mut self.list_picker
+                        && vis > 0
+                    {
+                        lp.selected = (lp.selected + 1).min(vis - 1);
+                    }
+                }
+                MouseEventKind::ScrollUp => {
+                    if let Some(lp) = &mut self.list_picker {
+                        lp.selected = lp.selected.saturating_sub(1);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
         match event.kind {
             MouseEventKind::ScrollDown => {
                 self.scroll_up = self.scroll_up.saturating_sub(3);
@@ -917,8 +937,8 @@ impl App {
                 self.list_picker = None;
                 self.restore_input_backup();
             }
-            // 输入过滤（问题10：概念多时打字即筛）
-            KeyCode::Char(c) => {
+            // 输入过滤（问题10：概念多时打字即筛）；Ctrl+C 穿透（可退出）
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(lp) = &mut self.list_picker {
                     lp.filter.push(c);
                     lp.selected = 0;
