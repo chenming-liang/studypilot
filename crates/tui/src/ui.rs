@@ -67,7 +67,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_command_palette(f, app);
     }
     if let Some(lp) = &app.list_picker {
-        draw_list_picker(f, lp);
+        draw_list_picker(f, lp, &app.input);
     }
     if app.wizard.is_some() {
         draw_wizard(f, app);
@@ -1066,9 +1066,11 @@ fn draw_command_palette(f: &mut Frame, app: &mut App) {
 }
 
 /// 列表选择器弹窗：↑↓ 选择、Enter 提交绑定命令。
-fn draw_list_picker(f: &mut Frame, lp: &ListPicker) {
+fn draw_list_picker(f: &mut Frame, lp: &ListPicker, input: &str) {
     let area = f.area();
-    let height = (lp.items.len() as u16 + 4).min(area.height.saturating_sub(2));
+    // 弹窗高度按过滤后条目数适配（搜索后弹窗随之缩小）
+    let visible = lp.visible(input);
+    let height = (visible.len() as u16 + 4).min(area.height.saturating_sub(2));
     let width = 52u16.min(area.width.saturating_sub(2));
     let x = area.x + (area.width - width) / 2;
     let y = area.y + (area.height - height) / 2;
@@ -1076,21 +1078,29 @@ fn draw_list_picker(f: &mut Frame, lp: &ListPicker) {
 
     f.render_widget(ratatui::widgets::Clear, pop);
 
-    let items: Vec<ListItem> = lp
-        .items
-        .iter()
-        .enumerate()
-        .map(|(i, c)| {
-            let mark = if i == lp.selected { "▸ " } else { "  " };
-            let label = format!("{mark}{}", c.label);
-            let style = if i == lp.selected {
-                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
-            } else {
-                Style::new()
-            };
-            ListItem::new(Span::styled(label, style))
-        })
-        .collect();
+    // 渲染过滤后列表（selected 为过滤后位置）；空结果给占位行
+    let items: Vec<ListItem> = if visible.is_empty() {
+        vec![ListItem::new(Span::styled(
+            "  （无匹配项）",
+            Style::new().fg(DIM),
+        ))]
+    } else {
+        visible
+            .iter()
+            .enumerate()
+            .map(|(vi, &i)| {
+                let c = &lp.items[i];
+                let mark = if vi == lp.selected { "▸ " } else { "  " };
+                let label = format!("{mark}{}", c.label);
+                let style = if vi == lp.selected {
+                    Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::new()
+                };
+                ListItem::new(Span::styled(label, style))
+            })
+            .collect()
+    };
     // ListState 跟随 selected 自动滚动视口（长列表翻页可见，修 65+ 概念选择器）
     let mut state = ratatui::widgets::ListState::default().with_selected(Some(lp.selected));
     f.render_stateful_widget(

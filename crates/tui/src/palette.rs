@@ -284,3 +284,65 @@ impl CommandPalette {
         self.scroll = 0;
     }
 }
+
+#[cfg(test)]
+mod picker_filter_tests {
+    use super::*;
+
+    fn picker() -> ListPicker {
+        ListPicker {
+            title: "t".into(),
+            items: vec![
+                ListChoice {
+                    label: "○ 变量遮蔽".into(),
+                    command: "/review".into(),
+                },
+                ListChoice {
+                    label: "△ 借用（做对 1 / 共 2 题）".into(),
+                    command: "/review".into(),
+                },
+                ListChoice {
+                    label: "✓ 所有权".into(),
+                    command: "/review".into(),
+                },
+            ],
+            selected: 0,
+        }
+    }
+
+    #[test]
+    fn empty_input_shows_all() {
+        let p = picker();
+        assert_eq!(p.visible("").len(), 3);
+    }
+
+    #[test]
+    fn filter_matches_case_insensitive_substring() {
+        let p = picker();
+        let v = p.visible("借用");
+        assert_eq!(v, vec![1]);
+        let p2 = ListPicker {
+            title: "t".into(),
+            items: vec![ListChoice {
+                label: "○ Vec 容器".into(),
+                command: "c".into(),
+            }],
+            selected: 0,
+        };
+        assert_eq!(p2.visible("vec").len(), 1);
+        assert_eq!(p2.visible("VEC").len(), 1);
+    }
+
+    #[test]
+    fn no_match_is_empty() {
+        let p = picker();
+        assert!(p.visible("不存在的概念").is_empty());
+    }
+
+    #[test]
+    fn selected_is_index_into_visible_list() {
+        let p = picker();
+        let v = p.visible("借用");
+        assert_eq!(v[p.selected.min(v.len() - 1)], 1);
+    }
+}
