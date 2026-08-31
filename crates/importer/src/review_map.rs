@@ -88,8 +88,10 @@ pub struct ReviewMap {
     /// 笔记编号 → 标题
     pub titles: Vec<(i64, String)>,
     /// 今日作答次数（Anki 式今日/长期分层；构建/刷新时填）
+    #[serde(default)]
     pub today_attempts: usize,
     /// 今日已复习的概念 id（批量巩固排除，避免刚练过的还推）
+    #[serde(default)]
     pub today_reviewed: Vec<i64>,
 }
 
