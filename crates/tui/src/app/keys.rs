@@ -30,9 +30,9 @@ impl App {
         if self.wizard.is_some() && self.handle_wizard_key(key) {
             return;
         }
-        // 列表选择器（面板 Pick 动作唤起）
-        if self.list_picker.is_some() {
-            self.handle_list_picker_key(key);
+        // 列表选择器（面板 Pick 动作唤起）：编辑键透传（共享输入缓冲 = 搜索栏），
+        // 导航/确认键被消费
+        if self.list_picker.is_some() && self.handle_list_picker_key(key) {
             return;
         }
         // 笔记浏览器：Search 模式编辑键落入普通路径（共享输入缓冲）
@@ -138,7 +138,7 @@ impl App {
     pub(crate) async fn handle_mouse(&mut self, event: MouseEvent) {
         // 列表选择器打开时：滚轮 = 移动选择项（不滚聊天流）
         if self.list_picker.is_some() {
-            let vis = lp_visible_len(&self.list_picker);
+            let vis = lp_visible_len(&self.list_picker, &self.input);
             match event.kind {
                 MouseEventKind::ScrollDown => {
                     if let Some(lp) = &mut self.list_picker
@@ -896,8 +896,13 @@ impl App {
                 let Some(map) = &self.review_map else {
                     return;
                 };
+                let n = if self.review_map_n > 0 {
+                    self.review_map_n
+                } else {
+                    5
+                };
                 (
-                    "选择知识点开始复习（Enter = 对该概念出题）".to_owned(),
+                    format!("选择知识点开始复习（出题数 {n}，/review-map 数量 可调）"),
                     map.picker_items(self.review_map_n)
                         .into_iter()
                         .map(|(label, command)| ListChoice { label, command })
@@ -923,70 +928,63 @@ impl App {
             title,
             items,
             selected: 0,
-            filter: String::new(),
         });
+        self.take_input_for_overlay(); // 备份聊天内容 + 清空：输入框即搜索栏
     }
 
     /// 列表选择器按键：↑↓ 选择、Enter 提交绑定命令、Esc 关闭。
-    pub(crate) fn handle_list_picker_key(&mut self, key: KeyEvent) {
+    /// 列表选择器按键：导航/确认消费（true）；编辑键透传普通路径（false，
+    /// 共享输入缓冲 = 可见的搜索栏，复用 /notes /sessions 交互）。
+    /// 提交经 handle_command（Enter 在普通路径被消费后由 picker 关闭逻辑兜底）。
+    pub(crate) fn handle_list_picker_key(&mut self, key: KeyEvent) -> bool {
         if key.kind != KeyEventKind::Press {
-            return;
+            return false;
         }
+        let vis = lp_visible_len(&self.list_picker, &self.input);
         match key.code {
             KeyCode::Esc => {
                 self.list_picker = None;
                 self.restore_input_backup();
-            }
-            // 输入过滤（问题10：概念多时打字即筛）；Ctrl+C 穿透（可退出）
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(lp) = &mut self.list_picker {
-                    lp.filter.push(c);
-                    lp.selected = 0;
-                }
-            }
-            KeyCode::Backspace => {
-                if let Some(lp) = &mut self.list_picker {
-                    lp.filter.pop();
-                    lp.selected = 0;
-                }
+                true
             }
             KeyCode::Up => {
                 if let Some(lp) = &mut self.list_picker {
                     lp.selected = lp.selected.saturating_sub(1);
                 }
+                true
             }
             KeyCode::Down => {
-                let vis = lp_visible_len(&self.list_picker);
-                if let Some(lp) = &mut self.list_picker
-                    && vis > 0
+                if vis > 0
+                    && let Some(lp) = &mut self.list_picker
                 {
                     lp.selected = (lp.selected + 1).min(vis - 1);
                 }
+                true
             }
             KeyCode::PageUp => {
                 if let Some(lp) = &mut self.list_picker {
                     lp.selected = lp.selected.saturating_sub(10);
                 }
+                true
             }
             KeyCode::PageDown => {
-                let vis = lp_visible_len(&self.list_picker);
-                if let Some(lp) = &mut self.list_picker
-                    && vis > 0
+                if vis > 0
+                    && let Some(lp) = &mut self.list_picker
                 {
                     lp.selected = (lp.selected + 10).min(vis - 1);
                 }
+                true
             }
             KeyCode::Enter => {
                 let Some(lp) = &self.list_picker else {
-                    return;
+                    return false;
                 };
-                // 提交过滤后可见列表的选中项（filter 为空 = 原始列表）
-                let visible = lp.visible();
+                let visible = lp.visible(&self.input);
                 let Some(&item_idx) = visible.get(lp.selected) else {
-                    return;
+                    return true; // 过滤无结果：吞掉 Enter
                 };
                 let Some(choice) = lp.items.get(item_idx) else {
-                    return;
+                    return true;
                 };
                 let cmd = choice.command.clone();
                 self.list_picker = None;
@@ -994,8 +992,10 @@ impl App {
                 self.input = cmd;
                 self.cursor_pos = self.input.chars().count();
                 self.submit();
+                true
             }
-            _ => {}
+            // 编辑键透传：落普通路径编辑 App.input（搜索串），sync 后过滤实时生效
+            _ => false,
         }
     }
 
@@ -1081,7 +1081,7 @@ impl App {
     }
 }
 
-/// 列表选择器当前可见条目数（过滤后）。
-fn lp_visible_len(lp: &Option<crate::palette::ListPicker>) -> usize {
-    lp.as_ref().map(|p| p.visible().len()).unwrap_or(0)
+/// 列表选择器当前可见条目数（按共享输入缓冲过滤后）。
+fn lp_visible_len(lp: &Option<crate::palette::ListPicker>, input: &str) -> usize {
+    lp.as_ref().map(|p| p.visible(input).len()).unwrap_or(0)
 }

@@ -68,22 +68,21 @@ pub struct PaletteItem {
 }
 
 /// 通用列表选择器：单列 label，Enter 提交绑定的完整命令。
-/// 支持输入过滤（问题10：65+ 概念选择器可搜）。
+/// 过滤 = 共享输入缓冲（App.input，复用 /notes /sessions 的搜索交互——
+/// 底部输入框即搜索栏，可见可编辑），selected 指向过滤后列表的位置。
 pub struct ListPicker {
     pub title: String,
     pub items: Vec<ListChoice>,
     pub selected: usize,
-    /// 过滤串（label 包含匹配，大小写不敏感）；空 = 显示全部
-    pub filter: String,
 }
 
 impl ListPicker {
-    /// 过滤后的可见条目（filter 为空 = 全部）。
-    pub fn visible(&self) -> Vec<usize> {
-        if self.filter.is_empty() {
+    /// 过滤后的可见条目（input 为空 = 全部；label 大小写不敏感包含匹配）。
+    pub fn visible(&self, input: &str) -> Vec<usize> {
+        if input.is_empty() {
             return (0..self.items.len()).collect();
         }
-        let f = self.filter.to_lowercase();
+        let f = input.to_lowercase();
         self.items
             .iter()
             .enumerate()
