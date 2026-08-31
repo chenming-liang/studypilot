@@ -1,0 +1,482 @@
+//! 复习地图（Review Map）：概念驱动的课程知识结构 + 复习状态 + 构建流程。
+//!
+//! 大纲 LLM 只负责「组织既有概念」（organize not invent），point 逐字取自
+//! 概念清单并 resolve 回 concept 主键；状态依据实际做题记录（concept_mastery）。
+//! 数据结构与 markdown/picker 渲染在此（importer 是 lib，TUI 与 examples 共用）。
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use agent_core::{Message, Provider};
+use agent_providers::{OpenAiClient, ProviderConfig};
+use serde::Deserialize;
+use storage::Store;
+use tokio::task::spawn_blocking;
+use tokio_util::sync::CancellationToken;
+
+/// 概念复习状态（依据实际作答记录）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ReviewStatus {
+    /// ○ 零作答
+    Unreviewed,
+    /// △ 有错
+    Weak,
+    /// ✓ 达标
+    Mastered,
+}
+
+impl ReviewStatus {
+    pub fn mark(self) -> &'static str {
+        match self {
+            Self::Unreviewed => "○",
+            Self::Weak => "△",
+            Self::Mastered => "✓",
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Unreviewed => "未复习",
+            Self::Weak => "需巩固",
+            Self::Mastered => "已掌握",
+        }
+    }
+
+    /// 累计正确率 ≥70% 且做过题 → 已掌握；做过题但不到 → 需巩固；零作答 → 未复习。
+    pub fn from_counts(attempts: usize, correct: usize) -> Self {
+        if attempts == 0 {
+            Self::Unreviewed
+        } else if correct * 100 >= attempts * 70 {
+            Self::Mastered
+        } else {
+            Self::Weak
+        }
+    }
+}
+
+/// 地图上的一个知识点（= 概念表实体）。
+#[derive(Debug, Clone)]
+pub struct ConceptNode {
+    #[allow(dead_code)]
+    pub concept_id: Option<i64>,
+    pub name: String,
+    pub attempts: usize,
+    pub correct: usize,
+}
+
+impl ConceptNode {
+    pub fn status(&self) -> ReviewStatus {
+        ReviewStatus::from_counts(self.attempts, self.correct)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct OutlineSection {
+    pub title: String,
+    pub nodes: Vec<ConceptNode>,
+    /// 该节概念关联的笔记编号（1-based，指向 titles 下标）
+    pub refs: Vec<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReviewMap {
+    pub course: String,
+    pub sections: Vec<OutlineSection>,
+    /// LLM 输出与概念清单对不上的名字数（质量观测）
+    pub unresolved: usize,
+    /// 笔记编号 → 标题
+    pub titles: Vec<(i64, String)>,
+}
+
+impl ReviewMap {
+    /// (总知识点, 已复习[✓+△], 需巩固[△])——进度与掌握分开统计，不做百分比假精确。
+    pub fn stats(&self) -> (usize, usize, usize) {
+        let (mut total, mut reviewed, mut weak) = (0, 0, 0);
+        for s in &self.sections {
+            for n in &s.nodes {
+                total += 1;
+                match n.status() {
+                    ReviewStatus::Unreviewed => {}
+                    ReviewStatus::Weak => {
+                        weak += 1;
+                        reviewed += 1;
+                    }
+                    ReviewStatus::Mastered => reviewed += 1,
+                }
+            }
+        }
+        (total, reviewed, weak)
+    }
+
+    /// markdown 渲染（屏幕显示与 --export 共用）。
+    pub fn markdown(&self) -> String {
+        let (total, reviewed, weak) = self.stats();
+        let mut md = format!(
+            "## {} · 复习地图\n\n**{total}** 个知识点 · 已复习 {reviewed} · 需巩固 {weak}\n",
+            self.course
+        );
+        for s in &self.sections {
+            let (mut sc, mut sw) = (0usize, 0usize);
+            for n in &s.nodes {
+                match n.status() {
+                    ReviewStatus::Mastered => sc += 1,
+                    ReviewStatus::Weak => sw += 1,
+                    ReviewStatus::Unreviewed => {}
+                }
+            }
+            md.push_str(&format!("\n### {}\n", s.title));
+            let mut stats_line: Vec<String> = Vec::new();
+            if sc > 0 {
+                stats_line.push(format!("✓{sc}"));
+            }
+            if sw > 0 {
+                stats_line.push(format!("△{sw}"));
+            }
+            if !stats_line.is_empty() {
+                md.push_str(&format!("{} · ", stats_line.join(" ")));
+            }
+            if !s.refs.is_empty() {
+                let r: Vec<String> = s.refs.iter().map(|n| format!("[{n}]")).collect();
+                md.push_str(&r.join(" "));
+            }
+            md.push('\n');
+            for n in &s.nodes {
+                let m = if n.attempts > 0 {
+                    format!("（{}/{}）", n.correct, n.attempts)
+                } else {
+                    String::new()
+                };
+                md.push_str(&format!("- {} {}{}\n", n.status().mark(), n.name, m));
+            }
+        }
+        // 引用脚注
+        let mut all: Vec<usize> = self
+            .sections
+            .iter()
+            .flat_map(|s| s.refs.iter().copied())
+            .collect();
+        all.sort_unstable();
+        all.dedup();
+        if !all.is_empty() {
+            md.push_str("\n### 引用来源\n\n");
+            for n in all {
+                let title = self
+                    .titles
+                    .get(n.saturating_sub(1))
+                    .map(|(_, t)| t.as_str())
+                    .unwrap_or("未知");
+                md.push_str(&format!("- [{n}] {title}\n"));
+            }
+        }
+        if self.unresolved > 0 {
+            md.push_str(&format!(
+                "\n> ⚠ {unresolved} 个概念未能关联到概念表（已跳过）\n",
+                unresolved = self.unresolved
+            ));
+        }
+        md
+    }
+
+    /// 选择器条目：(label, command)——Enter 直接对单概念发起复习。
+    pub fn picker_items(&self) -> Vec<(String, String)> {
+        self.sections
+            .iter()
+            .flat_map(|s| {
+                s.nodes.iter().map(move |n| {
+                    let m = if n.attempts > 0 {
+                        format!(" ({}/{})", n.correct, n.attempts)
+                    } else {
+                        String::new()
+                    };
+                    (
+                        format!("{} {}{}", n.status().mark(), n.name, m),
+                        format!("/review --course {} --concept {}", self.course, n.name),
+                    )
+                })
+            })
+            .collect()
+    }
+}
+
+/// 大纲任务产出（事件载荷）。
+#[derive(Debug, Clone)]
+pub struct OutlinePayload {
+    pub map: ReviewMap,
+    pub export: bool,
+}
+
+/// LLM 大纲输出（organize not invent：concepts 逐字取自概念清单）。
+#[derive(Debug, Deserialize)]
+struct OutlineResponse {
+    #[serde(default)]
+    sections: Vec<OutlineSectionRaw>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OutlineSectionRaw {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    concepts: Vec<String>,
+}
+
+pub async fn build_review_map(
+    store: Arc<Store>,
+    provider: Arc<OpenAiClient>,
+    provider_cfg: ProviderConfig,
+    course_id: i64,
+    course_name: String,
+    cancel: &CancellationToken,
+) -> Result<ReviewMap, String> {
+    let store_clone = Arc::clone(&store);
+    let gathered = spawn_blocking(move || {
+        let titles = store_clone.list_note_titles_by_course(course_id)?;
+        let concepts = store_clone.list_concepts_with_mastery(Some(course_id))?;
+        let pairs = store_clone.concept_note_pairs(course_id)?;
+        Ok::<_, storage::Error>((titles, concepts, pairs))
+    })
+    .await;
+
+    let (titles, concepts, pairs) = match gathered {
+        Ok(Ok((t, c, p))) if !t.is_empty() => (t, c, p),
+        Ok(Ok(_)) => return Err("该课程还没有概念：先 /import 导入资料".into()),
+        Ok(Err(e)) => return Err(format!("收集失败: {e}")),
+        Err(e) => return Err(format!("任务错误: {e}")),
+    };
+
+    // 概念 → 笔记编号（1-based，指向 titles 下标）——refs 代码层算，不让 LLM 写
+    let note_idx: HashMap<i64, usize> = titles
+        .iter()
+        .enumerate()
+        .map(|(i, (id, _))| (*id, i + 1))
+        .collect();
+    let mut concept_notes: HashMap<i64, Vec<usize>> = HashMap::new();
+    for (cid, nid) in pairs {
+        if let Some(idx) = note_idx.get(&nid) {
+            concept_notes.entry(cid).or_default().push(*idx);
+        }
+    }
+
+    let concept_list = concepts
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect::<Vec<_>>()
+        .join("、");
+    let note_list = titles
+        .iter()
+        .enumerate()
+        .map(|(i, (_, t))| format!("[{}] {t}", i + 1))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let prompt = format!(
+        "以下是《{course_name}》课程的知识概念清单。\n\
+         你的任务：把这些概念**组织**成结构化章节（复习地图）。\n\n\
+         输出 JSON：\n\
+         {{\"sections\": [{{\"title\": \"章节名\", \"concepts\": [\"概念名\", ...]}}]}}\n\n\
+         概念清单（共 {count} 个）：\n{concept_list}\n\n\
+         相关笔记（仅供你理解概念背景，refs 由系统计算，不要输出）：\n{note_list}\n\n\
+         铁律：\n\
+         1. **organize, not invent**——concepts 里的名字必须逐字取自概念清单，\
+         禁止发明、改名、合并、拆分、意译任何概念\n\
+         2. 覆盖全部概念，每个概念恰好归入一个章节，不要遗漏\n\
+         3. 章节名 = 知识主题的名词短语（如「所有权与借用」「迭代器与闭包」）\n\
+         4. 章节数量按概念规模定（3~8 个为宜），按知识逻辑排序（基础在前）",
+        count = concepts.len()
+    );
+    let messages = [
+        Message::system("只输出 JSON，不要 markdown 代码块。"),
+        Message::user(&prompt),
+    ];
+    // R6：outline 的 LLM 调用也记 usage + cost（等待期间观察取消）
+    let pc = provider_cfg.clone();
+    let content = match agent_providers::with_cancel(provider.chat_json(&messages), cancel).await {
+        Some(Ok(resp)) => {
+            log_usage(&store, &pc, &resp.usage).await;
+            Some(resp.content)
+        }
+        Some(Err(e)) if e.is_json_mode_unsupported() => {
+            match agent_providers::with_cancel(provider.chat(&messages, &[]), cancel).await {
+                Some(Ok(resp)) => {
+                    log_usage(&store, &pc, &resp.usage).await;
+                    Some(resp.content)
+                }
+                Some(Err(e)) => {
+                    tracing::warn!("大纲生成失败: {e}");
+                    None
+                }
+                None => None,
+            }
+        }
+        Some(Err(e)) => {
+            tracing::warn!("大纲生成失败: {e}");
+            None
+        }
+        None => None,
+    };
+    let Some(json_str) = content else {
+        return Err("大纲生成失败（LLM 无响应）".into());
+    };
+
+    // 解析 + resolve：概念名 → 主键（exact → contains），对不上的计数丢弃
+    let parsed: OutlineResponse = serde_json::from_str(json_str.trim())
+        .ok()
+        .or_else(|| {
+            agent_core::first_json_block(&json_str).and_then(|b| serde_json::from_str(b).ok())
+        })
+        .unwrap_or(OutlineResponse {
+            sections: Vec::new(),
+        });
+
+    let by_name: HashMap<&str, &storage::ConceptMastery> =
+        concepts.iter().map(|c| (c.name.as_str(), c)).collect();
+    let mut sections: Vec<OutlineSection> = Vec::new();
+    let mut unresolved = 0usize;
+    for raw in parsed.sections {
+        let title = raw.title.unwrap_or_else(|| "(未命名)".into());
+        let mut nodes: Vec<ConceptNode> = Vec::new();
+        let mut refs: Vec<usize> = Vec::new();
+        for name in raw.concepts {
+            let m = by_name.get(name.as_str()).copied().or_else(|| {
+                // LLM 偶发改名：包含匹配兜底
+                concepts
+                    .iter()
+                    .find(|c| c.name.contains(&name) || name.contains(&c.name))
+            });
+            match m {
+                Some(c) => {
+                    if let Some(list) = concept_notes.get(&c.concept_id) {
+                        for r in list {
+                            if !refs.contains(r) {
+                                refs.push(*r);
+                            }
+                        }
+                    }
+                    nodes.push(ConceptNode {
+                        concept_id: Some(c.concept_id),
+                        name: c.name.clone(),
+                        attempts: c.attempts as usize,
+                        correct: c.correct as usize,
+                    });
+                }
+                None => {
+                    unresolved += 1;
+                }
+            }
+        }
+        refs.sort_unstable();
+        if !nodes.is_empty() {
+            sections.push(OutlineSection { title, nodes, refs });
+        }
+    }
+    if sections.is_empty() {
+        return Err("大纲为空：LLM 输出与概念清单不匹配".into());
+    }
+    Ok(ReviewMap {
+        course: course_name,
+        sections,
+        unresolved,
+        titles,
+    })
+}
+
+/// R6：outline LLM 调用记账（D2 spawn_blocking）。
+async fn log_usage(store: &Arc<Store>, cfg: &ProviderConfig, usage: &agent_core::Usage) {
+    let cost = agent_providers::estimate_cost(cfg, usage);
+    let name = cfg.name.clone();
+    let model = cfg.model.clone();
+    let (pt, ct) = (usage.prompt_tokens, usage.completion_tokens);
+    let store = Arc::clone(store);
+    let _ = tokio::task::spawn_blocking(move || {
+        store.append_usage(&name, &model, "outline", pt, ct, cost)
+    })
+    .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_from_counts_boundaries() {
+        // 零作答 → 未复习；正确率 ≥70% → 已掌握；有错且不足 → 需巩固
+        assert_eq!(ReviewStatus::from_counts(0, 0), ReviewStatus::Unreviewed);
+        assert_eq!(ReviewStatus::from_counts(2, 2), ReviewStatus::Mastered);
+        assert_eq!(ReviewStatus::from_counts(4, 3), ReviewStatus::Mastered); // 75%
+        assert_eq!(ReviewStatus::from_counts(3, 2), ReviewStatus::Weak); // 66%
+        assert_eq!(ReviewStatus::from_counts(1, 0), ReviewStatus::Weak);
+    }
+
+    fn node(name: &str, attempts: usize, correct: usize) -> ConceptNode {
+        ConceptNode {
+            concept_id: Some(1),
+            name: name.into(),
+            attempts,
+            correct,
+        }
+    }
+
+    #[test]
+    fn markdown_has_status_marks_and_summary() {
+        let map = ReviewMap {
+            course: "rust".into(),
+            sections: vec![OutlineSection {
+                title: "所有权".into(),
+                nodes: vec![
+                    node("所有权", 2, 2),
+                    node("借用", 2, 1),
+                    node("移动语义", 0, 0),
+                ],
+                refs: vec![1, 2],
+            }],
+            unresolved: 0,
+            titles: vec![(1, "01-basic".into()), (2, "02-own".into())],
+        };
+        let md = map.markdown();
+        assert!(md.contains("复习地图"));
+        assert!(md.contains("**3** 个知识点 · 已复习 2 · 需巩固 1"));
+        assert!(md.contains("✓ 所有权（2/2）"));
+        assert!(md.contains("△ 借用（1/2）"));
+        assert!(md.contains("○ 移动语义"));
+        assert!(md.contains("### 引用来源"));
+    }
+
+    #[test]
+    fn picker_items_command_format() {
+        let map = ReviewMap {
+            course: "rust".into(),
+            sections: vec![OutlineSection {
+                title: "所有权".into(),
+                nodes: vec![node("所有权", 0, 0), node("借用", 1, 0)],
+                refs: vec![1],
+            }],
+            unresolved: 0,
+            titles: vec![(1, "01-basic".into())],
+        };
+        let items = map.picker_items();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].0, "○ 所有权");
+        assert_eq!(items[0].1, "/review --course rust --concept 所有权");
+        assert_eq!(items[1].0, "△ 借用 (0/1)");
+    }
+
+    #[test]
+    fn stats_separate_progress_from_mastery() {
+        let map = ReviewMap {
+            course: "rust".into(),
+            sections: vec![OutlineSection {
+                title: "s".into(),
+                nodes: vec![
+                    node("a", 2, 2), // ✓
+                    node("b", 2, 1), // △
+                    node("c", 0, 0), // ○
+                ],
+                refs: vec![],
+            }],
+            unresolved: 0,
+            titles: vec![],
+        };
+        // 进度（已复习）与掌握（需巩固）分开统计，无百分比
+        assert_eq!(map.stats(), (3, 2, 1));
+    }
+}

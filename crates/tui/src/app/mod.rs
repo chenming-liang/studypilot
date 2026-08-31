@@ -80,6 +80,8 @@ pub struct App {
     review_gen: Option<CancellationToken>,
     /// 复习模式状态；Some 时按键路由给复习逻辑
     pub review: Option<review::ReviewState>,
+    /// 最近一次生成的复习地图（选择器重开数据源）
+    pub review_map: Option<crate::outline_render::ReviewMap>,
     /// 简答题批改进行中（防并发提交错位）
     review_grading: bool,
     /// 复习追问回答生成中（防并发；Esc 可中断，留在反馈停留态）
@@ -356,6 +358,7 @@ impl App {
             session_cost: 0.0,
             inflight: None,
             review_gen: None,
+            review_map: None,
             import_cancel: None,
             review: None,
             review_grading: false,
@@ -547,9 +550,7 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
                 Err(e) => app.push_entry(Entry::Error(format!("移动失败: {e}"))),
             },
             AppEvent::BudgetReset(result) => app.on_budget_reset(result),
-            AppEvent::OutlineGenerated(content, course, export, titles) => {
-                app.on_outline_generated(content, course, export, titles)
-            }
+            AppEvent::OutlineReady(result) => app.on_outline_ready(result),
             AppEvent::ReviewReady(result) => app.on_review_ready(result),
             AppEvent::ReviewQuestionReady(result) => app.on_review_question_ready(result),
             AppEvent::ConceptsRefreshed(result) => {

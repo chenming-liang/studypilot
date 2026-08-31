@@ -855,6 +855,18 @@ impl App {
                 }));
                 ("切换课程分区".to_owned(), items)
             }
+            K::ReviewMap => {
+                let Some(map) = &self.review_map else {
+                    return;
+                };
+                (
+                    "选择知识点开始复习（Enter = 对该概念出题）".to_owned(),
+                    map.picker_items()
+                        .into_iter()
+                        .map(|(label, command)| ListChoice { label, command })
+                        .collect(),
+                )
+            }
             K::CourseDelete => (
                 "删除课程（其笔记回落 all 区）".to_owned(),
                 self.courses

@@ -1,16 +1,15 @@
-//! 大纲生成流程与渲染。
+//! 复习地图（Review Map）生成流程：概念驱动的大纲 + 状态渲染 + 复习入口。
 
 use std::sync::Arc;
 
-use agent_core::{Message, Provider};
-use tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
 
 use super::{App, AppEvent, Entry};
-use crate::outline_render::render_outline_markdown;
+use crate::outline_render::OutlinePayload;
 
 impl App {
     /// `/outline [课程] [--export]`：无参默认当前课程。
+    /// 概念驱动：LLM 只做「组织既有概念」，point 逐字取自概念清单并 resolve 回主键。
     pub(crate) fn handle_outline_command(&mut self, arg: &str) {
         let export = arg.contains("--export");
         let name = arg.replace("--export", "").trim().to_owned();
@@ -43,136 +42,58 @@ impl App {
         self.inflight = Some(cancel.clone());
 
         tokio::spawn(async move {
-            let store_clone = Arc::clone(&store);
-            let gathered = spawn_blocking(move || {
-                let titles = store_clone.list_note_titles_by_course(course_id)?;
-                let concepts = store_clone.list_concept_names_by_course(course_id)?;
-                Ok::<_, storage::Error>((titles, concepts))
-            })
-            .await;
-
-            let (titles, concepts) = match gathered {
-                Ok(Ok((t, c))) if !t.is_empty() => (t, c),
-                _ => {
-                    let _ = tx.send(AppEvent::OutlineGenerated(
-                        None,
-                        course_name,
-                        export,
-                        Vec::new(),
-                    ));
-                    return;
-                }
-            };
-
-            let note_list: String = titles
-                .iter()
-                .enumerate()
-                .map(|(i, (_, t))| format!("[{}] {}", i + 1, t))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let concept_list = concepts.join("、");
-            let prompt = format!(
-                "以下是《{course_name}》课程的笔记列表和已提取的概念。\n\
-                 请生成结构化大纲，输出 JSON：\n\
-                 {{\"sections\": [{{\"title\": \"章节\", \"points\": [\"知识点\"], \"refs\": [笔记编号]}}]}}\n\n\
-                 笔记列表:\n{note_list}\n\n已提取概念: {concept_list}\n\n\
-                 重要要求：\n\
-                 1. 每个 section 的 refs 必须包含至少一个笔记编号\n\
-                 2. refs 里的数字是上面笔记列表中的 [编号]\n\
-                 3. 按知识逻辑组织章节，不要只罗列笔记标题\n\
-                 4. 每个 point 必须是名词性的知识概念（可学习、可考察的对象），\n\
-                    禁止形容词/评价性词汇（如「可靠」「高效」「优雅」）\n\
-                 5. 同义/重复概念只保留一个（如「所有权」与「所有权模型」合并）"
-            );
-            let messages = [
-                Message::system("只输出 JSON，不要 markdown 代码块。"),
-                Message::user(&prompt),
-            ];
-            // R6：outline 的 LLM 调用也记 usage + cost（等待期间观察取消）
-            let pc = provider_cfg.clone();
-            let content = match agent_providers::with_cancel(provider.chat_json(&messages), &cancel)
-                .await
-            {
-                Some(Ok(resp)) => {
-                    Self::log_llm_usage(&store, &pc, "outline", &resp.usage);
-                    Some(resp.content)
-                }
-                Some(Err(e)) if e.is_json_mode_unsupported() => {
-                    match agent_providers::with_cancel(provider.chat(&messages, &[]), &cancel).await
-                    {
-                        Some(Ok(resp)) => {
-                            Self::log_llm_usage(&store, &pc, "outline", &resp.usage);
-                            Some(resp.content)
-                        }
-                        Some(Err(e)) => {
-                            tracing::warn!("大纲生成失败: {e}");
-                            None
-                        }
-                        None => None,
-                    }
-                }
-                Some(Err(e)) => {
-                    tracing::warn!("大纲生成失败: {e}");
-                    None
-                }
-                None => None,
-            };
-            let _ = tx.send(AppEvent::OutlineGenerated(
-                content,
+            let result = importer::review_map::build_review_map(
+                store,
+                provider,
+                provider_cfg,
+                course_id,
                 course_name,
-                export,
-                titles,
+                &cancel,
+            )
+            .await;
+            let _ = tx.send(AppEvent::OutlineReady(
+                result.map(|map| OutlinePayload { map, export }),
             ));
         });
     }
 
-    pub(crate) fn on_outline_generated(
-        &mut self,
-        content: Option<String>,
-        course: String,
-        export: bool,
-        titles: Vec<(i64, String)>,
-    ) {
-        self.inflight = None;
-        self.request_cost_sync();
-        let Some(json_str) = content else {
-            self.push_entry(Entry::Error("大纲生成失败（LLM 无响应或无笔记）".into()));
-            return;
-        };
-        // D4 兜底：直解失败 → 提取第一个 {...} 块再解
-        let outline: serde_json::Value = match serde_json::from_str(json_str.trim()) {
-            Ok(v) => v,
-            Err(_) => {
-                let Some(block) = agent_core::first_json_block(&json_str)
-                    .and_then(|b| serde_json::from_str::<serde_json::Value>(b).ok())
-                else {
-                    self.push_entry(Entry::Error("大纲 JSON 解析失败".into()));
-                    return;
-                };
-                block
-            }
-        };
-
-        if export {
-            let md = render_outline_markdown(&outline, &course, &titles);
-            let dir = std::path::Path::new("data/exports");
-            let _ = std::fs::create_dir_all(dir);
-            let path = dir.join(format!("{course}-outline.md"));
-            match std::fs::write(&path, &md) {
-                Ok(()) => self.push_entry(Entry::Info(format!(
-                    "大纲已导出到 {}（{} 字节）",
-                    path.display(),
-                    md.len()
-                ))),
-                Err(e) => self.push_entry(Entry::Error(format!("导出失败: {e}"))),
-            }
-        } else {
-            // 屏幕渲染走 markdown 版（与导出一致：标题/嵌套列表/引用，替代树形字符画）
-            self.push_entry(Entry::Markdown(render_outline_markdown(
-                &outline, &course, &titles,
-            )));
+    /// 复习地图选择器（方案 A：复用 ListPicker，Enter = 对该概念出题）。
+    pub(crate) fn open_review_map_picker(&mut self) {
+        if self.review_map.is_some() {
+            self.open_list_picker(crate::palette::PickKind::ReviewMap);
         }
     }
 
-    // ---- M6：笔记管理 ----
+    pub(crate) fn on_outline_ready(&mut self, result: Result<OutlinePayload, String>) {
+        self.inflight = None;
+        self.request_cost_sync();
+        match result {
+            Ok(payload) => {
+                self.review_map = Some(payload.map.clone());
+                if payload.export {
+                    let md = payload.map.markdown();
+                    let dir = std::path::Path::new("data/exports");
+                    let _ = std::fs::create_dir_all(dir);
+                    let path = dir.join(format!("{}-outline.md", payload.map.course));
+                    match std::fs::write(&path, &md) {
+                        Ok(()) => self.push_entry(Entry::Info(format!(
+                            "复习地图已导出到 {}（{} 字节）",
+                            path.display(),
+                            md.len()
+                        ))),
+                        Err(e) => self.push_entry(Entry::Error(format!("导出失败: {e}"))),
+                    }
+                } else {
+                    self.push_entry(Entry::Markdown(payload.map.markdown()));
+                    self.push_entry(Entry::Info(
+                        "· 选中一个知识点开始复习（选择器中 Enter = 对该概念出题）".into(),
+                    ));
+                    self.open_review_map_picker();
+                }
+            }
+            Err(e) => {
+                self.push_entry(Entry::Error(format!("复习地图生成失败: {e}")));
+            }
+        }
+    }
 }

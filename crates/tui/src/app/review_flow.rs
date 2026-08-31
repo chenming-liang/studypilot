@@ -254,6 +254,9 @@ impl App {
             }
         }
         self.push_entry(Entry::Markdown(md));
+        self.push_entry(Entry::Info(
+            "· 概念状态已更新，/outline 查看最新复习地图".into(),
+        ));
 
         // 异步 LLM 小结建议（Observe 整轮结果 → Decide 下一步；不阻塞已显示的静态卡）
         self.spawn_review_advice(&rs);
