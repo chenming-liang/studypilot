@@ -111,5 +111,7 @@ pub enum Entry {
         text: String,
         ok: Option<bool>,
     },
+    /// Markdown 渲染块（复习摘要卡/大纲等富文本；markdown 管线 + PRIMARY 色条）
+    Markdown(String),
     Error(String),
 }

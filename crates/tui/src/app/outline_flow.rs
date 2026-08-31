@@ -7,7 +7,7 @@ use tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
 
 use super::{App, AppEvent, Entry};
-use crate::outline_render::{render_outline_markdown, render_outline_tree};
+use crate::outline_render::render_outline_markdown;
 
 impl App {
     /// `/outline [课程] [--export]`：无参默认当前课程。
@@ -79,7 +79,10 @@ impl App {
                  重要要求：\n\
                  1. 每个 section 的 refs 必须包含至少一个笔记编号\n\
                  2. refs 里的数字是上面笔记列表中的 [编号]\n\
-                 3. 按知识逻辑组织章节，不要只罗列笔记标题"
+                 3. 按知识逻辑组织章节，不要只罗列笔记标题\n\
+                 4. 每个 point 必须是名词性的知识概念（可学习、可考察的对象），\n\
+                    禁止形容词/评价性词汇（如「可靠」「高效」「优雅」）\n\
+                 5. 同义/重复概念只保留一个（如「所有权」与「所有权模型」合并）"
             );
             let messages = [
                 Message::system("只输出 JSON，不要 markdown 代码块。"),
@@ -164,10 +167,10 @@ impl App {
                 Err(e) => self.push_entry(Entry::Error(format!("导出失败: {e}"))),
             }
         } else {
-            self.push_entry(Entry::Info(format!("《{course}》课程大纲:")));
-            for line in render_outline_tree(&outline, &titles) {
-                self.push_entry(Entry::Info(line));
-            }
+            // 屏幕渲染走 markdown 版（与导出一致：标题/嵌套列表/引用，替代树形字符画）
+            self.push_entry(Entry::Markdown(render_outline_markdown(
+                &outline, &course, &titles,
+            )));
         }
     }
 
