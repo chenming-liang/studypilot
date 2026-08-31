@@ -107,6 +107,15 @@ impl App {
             return;
         };
 
+        // 预算熔断（R6）：大纲重组是 outline 的 LLM 开销源
+        if self.total_cost >= self.max_cost {
+            self.push_entry(Entry::Error(format!(
+                "已达预算上限 ¥{:.2}（累计 ¥{:.4}），拒绝生成。可用 /budget 调高上限",
+                self.max_cost, self.total_cost
+            )));
+            return;
+        }
+
         let store = Arc::clone(&self.store);
         let provider = self.provider.clone();
         let provider_cfg = self.provider_cfg.clone();

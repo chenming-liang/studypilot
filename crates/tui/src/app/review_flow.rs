@@ -470,8 +470,22 @@ impl App {
         }
     }
 
-    /// 预取下一题（守卫：未在生成中、未达计划数）。供首题显示后 / 每题到达后调用。
+    /// 预取下一题（守卫：未在生成中、未达计划数、**预算未超限**）。
+    /// 供首题显示后 / 每题到达后调用。
     pub(crate) fn maybe_spawn_next_question(&mut self) {
+        // 预算熔断（R6）：逐题生成是 review 最大开销源，spawn 前检查
+        if self.total_cost >= self.max_cost {
+            if let Some(rs) = self.review.take() {
+                if !rs.results.is_empty() {
+                    self.finish_review_state(rs);
+                }
+            }
+            self.push_entry(Entry::Error(format!(
+                "已达预算上限 ¥{:.2}（累计 ¥{:.4}），出题中止。可用 /budget 调高上限",
+                self.max_cost, self.total_cost
+            )));
+            return;
+        }
         let (index, planned, quiz_id, ctx, qtype, asked) = {
             let Some(rs) = &self.review else { return };
             use crate::review::QType;

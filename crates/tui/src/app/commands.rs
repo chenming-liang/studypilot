@@ -156,6 +156,14 @@ impl App {
             self.push_entry(Entry::Error("有任务进行中，请先完成或 Ctrl+C 中断".into()));
             return;
         }
+        // 预算熔断（R6）：逐篇 LLM 重抽是 refresh 的开销源
+        if self.total_cost >= self.max_cost {
+            self.push_entry(Entry::Error(format!(
+                "已达预算上限 ¥{:.2}（累计 ¥{:.4}），拒绝刷新。可用 /budget 调高上限",
+                self.max_cost, self.total_cost
+            )));
+            return;
+        }
         let Some(course_id) = self.current_course_id() else {
             self.push_entry(Entry::Error(
                 "概念刷新需要课程分区：先 /course <名> 切换".into(),
@@ -263,6 +271,14 @@ impl App {
             self.push_entry(Entry::Error("复习进行中，请先完成或 Esc 退出".into()));
             return;
         }
+        // 预算熔断（R6）：出题前检查
+        if self.total_cost >= self.max_cost {
+            self.push_entry(Entry::Error(format!(
+                "已达预算上限 ¥{:.2}（累计 ¥{:.4}），拒绝出题。可用 /budget 调高上限",
+                self.max_cost, self.total_cost
+            )));
+            return;
+        }
         let known: Vec<String> = self.courses.iter().map(|(_, n)| n.clone()).collect();
         match parse_review_action(arg, &known) {
             Ok(spec) => {
@@ -295,6 +311,14 @@ impl App {
     ) {
         if self.review.is_some() {
             self.push_entry(Entry::Error("复习进行中，请先完成或 Esc 退出".into()));
+            return;
+        }
+        // 预算熔断（R6）：出题前检查
+        if self.total_cost >= self.max_cost {
+            self.push_entry(Entry::Error(format!(
+                "已达预算上限 ¥{:.2}（累计 ¥{:.4}），拒绝出题。可用 /budget 调高上限",
+                self.max_cost, self.total_cost
+            )));
             return;
         }
         let provider = self.provider.clone();
