@@ -52,6 +52,11 @@ impl Error {
 pub struct Usage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
+    /// 提供方上下文缓存命中的 prompt tokens（DeepSeek prompt_cache_hit_tokens /
+    /// OpenAI prompt_tokens_details.cached_tokens；未返回 = 0）。
+    /// 费用折算时按缓存单价计——逐题生成的稳定素材前缀命中率极高，漏记会虚高数倍。
+    #[serde(default)]
+    pub cached_tokens: u64,
 }
 
 impl Usage {

@@ -203,9 +203,21 @@ fn parse_tool_call(v: &Value) -> Option<ToolCall> {
 }
 
 fn parse_usage(u: &Value) -> Result<Usage> {
+    // 缓存命中 tokens：DeepSeek 顶层 prompt_cache_hit_tokens；
+    // OpenAI 嵌套 prompt_tokens_details.cached_tokens——两家都收，无则 0
+    let cached = u
+        .get("prompt_cache_hit_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            u.get("prompt_tokens_details")
+                .and_then(|d| d.get("cached_tokens"))
+                .and_then(Value::as_u64)
+        })
+        .unwrap_or(0);
     Ok(Usage {
         prompt_tokens: int_field(u, "prompt_tokens")?,
         completion_tokens: int_field(u, "completion_tokens")?,
+        cached_tokens: cached,
     })
 }
 

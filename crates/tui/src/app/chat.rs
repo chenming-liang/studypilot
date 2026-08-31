@@ -204,6 +204,7 @@ impl App {
                 &Usage {
                     prompt_tokens: prompt,
                     completion_tokens: completion,
+                    cached_tokens: 0,
                 },
             );
             let result = spawn_blocking(move || {

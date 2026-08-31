@@ -31,6 +31,9 @@ pub struct ProviderConfig {
     /// 元 / 百万 token
     pub price_prompt: f64,
     pub price_completion: f64,
+    /// 元 / 百万 token（上下文缓存命中部分）；未配置 = 与 price_prompt 同价（保守）
+    #[serde(default)]
+    pub price_prompt_cached: f64,
     pub context_length: u64,
     #[serde(default)]
     pub thinking: bool,

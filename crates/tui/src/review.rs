@@ -624,6 +624,8 @@ async fn generate_one(
     // ① 概念级（主判据）：同一概念视为同考点，直接判重——文本相似度对"换皮题"不可靠
     // ② 文本相似度（辅助）：措辞雷同也拦
     for a in asked {
+        // 概念级判重用【精确相等】：contains 会误伤同族不同点（"特型" vs "特型约束"
+        // 是两个可分别出题的概念）——上轮的 contains 规则导致重试耗尽直接失败
         let same_concept = q
             .concept
             .as_deref()
@@ -631,7 +633,7 @@ async fn generate_one(
             .map(|(x, y)| {
                 let nx = x.trim();
                 let ny = y.trim();
-                !nx.is_empty() && (nx == ny || nx.contains(ny) || ny.contains(nx))
+                !nx.is_empty() && nx == ny
             })
             .unwrap_or(false);
         if same_concept {

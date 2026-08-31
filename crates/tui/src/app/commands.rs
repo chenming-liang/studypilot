@@ -634,6 +634,7 @@ pub(crate) mod course_delete_tests {
             model: "m".into(),
             price_prompt: 0.0,
             price_completion: 0.0,
+            price_prompt_cached: 0.0,
             context_length: 1000,
             thinking: false,
         };
@@ -701,6 +702,7 @@ mod selection_mapping_tests {
             model: "m".into(),
             price_prompt: 0.0,
             price_completion: 0.0,
+            price_prompt_cached: 0.0,
             context_length: 1000,
             thinking: false,
         };

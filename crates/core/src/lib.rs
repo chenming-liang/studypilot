@@ -35,6 +35,7 @@ mod tests {
     #[test]
     fn usage_total() {
         let u = Usage {
+            cached_tokens: 0,
             prompt_tokens: 98,
             completion_tokens: 188,
         };
