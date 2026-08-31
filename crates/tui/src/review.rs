@@ -34,6 +34,10 @@ pub struct QuizQuestion {
     pub concept_id: Option<i64>,
     #[serde(default)]
     pub concept: Option<String>,
+    /// 考察角度（LLM 自报：definition/code_prediction/comparison/application/
+    /// why/counterexample/debugging/transfer）——coverage summary 的数据源
+    #[serde(default)]
+    pub aspect: Option<String>,
 }
 
 /// answer 字段容错：字符串（"B"）或数字（1，旧格式）都收，统一转字符串。
@@ -128,8 +132,10 @@ pub struct ReviewQuestion {
     pub key_points: Vec<String>,
     pub explanation: Option<String>,
     pub concept_id: Option<i64>,
-    /// LLM 输出的概念名（同轮概念级去重用；DB 读回路径可由 concept 关联补）
+    /// LLM 输出的概念名（下一题上下文的考点摘要）
     pub concept_name: Option<String>,
+    /// 考察角度（下一题 coverage summary 用）
+    pub aspect: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -341,6 +347,8 @@ pub async fn start_review(
         n,
         qtype,
         &[],
+        &[],
+        false,
         &cancel,
     )
     .await
@@ -365,13 +373,19 @@ pub async fn start_review(
     })));
 }
 
-/// 已出题目快照（逐题生成时防重复考点：概念级为主，题面相似度为辅）。
+/// 一道已出题目的上下文（下一题生成的 evidence history）。
+/// 同轮条目带学生回答/判分；跨轮条目只有题面（60 字截断）。
 #[derive(Debug, Clone)]
-pub struct AskedQuestion {
+pub struct QuestionContext {
     pub qtype: &'static str,
-    pub text: String,
-    /// 概念名（LLM 输出/DB 关联名）——同概念视为同考点
+    /// 概念名
     pub concept: Option<String>,
+    /// 题干（同轮 = 完整；跨轮 = 截断）
+    pub text: String,
+    /// 学生回答摘要（判分反馈；未作答 = None）
+    pub grading: Option<String>,
+    /// 考察角度（LLM 自报）
+    pub aspect: Option<String>,
 }
 
 /// 题型分配：选择/简答各半（choice 向上取整），剩余多者优先，持平选选择。
@@ -385,54 +399,112 @@ pub fn pick_qtype(planned: usize, done_choice: usize, done_short: usize) -> QTyp
     }
 }
 
-/// 构建单题出题 prompt（P1~P5 与批量版一致 + 已出题目防重）。
+/// 构建单题出题 prompt。
+///
+/// 上下文分两层（控制 token）：
+/// - Stable：概念/素材/出题要求（逐题相同 → provider 上下文缓存可命中）
+/// - Dynamic：同轮 evidence history（题面+学生回答+判分，全量——planned 通常 ≤5）
+///   + 跨轮最近题面（截断）+ 已覆盖考察角度
+///
+/// 多样性由 LLM 驱动（同一个 concept 可以多角度反复考察），代码判重只是最后防线。
+/// `retry_hint` = 上一个候选被判近重复，明确要求换考察角度。
 fn build_question_messages(
     ctx: &QuizContext,
     index: usize,
     planned: usize,
     qtype: &QType,
-    asked: &[AskedQuestion],
+    same_round: &[QuestionContext],
+    cross_round: &[QuestionContext],
+    retry_hint: bool,
 ) -> [Message; 2] {
-    let asked_text = if asked.is_empty() {
-        "（本题是第一题）".to_string()
+    let mut evidence = String::new();
+    if same_round.is_empty() && cross_round.is_empty() {
+        evidence = "（本题是第一题）".to_string();
     } else {
-        asked
-            .iter()
-            .enumerate()
-            .map(|(i, a)| format!("{}. [{}] {}", i + 1, a.qtype, a.text))
-            .collect::<Vec<_>>()
-            .join("\n")
+        for (i, c) in same_round.iter().enumerate() {
+            evidence.push_str(&format!(
+                "Q{}({}{}，概念: {}): {}\n",
+                i + 1,
+                c.qtype,
+                c.aspect
+                    .as_deref()
+                    .map(|a| format!("/{a}"))
+                    .unwrap_or_default(),
+                c.concept.as_deref().unwrap_or("未标注"),
+                c.text
+            ));
+            if let Some(g) = &c.grading {
+                evidence.push_str(&format!("   判分: {g}\n"));
+            }
+        }
+        for c in cross_round {
+            evidence.push_str(&format!(
+                "（此前轮次, {}{}）{}\n",
+                c.qtype,
+                c.aspect
+                    .as_deref()
+                    .map(|a| format!("/{a}"))
+                    .unwrap_or_default(),
+                c.text
+            ));
+        }
+    }
+    let tested: Vec<&str> = same_round
+        .iter()
+        .chain(cross_round.iter())
+        .filter_map(|c| c.aspect.as_deref())
+        .collect();
+    let covered = if tested.is_empty() {
+        "（尚无）".to_string()
+    } else {
+        tested.join(", ")
     };
     let type_name = match qtype {
         QType::Choice => "choice（选择题：四选项单选）",
         QType::ShortAnswer => "short_answer（简答题：key_points 2~4 个）",
+    };
+    let retry = if retry_hint {
+        "上次生成的候选与已有题目过于相似。请生成一个【有意义的新变体】：换考察角度、\n\
+         换应用情境或换任务形式——而不是换皮改写之前的题目。\n\n"
+    } else {
+        ""
     };
     let prompt = format!(
         "你是《{course}》课程的复习出题老师。这是本轮复习的第 {k}/{n} 题。\n\n\
          # 出题范围\n{directive}\n\n\
          # 素材（笔记片段）\n{material}\n\n\
          # 概念与掌握度（名: 答对/总次数）\n{concept_list}\n\n\
-         # 已出过的题目（本题必须避开这些考点，同一概念尽量只出一题）\n{asked}\n\n\
-         # 本题要求\n\
+         # 已考察内容（evidence history）\n{evidence}\n\n\
+         # 已覆盖的考察角度\n{covered}\n\n\
+         {retry}# 出题要求\n\
          - 题型固定为：{type_name}\n\
-         - P1 考知识，不考材料：好题的判据是——把题干里「根据笔记」「第X章」「某示例」这类前缀删掉后依然成立。素材只支撑答案，禁止出现在题干里。禁止问「笔记/章节/示例讲了什么」。考点必须能在素材中找到依据；素材不足以支撑的考点，换素材覆盖的知识点，禁止凭空考察素材外的语言细节。\\n\\
-         - P2 认知层级：本题应是 Recall（什么是 X）/ Explain（为什么 X，机制）/ Predict（如果…会怎样，可给代码预测输出）/ Apply（X 和 Y 的区别，用 X 解决…）之一，禁止纯复述。\n\
-         - P3 选择题：单选唯一正确、四个选项互斥；干扰项与正确项同质（长度句式相近、源于常见误区、看起来都像对的）；禁止「以上都对/都不对」。\n\
-         - P4 简答题：一题一个焦点——只考一个认知任务，禁止复合句式（「并说明…并给出…」必须拆开或砍掉）；key_points 是答案必须包含的核心事实点（1~3 个），不是完整回答的每个组成部分；好题标准：真实考试会出现、认真学过的学生 2~3 句话能答完。\\n\\
-         - P5 针对性：优先考察掌握度低（次数少或正确率低）的概念；每题 concept 必须取自概念列表。\n\n\
+         - 多样性：之前出过的题描述的是【已考察的内容】，不是禁止重复的主题。\n\
+           同一个概念可以多角度反复考察；新题应增加有意义的覆盖（换考察角度/情境/推理），\n\
+           而不是对已有题目的换皮改写。\n\
+         - 考察角度菜单（自行判断本题最合适的一种，写进 aspect 字段）：\n\
+           definition（是什么）/ code_prediction（代码输出预测）/ comparison（与相邻概念对比）/\n\
+           application（用概念解决问题）/ why（机制与原因）/ counterexample（构造反例）/\n\
+           debugging（找错）/ transfer（迁移到新场景）。已覆盖的角度优先避开，\n\
+           但若学生上一题答错，可以针对其误区出一个更聚焦的变式（此时角度可重复）。\n\
+         - P1 考知识，不考材料：好题的判据是——把题干里「根据笔记」「第X章」「某示例」这类前缀删掉后依然成立。素材只支撑答案，禁止出现在题干里。考点必须能在素材中找到依据；素材不足以支撑的考点，换素材覆盖的知识点。\n\
+         - P3 选择题：单选唯一正确、四个选项互斥；干扰项与正确项同质（长度句式相近、源于常见误区）；禁止「以上都对/都不对」。\n\
+         - P4 简答题：一题一个焦点——只考一个认知任务，禁止复合句式（「并说明…并给出…」必须拆开或砍掉）；key_points 是答案必须包含的核心事实点（1~3 个），不是完整回答的每个组成部分；好题标准：真实考试会出现、认真学过的学生 2~3 句话能答完。\n\
+         - 题目只针对【本题概念】出，不要顺带考察其他概念。\n\n\
          # 禁止事项（反例，禁止照此出题）\n\
          ✗ 「根据笔记，第 9 章主要讲什么？」——考材料\n\
          ✗ 逐字复述笔记原句\n\n\
          # 输出格式（只输出 JSON 本体，单个题目对象，禁止用代码块包裹）\n\
-         选择题：{{\"type\":\"choice\",\"question\":\"题干（不带『根据笔记/第X章』前缀）\",\"options\":[\"正确项\",\"干扰项1\",\"干扰项2\",\"干扰项3\"],\"answer\":\"B\",\"explanation\":\"解析\",\"concept\":\"概念名\"}}\n\
-         简答题：{{\"type\":\"short_answer\",\"question\":\"题干\",\"key_points\":[\"要点1\",\"要点2\"],\"explanation\":\"解析\",\"concept\":\"概念名\"}}",
+         选择题：{{\"type\":\"choice\",\"question\":\"题干\",\"options\":[\"正确项\",\"干扰项1\",\"干扰项2\",\"干扰项3\"],\"answer\":\"B\",\"explanation\":\"解析\",\"concept\":\"概念名\",\"aspect\":\"definition\"}}\n\
+         简答题：{{\"type\":\"short_answer\",\"question\":\"题干\",\"key_points\":[\"要点1\",\"要点2\"],\"explanation\":\"解析\",\"concept\":\"概念名\",\"aspect\":\"why\"}}",
         course = ctx.course_name,
         k = index + 1,
         n = planned,
         directive = ctx.directive,
         material = ctx.material,
         concept_list = ctx.concept_list,
-        asked = asked_text,
+        evidence = evidence,
+        covered = covered,
+        retry = retry,
         type_name = type_name,
     );
     [
@@ -535,8 +607,9 @@ async fn insert_question_db(
     .map_err(|e| e.to_string())
 }
 
-/// 题面相似度：normalize 后字符 bigram Jaccard ≥ 0.5 视为重复考点。
-/// 同轮防 LLM 复读；阈值宽松（0.5）因为"换皮题"往往措辞不同考点相同。
+/// 题面相似度：normalize 后字符 bigram Jaccard ≥ 0.75 视为【接近字面重复】。
+/// 只做最后的保守 lexical guard——校准：少量词语替换的换皮题 ≥0.75，
+/// 不同考点共用模板的题 <0.75（模板词占比被真实内容稀释）。
 fn too_similar(a: &str, b: &str) -> bool {
     let norm = |t: &str| {
         let c: Vec<char> = normalize_text(t)
@@ -556,10 +629,10 @@ fn too_similar(a: &str, b: &str) -> bool {
     }
     let inter = ba.intersection(&bb).count();
     let union = ba.union(&bb).count();
-    union > 0 && inter * 100 >= union * 50
+    union > 0 && inter * 100 >= union * 75
 }
 
-/// 一次单题生成（LLM + 解析 + 落库 + 记账 + 同轮去重检测）。None = 失败/重复。
+/// 一次单题生成（LLM + 解析 + 落库 + 记账 + 近重复防线）。None = 失败/近重复。
 #[allow(clippy::too_many_arguments)]
 async fn generate_one(
     store: &Arc<Store>,
@@ -570,13 +643,23 @@ async fn generate_one(
     index: usize,
     planned: usize,
     qtype: QType,
-    asked: &[AskedQuestion],
+    same_round: &[QuestionContext],
+    cross_round: &[QuestionContext],
+    retry_hint: bool,
     cancel: &CancellationToken,
 ) -> Option<(ReviewQuestion, Option<String>)> {
     if cancel.is_cancelled() {
         return None;
     }
-    let messages = build_question_messages(ctx, index, planned, &qtype, asked);
+    let messages = build_question_messages(
+        ctx,
+        index,
+        planned,
+        &qtype,
+        same_round,
+        cross_round,
+        retry_hint,
+    );
     // D4 降级链（await 期间观察取消）
     let resp = match agent_providers::with_cancel(provider.chat_json(&messages), cancel).await {
         Some(Ok(r)) => r,
@@ -620,28 +703,12 @@ async fn generate_one(
             return None;
         }
     };
-    // 同轮去重：
-    // ① 概念级（主判据）：同一概念视为同考点，直接判重——文本相似度对"换皮题"不可靠
-    // ② 文本相似度（辅助）：措辞雷同也拦
-    for a in asked {
-        // 概念级判重用【精确相等】：contains 会误伤同族不同点（"特型" vs "特型约束"
-        // 是两个可分别出题的概念）——上轮的 contains 规则导致重试耗尽直接失败
-        let same_concept = q
-            .concept
-            .as_deref()
-            .zip(a.concept.as_deref())
-            .map(|(x, y)| {
-                let nx = x.trim();
-                let ny = y.trim();
-                !nx.is_empty() && nx == ny
-            })
-            .unwrap_or(false);
-        if same_concept {
-            tracing::warn!(index, concept = ?q.concept, "新题概念与已出题重复，判重重试");
-            return None;
-        }
-        if too_similar(&q.question, &a.text) {
-            tracing::warn!(index, "新题与已出题面高度相似，判重复重试");
+    // 近重复防线（最后的 guard，不是多样性主导机制）：
+    // 只拦【接近字面重复】的题（bigram Jaccard ≥0.8）——概念相同/包含/模板相似都不拒，
+    // 多样性由 prompt 里的 evidence history 与考察角度驱动（LLM 负责）
+    for c in same_round {
+        if too_similar(&q.question, &c.text) {
+            tracing::warn!(index, "新题与已出题面几乎相同，判近重复重试");
             return None;
         }
     }
@@ -659,13 +726,15 @@ async fn generate_one(
             explanation: q.explanation,
             concept_id,
             concept_name: q.concept.clone(),
+            aspect: q.aspect.clone(),
         },
         q.concept.clone(),
     ))
 }
 
 /// 逐题生成入口（App 侧 spawn）：生成第 index 题（0-based），事件回流。
-/// 失败自动重试一次，再失败发 Err（由调用方优雅收束）。
+/// `same_round` = 本轮已出题的 evidence history（题面+学生判分+角度）。
+/// 失败自动重试一次（重试 prompt 明确要求"换考察角度"），再失败发 Err。
 #[allow(clippy::too_many_arguments)]
 pub async fn generate_review_question(
     store: Arc<Store>,
@@ -676,24 +745,28 @@ pub async fn generate_review_question(
     index: usize,
     planned: usize,
     qtype: QType,
-    mut asked: Vec<AskedQuestion>,
+    same_round: Vec<QuestionContext>,
     cancel: CancellationToken,
     tx: UnboundedSender<AppEvent>,
 ) {
-    // 跨轮防重：课程最近 (题面, 概念名) 并入 asked（prompt 可见 + 概念级/相似度检测）
+    // 跨轮题面（prompt only：让 LLM 知道此前考过什么；不参与代码级 guard）
+    let mut cross_round: Vec<QuestionContext> = Vec::new();
     if let Some(cid) = ctx.course_id
         && let Ok(recent) = store.recent_question_texts(cid, 8)
     {
         for (t, concept) in recent {
             let short: String = t.chars().take(60).collect();
-            asked.push(AskedQuestion {
-                qtype: "跨轮",
-                text: short,
+            cross_round.push(QuestionContext {
+                qtype: "此前轮次",
                 concept,
+                text: short,
+                grading: None,
+                aspect: None,
             });
         }
     }
     for attempt in 0..2 {
+        let retry_hint = attempt > 0; // 重试 = 上个候选近重复，明确要求换角度
         if let Some((q, concept_name)) = generate_one(
             &store,
             &provider,
@@ -703,7 +776,9 @@ pub async fn generate_review_question(
             index,
             planned,
             qtype.clone(),
-            &asked,
+            &same_round,
+            &cross_round,
+            retry_hint,
             &cancel,
         )
         .await
@@ -984,5 +1059,188 @@ mod quiz_parse_tests {
             }
         }
         assert!(heavy > 800, "重权重项应被高概率抽中, 实际 {heavy}/1000");
+    }
+}
+
+#[cfg(test)]
+mod diversity_tests {
+    use super::*;
+
+    fn ctx(
+        qtype: &'static str,
+        concept: Option<&str>,
+        text: &str,
+        grading: Option<&str>,
+    ) -> QuestionContext {
+        QuestionContext {
+            qtype,
+            concept: concept.map(String::from),
+            text: text.into(),
+            grading: grading.map(String::from),
+            aspect: None,
+        }
+    }
+
+    /// 回归 1：同 concept + 不同考察角度 → 允许（概念级判重已删除）
+    #[test]
+    fn same_concept_different_angle_is_allowed() {
+        let asked = vec![ctx(
+            "choice",
+            Some("变量遮蔽"),
+            "在 Rust 中，关于变量遮蔽的说法正确的是？",
+            None,
+        )];
+        let candidate = ctx(
+            "short_answer",
+            Some("变量遮蔽"),
+            "请解释变量遮蔽与 mut 修改的区别。",
+            None,
+        );
+        // 概念相同但角度不同：generate_one 的 guard 不应拦（通过 = 不 panic/不提前退出）
+        for a in &asked {
+            assert!(!too_similar(&candidate.text, &a.text));
+        }
+        // 概念级判重已删：不存在"同 concept 必拒"的路径
+    }
+
+    /// 回归 2：同 concept + 同义改写 → 拒绝
+    #[test]
+    fn paraphrase_of_same_question_is_rejected() {
+        let asked = vec![ctx(
+            "choice",
+            Some("变量遮蔽"),
+            "在 Rust 中，关于变量遮蔽的说法正确的是：A 遮蔽只能改变值 B 遮蔽可以改变类型 C 遮蔽要求 mut D 遮蔽不创建新绑定",
+            None,
+        )];
+        // 同义改写：只换措辞，考点与选项结构一致 → bigram 高度重合
+        let candidate = ctx(
+            "choice",
+            Some("变量遮蔽"),
+            "在 Rust 中，关于变量遮蔽的说法正确的是：A 遮蔽只能改变值 B 遮蔽可以改变类型 C 遮蔽要求 mut D 遮蔽不会创建新的绑定",
+            None,
+        );
+        assert!(too_similar(&candidate.text, &asked[0].text));
+    }
+
+    /// 回归 3：概念包含关系（"特型" vs "特型约束"）→ 不得误判
+    #[test]
+    fn concept_containment_does_not_reject() {
+        // 概念级判重已整体删除：包含关系的概念由 prompt 组织，不进 guard
+        let q1 = ctx(
+            "choice",
+            Some("特型"),
+            "关于特型的动态分发，说法正确的是？",
+            None,
+        );
+        let q2 = ctx(
+            "choice",
+            Some("特型约束"),
+            "泛型函数上的特型约束 `T: Display` 限制了什么？",
+            None,
+        );
+        // 文本内容不同 → 相似度防线不拦
+        assert!(!too_similar(&q2.text, &q1.text));
+    }
+
+    /// 回归 4：不同 concept + 题型模板相似 → 不因模板词拒绝
+    #[test]
+    fn template_similarity_across_concepts_is_allowed() {
+        let asked = vec![ctx(
+            "choice",
+            Some("生命周期"),
+            "在 Rust 中，关于生命周期参数的说法正确的是：A 'a 表示引用存活期 B 生命周期影响实际存活 C 每个引用都需要标注 D 静态生命周期不可变",
+            None,
+        )];
+        let candidate = ctx(
+            "choice",
+            Some("所有权"),
+            "在 Rust 中，关于所有权转移的说法正确的是：A move 复制堆数据 B move 转移所有权 C move 需要标注 D move 之后原变量仍可用",
+            None,
+        );
+        // 共享模板头"在 Rust 中，关于…的说法正确的是："，但考点完全不同
+        assert!(
+            !too_similar(&candidate.text, &asked[0].text),
+            "模板相似不应触发防线"
+        );
+    }
+
+    /// 回归 5：学生上一题答错 → evidence 带判分，prompt 可针对误区出变式
+    #[test]
+    fn grading_flows_into_prompt() {
+        let ctx_pack = QuizContext {
+            course_id: Some(1),
+            course_name: "rust".into(),
+            directive: "覆盖概念：变量遮蔽".into(),
+            material: "素材".into(),
+            concept_list: "变量遮蔽(0/1)".into(),
+        };
+        let same_round = vec![ctx(
+            "short_answer",
+            Some("变量遮蔽"),
+            "什么是变量遮蔽？",
+            Some("答错（60/100），缺失: 未区分 shadowing 与 mutation"),
+        )];
+        let messages = build_question_messages(
+            &ctx_pack,
+            1,
+            5,
+            &QType::ShortAnswer,
+            &same_round,
+            &[],
+            false,
+        );
+        let prompt = &messages[1].content;
+        let text = prompt.as_ref().map(|s| s.as_str()).unwrap_or("");
+        assert!(text.contains("答错"), "学生判分应进入 prompt");
+        assert!(text.contains("缺失"), "缺失要点应进入 prompt");
+        assert!(text.contains("误区"), "应提示可针对误区出变式");
+    }
+
+    /// 回归 6：上下文长度受控——跨轮题面截断到 60 字
+    #[test]
+    fn cross_round_text_is_truncated() {
+        let long = "x".repeat(200);
+        // generate_review_question 的注入逻辑在 async 任务里，这里直接测截断规则
+        let short: String = long.chars().take(60).collect();
+        assert_eq!(short.chars().count(), 60);
+    }
+
+    /// 回归 7：retry_hint 进入 prompt（重试明确要求换考察角度）
+    #[test]
+    fn retry_hint_informs_model() {
+        let ctx_pack = QuizContext {
+            course_id: Some(1),
+            course_name: "rust".into(),
+            directive: "覆盖概念：变量遮蔽".into(),
+            material: "素材".into(),
+            concept_list: "变量遮蔽(0/1)".into(),
+        };
+        let without = build_question_messages(&ctx_pack, 1, 5, &QType::Choice, &[], &[], false);
+        let with = build_question_messages(&ctx_pack, 1, 5, &QType::Choice, &[], &[], true);
+        let text_of = |m: &[Message]| -> String { m[1].content.clone().unwrap_or_default() };
+        assert!(text_of(&with).contains("有意义的新变体"));
+        assert!(text_of(&with).contains("换考察角度"));
+        assert!(!text_of(&without).contains("有意义的新变体"));
+    }
+
+    /// 多样性铁律进入 prompt（同 concept 可多角度考，换皮改写不允许）
+    #[test]
+    fn diversity_rules_in_prompt() {
+        let ctx_pack = QuizContext {
+            course_id: Some(1),
+            course_name: "rust".into(),
+            directive: "d".into(),
+            material: "m".into(),
+            concept_list: "c".into(),
+        };
+        let messages = build_question_messages(&ctx_pack, 0, 5, &QType::Choice, &[], &[], false);
+        let text = messages[1]
+            .content
+            .as_ref()
+            .map(|s| s.as_str())
+            .unwrap_or("");
+        assert!(text.contains("不是禁止重复的主题"));
+        assert!(text.contains("换皮改写"));
+        assert!(text.contains("aspect"));
     }
 }

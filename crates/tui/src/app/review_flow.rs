@@ -488,25 +488,57 @@ impl App {
                 .iter()
                 .filter(|q| q.q_type == QType::ShortAnswer)
                 .count();
-            let asked: Vec<review::AskedQuestion> = rs
+            // evidence history：已答的题带学生判分；未答的当前题只带题面
+            let answered = rs.results.len();
+            let mut same_round: Vec<review::QuestionContext> = rs
                 .questions
                 .iter()
-                .map(|q| review::AskedQuestion {
-                    qtype: match q.q_type {
+                .enumerate()
+                .map(|(i, q)| {
+                    let grading = rs.results.get(i).map(|r| {
+                        let missing = if r.missing.is_empty() {
+                            String::new()
+                        } else {
+                            format!("，缺失: {}", r.missing.join("；"))
+                        };
+                        format!(
+                            "{}（{}）{missing}",
+                            if r.correct { "答对" } else { "答错" },
+                            r.score.map(|s| format!("{s}/100")).unwrap_or_default()
+                        )
+                    });
+                    review::QuestionContext {
+                        qtype: match q.q_type {
+                            QType::Choice => "choice",
+                            QType::ShortAnswer => "short_answer",
+                        },
+                        concept: q.concept_name.clone(),
+                        text: q.question.clone(),
+                        grading,
+                        aspect: q.aspect.clone(),
+                    }
+                })
+                .collect();
+            // 当前正在作答的题（学生还没提交）也进上下文：下一题避免换皮它
+            if let Some(cur) = rs.questions.get(answered) {
+                same_round.push(review::QuestionContext {
+                    qtype: match cur.q_type {
                         QType::Choice => "choice",
                         QType::ShortAnswer => "short_answer",
                     },
-                    text: q.question.chars().take(60).collect(),
-                    concept: q.concept_name.clone(),
-                })
-                .collect();
+                    concept: cur.concept_name.clone(),
+                    text: cur.question.clone(),
+                    grading: None,
+                    aspect: cur.aspect.clone(),
+                });
+            }
             (
                 rs.questions.len(),
                 rs.planned,
                 rs.quiz_id,
                 std::sync::Arc::clone(&rs.ctx),
                 review::pick_qtype(rs.planned, done_choice, done_short),
-                asked,
+                same_round,
             )
         };
         let cancel = tokio_util::sync::CancellationToken::new();
