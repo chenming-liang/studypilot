@@ -213,7 +213,11 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &mut App) {
                     let mut spans = vec![
                         Span::raw("  "),
                         Span::styled(
-                            if first { format!("{mark}{letter} ") } else { "        ".to_owned() },
+                            if first {
+                                format!("{mark}{letter} ")
+                            } else {
+                                "        ".to_owned()
+                            },
                             Style::new().fg(color),
                         ),
                     ];
@@ -352,7 +356,11 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &mut App) {
                         Style::new().fg(if is_cursor { theme::USER } else { theme::MUTED }),
                     ),
                     Span::styled(
-                        if first { format!("{letter}  ") } else { "      ".to_owned() },
+                        if first {
+                            format!("{letter}  ")
+                        } else {
+                            "      ".to_owned()
+                        },
                         letter_style,
                     ),
                 ];
@@ -1088,7 +1096,7 @@ fn draw_list_picker(f: &mut Frame, lp: &ListPicker, input: &str) {
     let area = f.area();
     // 弹窗高度按过滤后条目数适配（搜索后弹窗随之缩小）
     let visible = lp.visible(input);
-    let height = (visible.len() as u16 + 4).min(area.height.saturating_sub(2));
+    let height = (visible.len() as u16 + 5).min(area.height.saturating_sub(2));
     let width = 52u16.min(area.width.saturating_sub(2));
     let x = area.x + (area.width - width) / 2;
     let y = area.y + (area.height - height) / 2;
@@ -1097,27 +1105,37 @@ fn draw_list_picker(f: &mut Frame, lp: &ListPicker, input: &str) {
     f.render_widget(ratatui::widgets::Clear, pop);
 
     // 渲染过滤后列表（selected 为过滤后位置）；空结果给占位行
-    let items: Vec<ListItem> = if visible.is_empty() {
-        vec![ListItem::new(Span::styled(
-            "  （无匹配项）",
-            Style::new().fg(DIM),
-        ))]
-    } else {
-        visible
-            .iter()
-            .enumerate()
-            .map(|(vi, &i)| {
-                let c = &lp.items[i];
-                let mark = if vi == lp.selected { "▸ " } else { "  " };
-                let label = format!("{mark}{}", c.label);
-                let style = if vi == lp.selected {
-                    Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::new()
-                };
-                ListItem::new(Span::styled(label, style))
-            })
-            .collect()
+    // 搜索串镜像显示在弹窗内（与 /notes /sessions 一致：> 搜索串▍）
+    let items: Vec<ListItem> = {
+        let mut out: Vec<ListItem> = Vec::new();
+        if !input.is_empty() {
+            let mut shown = String::new();
+            // picker 无光标语义：串尾固定 ▍ 表示搜索中
+            shown.push_str(input);
+            shown.push('▍');
+            out.push(ListItem::new(Span::styled(
+                format!("  > {shown}"),
+                Style::new().fg(theme::FG),
+            )));
+        }
+        if visible.is_empty() {
+            out.push(ListItem::new(Span::styled(
+                "  （无匹配项）",
+                Style::new().fg(DIM),
+            )));
+        }
+        for (vi, &i) in visible.iter().enumerate() {
+            let c = &lp.items[i];
+            let mark = if vi == lp.selected { "▸ " } else { "  " };
+            let label = format!("{mark}{}", c.label);
+            let style = if vi == lp.selected {
+                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+            } else {
+                Style::new()
+            };
+            out.push(ListItem::new(Span::styled(label, style)));
+        }
+        out
     };
     // ListState 跟随 selected 自动滚动视口（长列表翻页可见，修 65+ 概念选择器）
     let mut state = ratatui::widgets::ListState::default().with_selected(Some(lp.selected));
