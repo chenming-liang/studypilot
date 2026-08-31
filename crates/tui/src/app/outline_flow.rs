@@ -66,8 +66,11 @@ impl App {
         }
     }
 
-    /// /review-map —— 从缓存章节结构重读掌握度（无 LLM，秒开）+ 渲染 + 弹选择器。
-    pub(crate) fn handle_review_map_command(&mut self) {
+    /// /review-map [数量] —— 从缓存章节结构重读掌握度（无 LLM，秒开）+ 渲染 + 弹选择器。
+    /// 数量 = 选择器普通行出题的 --n（默认 5；「优先巩固」批量项数量 = 待巩固概念数）。
+    pub(crate) fn handle_review_map_command(&mut self, arg: &str) {
+        let n = arg.trim().parse::<usize>().unwrap_or(0);
+        self.review_map_n = n;
         let Some(map) = &self.review_map else {
             self.push_entry(Entry::Error(
                 "还没有复习地图：先 /outline 生成（章节结构来自 LLM 组织）".into(),

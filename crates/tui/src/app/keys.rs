@@ -861,7 +861,7 @@ impl App {
                 };
                 (
                     "选择知识点开始复习（Enter = 对该概念出题）".to_owned(),
-                    map.picker_items()
+                    map.picker_items(self.review_map_n)
                         .into_iter()
                         .map(|(label, command)| ListChoice { label, command })
                         .collect(),
@@ -909,6 +909,18 @@ impl App {
                     && !lp.items.is_empty()
                 {
                     lp.selected = (lp.selected + 1).min(lp.items.len() - 1);
+                }
+            }
+            KeyCode::PageUp => {
+                if let Some(lp) = &mut self.list_picker {
+                    lp.selected = lp.selected.saturating_sub(10);
+                }
+            }
+            KeyCode::PageDown => {
+                if let Some(lp) = &mut self.list_picker
+                    && !lp.items.is_empty()
+                {
+                    lp.selected = (lp.selected + 10).min(lp.items.len() - 1);
                 }
             }
             KeyCode::Enter => {

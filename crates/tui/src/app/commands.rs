@@ -138,7 +138,7 @@ impl App {
             "/outline" => self.handle_outline_command(arg.trim()),
             "/search" => self.not_implemented("/search", "M7（检索能力经 agent 工具自动调度）"),
             "/refresh-concepts" => self.handle_refresh_concepts(),
-            "/review-map" => self.handle_review_map_command(),
+            "/review-map" => self.handle_review_map_command(arg.trim()),
             "/review" => self.handle_review_command(arg.trim()),
             _ => {
                 self.push_entry(Entry::Error(format!(

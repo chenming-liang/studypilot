@@ -544,6 +544,21 @@ impl Store {
         Ok(())
     }
 
+    /// 课程最近出过的题面（跨轮防重：注入出题 prompt + 相似度检测）。
+    pub fn recent_question_texts(&self, course_id: i64, limit: usize) -> Result<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT q.question FROM questions q
+             JOIN quizzes z ON z.id = q.quiz_id
+             WHERE z.course_id = ?1
+             ORDER BY q.id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![course_id, limit as i64], |r| {
+            r.get::<_, String>(0)
+        })?;
+        Ok(rows.flatten().collect())
+    }
+
     /// 课程今日作答次数（Anki 式"今日/长期"分层统计的今日侧）。
     pub fn attempts_today_by_course(&self, course_id: i64) -> Result<usize> {
         let conn = self.conn.lock().unwrap();

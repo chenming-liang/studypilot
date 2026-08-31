@@ -131,6 +131,7 @@ impl App {
             rs.followups.push(review::FollowupTurn {
                 question: text.clone(),
                 answer: None,
+                citations: Vec::new(),
             });
         }
 
@@ -185,15 +186,35 @@ impl App {
                 res = agent.run_messages(&history) => match res {
                     Ok(result) => {
                         App::log_llm_usage(&store, &provider_cfg, "review", &result.total_usage);
-                        let _ = tx.send(AppEvent::ReviewFollowup(idx, text, Ok(result.content)));
+                        // search_notes 工具结果 → [n] → 笔记来源映射（渲染脚注）
+                        let citations = super::extract_citations(
+                            &result.new_messages,
+                            &result.content,
+                        );
+                        let _ = tx.send(AppEvent::ReviewFollowup(
+                            idx,
+                            text,
+                            Ok(result.content),
+                            citations,
+                        ));
                     }
                     Err(e) => {
-                        let _ = tx.send(AppEvent::ReviewFollowup(idx, text, Err(e.to_string())));
+                        let _ = tx.send(AppEvent::ReviewFollowup(
+                            idx,
+                            text,
+                            Err(e.to_string()),
+                            Vec::new(),
+                        ));
                     }
                 },
                 _ = cancel.cancelled() => {
                     // Esc 中断：填充占位行为中断标记（workspace 红色可见）
-                    let _ = tx.send(AppEvent::ReviewFollowup(idx, text, Err("（已中断）".into())));
+                    let _ = tx.send(AppEvent::ReviewFollowup(
+                        idx,
+                        text,
+                        Err("（已中断）".into()),
+                        Vec::new(),
+                    ));
                 }
             }
         });
@@ -205,6 +226,7 @@ impl App {
         idx: usize,
         question: String,
         result: Result<String, String>,
+        citations: Vec<(usize, String)>,
     ) {
         self.followup_pending = None;
         self.scroll_up = 0; // 回答到达吸附底部
@@ -224,6 +246,7 @@ impl App {
             && turn.question == question
         {
             turn.answer = Some(result);
+            turn.citations = citations;
         }
     }
 
@@ -364,13 +387,37 @@ impl App {
     }
 
     pub(crate) fn on_review_advice(&mut self, text: String) {
-        // 小结建议走 markdown 富文本（标题/分组着色），不再灰色信息流
-        let mut md = String::from("### 复习小结\n");
-        for line in text.lines().skip(1) {
-            md.push_str(line);
-            md.push('\n');
+        // 小结建议分组着色（✓绿/△黄/→蓝），解析失败静默降级为 Markdown 块
+        let parse = |line: &str| line.trim_start_matches("- ").to_owned();
+        let (mut mastered, mut consolidate, mut next) = (Vec::new(), Vec::new(), None);
+        for line in text.lines() {
+            if let Some(v) = line.strip_prefix("✓ 已掌握: ") {
+                mastered = v
+                    .split('、')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(parse)
+                    .collect();
+            } else if let Some(v) = line.strip_prefix("△ 需巩固: ") {
+                consolidate = v
+                    .split('、')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(parse)
+                    .collect();
+            } else if let Some(v) = line.strip_prefix("→ 下一步: ") {
+                next = Some(v.to_owned());
+            }
         }
-        self.push_entry(Entry::Markdown(md));
+        if mastered.is_empty() && consolidate.is_empty() && next.is_none() {
+            self.push_entry(Entry::Markdown(text));
+            return;
+        }
+        self.push_entry(Entry::Advice {
+            mastered,
+            consolidate,
+            next,
+        });
     }
 
     pub(crate) fn exit_review(&mut self, msg: &str) {

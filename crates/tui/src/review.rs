@@ -109,11 +109,12 @@ pub struct QuizContext {
 }
 
 /// 一轮追问（问，答）。answer 为 None 表示回答生成中（workspace 显示思考行）；
-/// Err 是获取失败（渲染红色，不喂回 LLM）。
+/// Err 是获取失败（渲染红色，不喂回 LLM）。citations = [n] → 笔记来源（渲染脚注）。
 #[derive(Debug, Clone)]
 pub struct FollowupTurn {
     pub question: String,
     pub answer: Option<Result<String, String>>,
+    pub citations: Vec<(usize, String)>,
 }
 
 /// 一道题目（含 DB id）。
@@ -529,7 +530,31 @@ async fn insert_question_db(
     .map_err(|e| e.to_string())
 }
 
-/// 一次单题生成（LLM + 解析 + 落库 + 记账）。None = 失败。
+/// 题面相似度：normalize 后字符 bigram Jaccard ≥ 0.5 视为重复考点。
+/// 同轮防 LLM 复读；阈值宽松（0.5）因为"换皮题"往往措辞不同考点相同。
+fn too_similar(a: &str, b: &str) -> bool {
+    let norm = |t: &str| {
+        let c: Vec<char> = normalize_text(t)
+            .chars()
+            .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation())
+            .collect();
+        if c.len() < 2 {
+            return std::collections::HashSet::new();
+        }
+        c.windows(2)
+            .map(|w| (w[0], w[1]))
+            .collect::<std::collections::HashSet<_>>()
+    };
+    let (ba, bb) = (norm(a), norm(b));
+    if ba.is_empty() || bb.is_empty() {
+        return false;
+    }
+    let inter = ba.intersection(&bb).count();
+    let union = ba.union(&bb).count();
+    union > 0 && inter * 100 >= union * 50
+}
+
+/// 一次单题生成（LLM + 解析 + 落库 + 记账 + 同轮去重检测）。None = 失败/重复。
 #[allow(clippy::too_many_arguments)]
 async fn generate_one(
     store: &Arc<Store>,
@@ -590,6 +615,14 @@ async fn generate_one(
             return None;
         }
     };
+    // 同轮去重：与已出题目相似度过高 → 视为失败（触发上层重试，重试仍带
+    // 「已出题目」prompt，LLM 换考点的概率随重试上升）
+    for a in asked {
+        if too_similar(&q.question, &a.text) {
+            tracing::warn!(index, "新题与已出题面高度相似，判重复重试");
+            return None;
+        }
+    }
     let (db_id, concept_id) = insert_question_db(store, quiz_id, ctx.course_id, &q)
         .await
         .ok()?;
@@ -617,10 +650,22 @@ pub async fn generate_review_question(
     index: usize,
     planned: usize,
     qtype: QType,
-    asked: Vec<AskedQuestion>,
+    mut asked: Vec<AskedQuestion>,
     cancel: CancellationToken,
     tx: UnboundedSender<AppEvent>,
 ) {
+    // 跨轮防重：课程最近题目并入 asked（prompt 可见 + 相似度检测）
+    if let Ok(recent) = store.recent_question_texts(ctx.course_id.unwrap_or(0), 8)
+        && ctx.course_id.is_some()
+    {
+        for t in recent {
+            let short: String = t.chars().take(60).collect();
+            asked.push(AskedQuestion {
+                qtype: "跨轮",
+                text: short,
+            });
+        }
+    }
     for attempt in 0..2 {
         if let Some(q) = generate_one(
             &store,

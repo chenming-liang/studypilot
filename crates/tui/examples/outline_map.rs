@@ -44,7 +44,7 @@ async fn main() -> anyhow::Result<()> {
 
     println!("{}", map.markdown());
     println!("══ 选择器条目（前 10）══");
-    for (label, cmd) in map.picker_items().into_iter().take(10) {
+    for (label, cmd) in map.picker_items(0).into_iter().take(10) {
         println!("  {label}\n      → {cmd}");
     }
     Ok(())
