@@ -238,8 +238,9 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &mut App) {
             }
             if let Some(exp) = &q.explanation {
                 // 解析同样走 markdown 管线（与题干一致，可能含代码）
+                // 宽度按前缀 8 列修正（"  解析: " 2+4+2）——此前只减 2，行超宽末字被裁
                 let mut exp_lines =
-                    markdown::render_markdown(exp, inner_w.saturating_sub(2).max(1));
+                    markdown::render_markdown(exp, inner_w.saturating_sub(8).max(1));
                 while exp_lines.last().is_some_and(|l| l.spans.is_empty()) {
                     exp_lines.pop();
                 }
@@ -291,6 +292,19 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &mut App) {
                             let mut spans = vec![Span::raw("  ")];
                             spans.extend(l.spans);
                             body.push(Line::from(spans));
+                        }
+                        // 引用脚注：[n] → 笔记来源（此前只有编号没有来源）
+                        if !turn.citations.is_empty() {
+                            body.push(Line::from(Span::styled(
+                                "  ── 引用来源 ──",
+                                Style::new().fg(theme::MUTED),
+                            )));
+                            for (n, src) in &turn.citations {
+                                body.push(Line::from(Span::styled(
+                                    format!("  [{n}] {src}"),
+                                    Style::new().fg(theme::MUTED),
+                                )));
+                            }
                         }
                     }
                     Some(Err(e)) => {
@@ -632,6 +646,60 @@ fn append_entry_lines(entry: &Entry, width: usize, out: &mut Vec<Line<'static>>)
                 out.push(Line::from(spans));
             }
             out.push(Line::default()); // 块间空行：紫条与下一条消息隔开
+        }
+        Entry::Advice {
+            mastered,
+            consolidate,
+            next,
+        } => {
+            // 复习小结：分组着色（绿/黄/蓝），无 markdown——三行语义一目了然
+            let head = |mark: &'static str, color: ratatui::style::Color| {
+                Line::from(vec![
+                    Span::styled("▎ ", Style::new().fg(theme::PRIMARY)),
+                    Span::styled(
+                        format!("  {mark}"),
+                        Style::new().fg(color).add_modifier(Modifier::BOLD),
+                    ),
+                ])
+            };
+            let item = |color: ratatui::style::Color, text: &str| {
+                Line::from(vec![
+                    Span::styled("▎ ", Style::new().fg(theme::PRIMARY)),
+                    Span::styled(format!("    {text}"), Style::new().fg(color)),
+                ])
+            };
+            out.push(head("── 复习小结 ──", theme::PRIMARY));
+            if !mastered.is_empty() {
+                out.push(head("✓ 已掌握", theme::SUCCESS));
+                for t in mastered {
+                    out.push(item(theme::SUCCESS, t));
+                }
+            }
+            if !consolidate.is_empty() {
+                out.push(head("△ 需巩固", theme::USER));
+                for t in consolidate {
+                    out.push(item(theme::USER, t));
+                }
+            }
+            if let Some(n) = next
+                && !n.trim().is_empty()
+            {
+                out.push(head("→ 下一步", theme::SECONDARY));
+                // 建议可能较长：按宽度手动折行
+                let w = width.saturating_sub(8);
+                let mut cur = String::new();
+                for ch in n.chars() {
+                    cur.push(ch);
+                    if cur.chars().count() >= w {
+                        out.push(item(theme::SECONDARY, &cur));
+                        cur.clear();
+                    }
+                }
+                if !cur.is_empty() {
+                    out.push(item(theme::SECONDARY, &cur));
+                }
+            }
+            out.push(Line::default());
         }
         Entry::Markdown(text) => {
             // 富文本块（摘要卡/大纲）：PRIMARY 色条 + markdown 管线
@@ -1019,7 +1087,9 @@ fn draw_list_picker(f: &mut Frame, lp: &ListPicker) {
             ListItem::new(Span::styled(label, style))
         })
         .collect();
-    f.render_widget(
+    // ListState 跟随 selected 自动滚动视口（长列表翻页可见，修 65+ 概念选择器）
+    let mut state = ratatui::widgets::ListState::default().with_selected(Some(lp.selected));
+    f.render_stateful_widget(
         List::new(items).block(
             Block::new()
                 .borders(Borders::ALL)
@@ -1033,6 +1103,7 @@ fn draw_list_picker(f: &mut Frame, lp: &ListPicker) {
                 ),
         ),
         pop,
+        &mut state,
     );
 }
 

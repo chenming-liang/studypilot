@@ -52,11 +52,21 @@ impl Tool for SearchNotesTool {
         let store = Arc::clone(&self.store);
         let cid = self.course_id;
         let query = query.to_owned();
+        let q2 = query.clone();
 
-        let hits = tokio::task::spawn_blocking(move || store.search_chunks(&query, cid, 8))
+        let mut hits = tokio::task::spawn_blocking(move || store.search_chunks(&query, cid, 8))
             .await
             .map_err(|e| Error::Transport(e.to_string()))?
             .map_err(|e| Error::Storage(e.to_string()))?;
+
+        // 课程内零命中 → 退化全库再搜一次（学习辅助场景宁可跨课也不空手）
+        if hits.is_empty() {
+            let store2 = Arc::clone(&self.store);
+            hits = tokio::task::spawn_blocking(move || store2.search_chunks(&q2, None, 8))
+                .await
+                .map_err(|e| Error::Transport(e.to_string()))?
+                .map_err(|e| Error::Storage(e.to_string()))?;
+        }
 
         if hits.is_empty() {
             return Ok(json!({

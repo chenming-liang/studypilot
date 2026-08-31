@@ -209,7 +209,9 @@ impl ReviewMap {
     /// 选择器条目（状态驱动行动，Anki 式"状态 = 下一步"）：
     /// 首项 = 「优先巩固」批量出题（△ + ○ 一起，数量 = 概念数），其余按 △ → ○ → ✓
     /// 排序（组内保持大纲序）。Enter 直接发起复习。
-    pub fn picker_items(&self) -> Vec<(String, String)> {
+    /// `n_user` = 用户指定的单概念出题数量（/review-map [数量]；0 = 默认 5）。
+    pub fn picker_items(&self, n_user: usize) -> Vec<(String, String)> {
+        let default_n = if n_user > 0 { n_user } else { 5 };
         let mut weak: Vec<&ConceptNode> = Vec::new();
         let mut fresh: Vec<&ConceptNode> = Vec::new();
         let mut mastered: Vec<&ConceptNode> = Vec::new();
@@ -243,14 +245,14 @@ impl ReviewMap {
         }
         for n in weak.iter().chain(fresh.iter()).chain(mastered.iter()) {
             let m = if n.attempts > 0 {
-                format!(" ({}/{})", n.correct, n.attempts)
+                format!("（做对 {} / 共 {} 题）", n.correct, n.attempts)
             } else {
                 String::new()
             };
             items.push((
                 format!("{} {}{}", n.status().mark(), n.name, m),
                 format!(
-                    "/review --course {} --concept {} --n 5",
+                    "/review --course {} --concept {} --n {default_n}",
                     self.course, n.name
                 ),
             ));
@@ -516,12 +518,12 @@ mod tests {
             titles: vec![(1, "01-basic".into())],
             today_attempts: 0,
         };
-        let items = map.picker_items();
+        let items = map.picker_items(0);
         assert_eq!(items.len(), 3);
         // 首项 = 优先巩固批量（△+○ 全部待巩固概念）
         assert!(items[0].1.contains("--concept 借用、所有权 --n 2"));
         // 状态排序：△ 优先于 ○
-        assert_eq!(items[1].0, "△ 借用 (0/1)");
+        assert_eq!(items[1].0, "△ 借用（做对 0 / 共 1 题）");
         assert_eq!(items[2].0, "○ 所有权");
     }
 
@@ -542,14 +544,14 @@ mod tests {
             titles: vec![],
             today_attempts: 3,
         };
-        let items = map.picker_items();
+        let items = map.picker_items(0);
         // 首项 = 优先巩固批量项（△+○，数量=概念数）
         assert_eq!(items[0].0, "▶ 优先巩固（2 个：△1 ○1）");
         assert!(items[0].1.contains("--concept 薄弱、未学 --n 2"));
         // 排序：△ → ○ → ✓
-        assert_eq!(items[1].0, "△ 薄弱 (1/2)");
+        assert_eq!(items[1].0, "△ 薄弱（做对 1 / 共 2 题）");
         assert_eq!(items[2].0, "○ 未学");
-        assert_eq!(items[3].0, "✓ 已掌握 (2/2)");
+        assert_eq!(items[3].0, "✓ 已掌握（做对 2 / 共 2 题）");
         // 普通行显式带默认数量
         assert!(items[1].1.ends_with("--n 5"));
     }
