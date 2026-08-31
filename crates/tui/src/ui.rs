@@ -204,11 +204,23 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &mut App) {
                     ("  ", theme::MUTED)
                 };
                 let letter = (b'A' + i as u8) as char;
-                body.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(format!("{mark}{letter}"), Style::new().fg(color)),
-                    Span::styled(format!("  {opt}"), Style::new().fg(color)),
-                ]));
+                // 选项文本走 markdown 管线（行内代码样式化，不再显示反引号）
+                let mut first = true;
+                for l in markdown::render_markdown(opt, inner_w.saturating_sub(8).max(1)) {
+                    if l.spans.is_empty() {
+                        continue;
+                    }
+                    let mut spans = vec![
+                        Span::raw("  "),
+                        Span::styled(
+                            if first { format!("{mark}{letter} ") } else { "        ".to_owned() },
+                            Style::new().fg(color),
+                        ),
+                    ];
+                    spans.extend(l.spans);
+                    body.push(Line::from(spans));
+                    first = false;
+                }
             }
             body.push(Line::default());
         }
@@ -323,25 +335,31 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &mut App) {
             Style::new().fg(theme::MUTED),
         )));
     } else if q.q_type == QType::Choice {
-        // ⑤ 选项列表：字母蓝、文字浅灰、当前 ❯ 黄
+        // ⑤ 选项列表：字母蓝、文字浅灰、当前 ❯ 黄（行内代码样式化——`..x` 不再显示反引号）
         for (i, opt) in q.options.iter().enumerate() {
             let letter = (b'A' + i as u8) as char;
             let is_cursor = rs.selected_option.unwrap_or(0) == i;
             let mark = if is_cursor { "❯ " } else { "  " };
             let letter_style = Style::new().fg(if is_cursor { theme::USER } else { ACCENT });
-            let text_style = if is_cursor {
-                Style::new().fg(theme::FG)
-            } else {
-                Style::new().fg(theme::MUTED)
-            };
-            body.push(Line::from(vec![
-                Span::styled(
-                    format!("  {mark}"),
-                    Style::new().fg(if is_cursor { theme::USER } else { theme::MUTED }),
-                ),
-                Span::styled(format!("{letter}  "), letter_style),
-                Span::styled(opt.clone(), text_style),
-            ]));
+            let mut first = true;
+            for l in markdown::render_markdown(opt, inner_w.saturating_sub(8).max(1)) {
+                if l.spans.is_empty() {
+                    continue;
+                }
+                let mut spans = vec![
+                    Span::styled(
+                        format!("  {mark}"),
+                        Style::new().fg(if is_cursor { theme::USER } else { theme::MUTED }),
+                    ),
+                    Span::styled(
+                        if first { format!("{letter}  ") } else { "      ".to_owned() },
+                        letter_style,
+                    ),
+                ];
+                spans.extend(l.spans);
+                body.push(Line::from(spans));
+                first = false;
+            }
         }
         body.push(Line::default());
         body.push(Line::from(Span::styled(
