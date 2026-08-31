@@ -171,15 +171,37 @@ async fn log_usage(store: &Arc<storage::Store>, cfg: &ProviderConfig, usage: &Us
     }
 }
 
+/// 概念定义规则（导入抽取与概念刷新共用一份，防两处漂移）。
+const CONCEPT_RULES: &str = "\
+# 概念定义（严格遵守）\n\
+每个概念必须是：\n\
+- 具体、可学习、可考察的知识点——能据此出题、能判断掌握与否\n\
+- 笔记内容中实际覆盖的（禁止编造笔记里没有的概念）\n\
+- 名词或名词短语命名\n\n\
+禁止提取：\n\
+- 形容词/评价词：如「高效」「可靠」「好用」「优雅」\n\
+- 空泛的学科/主题名：如「Rust 语言」「编译器」「内存安全」\n\
+- 组织性/目录式标签：如「工程管理」「标准库」「可访问性管理」\n\
+- 包含多个知识点的章节标题（应拆成其中的知识点）\n\
+- 同义重复（所有权 / 所有权模型 → 只保留「所有权」）\n\n\
+正例：变量遮蔽、可变绑定、String 与 &str、所有权、借用、模式匹配、迭代器适配器\n\
+反例：高效、可靠、Rust 语言、所有权与结构化数据\n\n\
+数量指导：一篇笔记 5~12 个（按内容密度浮动，不为凑数硬塞）。";
+
+/// 全文输入上限（防病态大文档；正常笔记 5~20k 字符不受影响）。
+const EXTRACT_TEXT_LIMIT: usize = 20000;
+
 fn build_prompt(doc: &crate::parser::RawDoc, fixed_course: Option<&str>) -> String {
-    let preview: String = doc.text.chars().take(2000).collect();
+    // 全文输入（此前只取前 2000 字符，导致概念全是章节级粗粒度——2026-08-30 修复）
+    let preview: String = doc.text.chars().take(EXTRACT_TEXT_LIMIT).collect();
     let course_hint = fixed_course
         .map(|c| format!("（课程已指定为 {c}，course 字段填 {c}）"))
         .unwrap_or_default();
     format!(
-        "从以下笔记内容中提取结构化信息，输出 JSON：\n\
+        "从以下学习笔记中提取知识点级概念，输出 JSON：\n\
          {{\"title\": \"标题\", \"course\": {course} 或 null, \"summary\": \"一句话摘要\", \
          \"concepts\": [{{\"name\": \"概念名\"}}]}}\n\n\
+         {CONCEPT_RULES}\n\n\
          笔记标题: {title}\n{course_hint}\n\n笔记内容:\n{preview}",
         course = if fixed_course.is_some() {
             "课程名"
@@ -221,6 +243,101 @@ impl From<ExtractResponse> for ExtractResult {
     }
 }
 
+/// 概念刷新专用（/refresh-concepts）：从**已存储的笔记全文**重新抽取概念名。
+/// 与导入抽取共用概念定义规则与 D4 降级链；只返回概念名（title/course/summary 不动）。
+/// 返回 None = LLM 彻底失败（调用方跳过该篇，保留旧概念）。
+#[allow(clippy::too_many_arguments)]
+pub async fn extract_concepts(
+    provider: &OpenAiClient,
+    provider_cfg: &ProviderConfig,
+    store: Arc<storage::Store>,
+    accumulated_cost: &mut f64,
+    max_cost: f64,
+    note_title: &str,
+    text: &str,
+    cancel: &CancellationToken,
+) -> Option<Vec<String>> {
+    // R6：预算检查
+    let store_for_cost = Arc::clone(&store);
+    let recorded = tokio::task::spawn_blocking(move || store_for_cost.total_recorded_cost())
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .unwrap_or(0.0);
+    *accumulated_cost = recorded;
+    if *accumulated_cost >= max_cost {
+        tracing::warn!(max_cost, "已达预算上限，跳过概念刷新");
+        return None;
+    }
+
+    let bounded: String = text.chars().take(EXTRACT_TEXT_LIMIT).collect();
+    let prompt = format!(
+        "从以下学习笔记中提取知识点级概念，只输出 JSON：\n\
+         {{\"concepts\": [{{\"name\": \"概念名\"}}]}}\n\n\
+         {CONCEPT_RULES}\n\n\
+         笔记标题: {note_title}\n\n笔记内容:\n{bounded}",
+        note_title = note_title,
+        bounded = bounded,
+    );
+    let messages = [
+        Message::system(
+            "你是知识库助手。从笔记内容中提取知识点级概念。\
+             只输出 JSON，不要 markdown 代码块、不要多余文字。",
+        ),
+        Message::user(&prompt),
+    ];
+
+    let content = match agent_providers::with_cancel(provider.chat_json(&messages), cancel).await {
+        Some(Ok(resp)) => {
+            log_usage(&store, provider_cfg, &resp.usage).await;
+            *accumulated_cost += estimate_cost(provider_cfg, &resp.usage);
+            Some(resp.content)
+        }
+        Some(Err(e)) if e.is_json_mode_unsupported() => {
+            match agent_providers::with_cancel(provider.chat(&messages, &[]), cancel).await {
+                Some(Ok(resp)) => {
+                    log_usage(&store, provider_cfg, &resp.usage).await;
+                    *accumulated_cost += estimate_cost(provider_cfg, &resp.usage);
+                    Some(resp.content)
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    let content = content?;
+    if cancel.is_cancelled() {
+        return None;
+    }
+
+    // 只取 concepts 字段（ExtractResponse 其余字段全 default）
+    match parse_json(&content) {
+        Some(r) if !r.concepts.is_empty() => Some(r.concepts),
+        _ => {
+            // 重试一次
+            tracing::warn!("概念刷新解析失败，重试一次");
+            let retry_messages = [
+                Message::system(
+                    "只输出 JSON，不要 markdown 代码块、不要多余文字。上次输出不合法，请修正。",
+                ),
+                Message::user(&prompt),
+            ];
+            let retry = agent_providers::with_cancel(provider.chat(&retry_messages, &[]), cancel)
+                .await
+                .and_then(|r| r.ok());
+            if let Some(r) = &retry {
+                log_usage(&store, provider_cfg, &r.usage).await;
+                *accumulated_cost += estimate_cost(provider_cfg, &r.usage);
+            }
+            retry
+                .as_ref()
+                .and_then(|r| parse_json(&r.content))
+                .map(|r| r.concepts)
+                .filter(|c| !c.is_empty())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,4 +369,93 @@ mod tests {
     fn parse_garbage_returns_none() {
         assert!(parse_json("这不是JSON").is_none());
     }
+}
+
+/// 课程级概念刷新（/refresh-concepts 后端，2026-08-30）。
+/// 唯一输入 = DB 存储的笔记全文（canonical content，不依赖源文件）。
+/// 逐篇：unlink 旧关联 → LLM 重抽 → link 新概念；收尾清理「零关联零历史」概念
+/// （有 mastery 记录的绝不删除——学习历史不可丢）。
+/// 返回汇总消息（含 before/after 概念数对比），失败篇跳过并列入汇总。
+#[allow(clippy::too_many_arguments)]
+pub async fn refresh_course_concepts(
+    store: Arc<storage::Store>,
+    provider: Arc<OpenAiClient>,
+    provider_cfg: ProviderConfig,
+    course_id: i64,
+    max_cost: f64,
+    cancel: &CancellationToken,
+) -> Result<String, String> {
+    let before = store
+        .list_concept_names_by_course(course_id)
+        .map_err(|e| e.to_string())?;
+    let notes = store
+        .list_notes(Some(course_id), usize::MAX)
+        .map_err(|e| e.to_string())?;
+    if notes.is_empty() {
+        return Err("该课程还没有笔记".into());
+    }
+    let mut accumulated = store.total_recorded_cost().unwrap_or(0.0);
+    let mut refreshed = 0usize;
+    let mut total_concepts = 0usize;
+    let mut failed: Vec<String> = Vec::new();
+    for n in &notes {
+        if cancel.is_cancelled() {
+            return Err("已取消".into());
+        }
+        let note = match store.get_note(n.id) {
+            Ok(Some(note)) => note,
+            _ => {
+                failed.push(n.title.clone());
+                continue;
+            }
+        };
+        let Some(names) = extract_concepts(
+            &provider,
+            &provider_cfg,
+            Arc::clone(&store),
+            &mut accumulated,
+            max_cost,
+            &note.title,
+            &note.content,
+            cancel,
+        )
+        .await
+        else {
+            failed.push(note.title.clone());
+            continue;
+        };
+        store
+            .unlink_note_concepts(note.id)
+            .map_err(|e| e.to_string())?;
+        for name in &names {
+            let cid = store
+                .get_or_create_concept(name, Some(course_id))
+                .map_err(|e| e.to_string())?;
+            store
+                .link_note_concept(note.id, cid)
+                .map_err(|e| e.to_string())?;
+        }
+        refreshed += 1;
+        total_concepts += names.len();
+    }
+    let pruned = store
+        .prune_unlinked_concepts(course_id)
+        .map_err(|e| e.to_string())?;
+    let after = store
+        .list_concept_names_by_course(course_id)
+        .map_err(|e| e.to_string())?;
+    Ok(format!(
+        "概念刷新完成：{refreshed}/{} 篇，共 {total_concepts} 个概念{}\
+         概念数 {} → {}（清理废弃 {pruned} 个）\n\
+         新概念清单：{}",
+        notes.len(),
+        if failed.is_empty() {
+            String::new()
+        } else {
+            format!("（失败 {} 篇：{}）", failed.len(), failed.join("、"))
+        },
+        before.len(),
+        after.len(),
+        after.join("、"),
+    ))
 }

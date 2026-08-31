@@ -552,6 +552,14 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
             }
             AppEvent::ReviewReady(result) => app.on_review_ready(result),
             AppEvent::ReviewQuestionReady(result) => app.on_review_question_ready(result),
+            AppEvent::ConceptsRefreshed(result) => {
+                app.inflight = None;
+                app.request_cost_sync();
+                match result {
+                    Ok(msg) => app.push_entry(Entry::Info(msg)),
+                    Err(e) => app.push_entry(Entry::Error(format!("概念刷新失败: {e}"))),
+                }
+            }
             AppEvent::ReviewGraded(idx, result) => app.on_review_graded(idx, result),
             AppEvent::ReviewAdvice(text) => app.on_review_advice(text),
             AppEvent::ReviewFollowup(idx, question, result) => {

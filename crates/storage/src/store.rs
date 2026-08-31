@@ -544,6 +544,26 @@ impl Store {
         Ok(())
     }
 
+    /// 解除笔记的全部概念关联（概念刷新第一步）。
+    pub fn unlink_note_concepts(&self, note_id: i64) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute("DELETE FROM note_concepts WHERE note_id = ?1", [note_id])?;
+        Ok(n)
+    }
+
+    /// 清理课程内「零关联且零学习历史」的概念（概念刷新收尾）。
+    /// 有 mastery 记录的概念绝不删除——学习历史不可丢（孤儿保留，宁可脏不可丢）。
+    pub fn prune_unlinked_concepts(&self, course_id: i64) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "DELETE FROM concepts WHERE course_id = ?1 \
+             AND id NOT IN (SELECT concept_id FROM note_concepts) \
+             AND id NOT IN (SELECT concept_id FROM concept_mastery)",
+            [course_id],
+        )?;
+        Ok(n)
+    }
+
     /// 获取课程下所有笔记的 (note_id, title) 列表，按 id 排序。
     pub fn list_note_titles_by_course(&self, course_id: i64) -> Result<Vec<(i64, String)>> {
         let conn = self.conn.lock().unwrap();

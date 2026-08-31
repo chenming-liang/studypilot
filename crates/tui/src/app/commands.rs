@@ -136,6 +136,7 @@ impl App {
             "/notes" => self.handle_notes_command(),
             "/outline" => self.handle_outline_command(arg.trim()),
             "/search" => self.not_implemented("/search", "M7（检索能力经 agent 工具自动调度）"),
+            "/refresh-concepts" => self.handle_refresh_concepts(),
             "/review" => self.handle_review_command(arg.trim()),
             _ => {
                 self.push_entry(Entry::Error(format!(
@@ -143,6 +144,44 @@ impl App {
                 )));
             }
         }
+    }
+
+    /// /refresh-concepts —— 对当前分区课程的全部笔记重抽概念。
+    /// 唯一输入 = DB 存储全文（canonical content，不依赖源文件）；
+    /// 收尾清理「零关联零历史」概念，有学习记录的绝不删。
+    pub(crate) fn handle_refresh_concepts(&mut self) {
+        if self.is_inflight() || self.import_cancel.is_some() {
+            self.push_entry(Entry::Error("有任务进行中，请先完成或 Ctrl+C 中断".into()));
+            return;
+        }
+        let Some(course_id) = self.current_course_id() else {
+            self.push_entry(Entry::Error(
+                "概念刷新需要课程分区：先 /course <名> 切换".into(),
+            ));
+            return;
+        };
+        let cancel = CancellationToken::new();
+        self.inflight = Some(cancel.clone());
+        let store = Arc::clone(&self.store);
+        let provider = Arc::clone(&self.provider);
+        let provider_cfg = self.provider_cfg.clone();
+        let max_cost = self.max_cost;
+        let tx = self.tx.clone();
+        self.push_entry(Entry::Info(
+            "开始刷新概念（逐篇重抽，全文输入，Ctrl+C 可中断）…".into(),
+        ));
+        tokio::spawn(async move {
+            let result = importer::refresh_course_concepts(
+                store,
+                provider,
+                provider_cfg,
+                course_id,
+                max_cost,
+                &cancel,
+            )
+            .await;
+            let _ = tx.send(AppEvent::ConceptsRefreshed(result));
+        });
     }
 
     pub(crate) fn not_implemented(&mut self, cmd: &str, milestone: &str) {

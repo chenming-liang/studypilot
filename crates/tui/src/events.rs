@@ -61,6 +61,8 @@ pub enum AppEvent {
     ReviewReady(Result<review::ReviewState, String>),
     /// 复习逐题生成的后续题目回流（用户作答当前题时后台预取）
     ReviewQuestionReady(Result<review::ReviewQuestion, String>),
+    /// /refresh-concepts 完成：(汇总消息)——逐篇重抽概念 + 清理废弃概念
+    ConceptsRefreshed(Result<String, String>),
     /// 简答题批改完成：(题目索引, (score, missing, comment))
     ReviewGraded(usize, Result<(i64, Vec<String>, Option<String>), String>),
     /// 整轮复习结束后的 LLM 小结建议（已格式化文本，多行）
