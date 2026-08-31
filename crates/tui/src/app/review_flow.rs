@@ -71,14 +71,17 @@ impl App {
     }
 
     /// 反馈停留态按 Enter：推进到下一题或完成复习（Summary 卡回聊天流）。
+    /// 逐题生成：推进后若下一题尚未生成到位，进入等待态（workspace 渲染"出题中"），
+    /// 题目到达（ReviewQuestionReady）后自动显示。
     pub(crate) fn advance_review(&mut self) {
         let Some(rs) = &mut self.review else { return };
         rs.current += 1;
         rs.selected_option = None;
         rs.followups.clear();
-        if rs.current >= rs.questions.len() {
+        if rs.current >= rs.planned {
             self.finish_review();
         }
+        // current < planned 但 questions.len() == current：等待态，不 finish
     }
 
     /// 反馈停留态提交追问：打包题目上下文 + 追问历史 → LLM 回答（Esc 可中断）。
@@ -343,6 +346,10 @@ impl App {
     }
 
     pub(crate) fn exit_review(&mut self, msg: &str) {
+        // 取消在途的逐题生成（迟到事件由 on_review_question_ready 的 None 守卫丢弃）
+        if let Some(t) = self.review_gen.take() {
+            t.cancel();
+        }
         // 中途退出：若有进度，同样出部分摘要卡（finish_review_state 不依赖 self.review）
         if let Some(rs) = self.review.take()
             && !rs.results.is_empty()
@@ -360,12 +367,109 @@ impl App {
         self.request_cost_sync();
         match result {
             Ok(rs) => {
-                let count = rs.questions.len();
+                let planned = rs.planned;
                 self.review = Some(rs);
                 self.scroll_up = 0; // 进 workspace 跟随底部
-                self.push_entry(Entry::Info(format!("· Review started · {count} questions")));
+                self.push_entry(Entry::Info(format!(
+                    "· Review started · {planned} questions（逐题生成，答当前题时后台预取下一题）"
+                )));
+                // 首题已显示：立即预取第 2 题
+                self.maybe_spawn_next_question();
             }
             Err(e) => {
+                self.push_entry(Entry::Error(format!("出题失败: {e}")));
+            }
+        }
+    }
+
+    /// 预取下一题（守卫：未在生成中、未达计划数）。供首题显示后 / 每题到达后调用。
+    pub(crate) fn maybe_spawn_next_question(&mut self) {
+        let (index, planned, quiz_id, ctx, qtype, asked) = {
+            let Some(rs) = &self.review else { return };
+            use crate::review::QType;
+            if rs.next_pending || rs.questions.len() >= rs.planned {
+                return;
+            }
+            let done_choice = rs
+                .questions
+                .iter()
+                .filter(|q| q.q_type == QType::Choice)
+                .count();
+            let done_short = rs
+                .questions
+                .iter()
+                .filter(|q| q.q_type == QType::ShortAnswer)
+                .count();
+            let asked: Vec<review::AskedQuestion> = rs
+                .questions
+                .iter()
+                .map(|q| review::AskedQuestion {
+                    qtype: match q.q_type {
+                        QType::Choice => "choice",
+                        QType::ShortAnswer => "short_answer",
+                    },
+                    text: q.question.chars().take(60).collect(),
+                })
+                .collect();
+            (
+                rs.questions.len(),
+                rs.planned,
+                rs.quiz_id,
+                std::sync::Arc::clone(&rs.ctx),
+                review::pick_qtype(rs.planned, done_choice, done_short),
+                asked,
+            )
+        };
+        let cancel = tokio_util::sync::CancellationToken::new();
+        if let Some(rs) = &mut self.review {
+            rs.next_pending = true;
+        }
+        self.review_gen = Some(cancel.clone());
+        let store = Arc::clone(&self.store);
+        let provider = self.provider.clone();
+        let provider_cfg = self.provider_cfg.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(review::generate_review_question(
+            store,
+            provider,
+            provider_cfg,
+            ctx,
+            quiz_id,
+            index,
+            planned,
+            qtype,
+            asked,
+            cancel,
+            tx,
+        ));
+    }
+
+    /// 逐题生成回流：追加题目（当前等待态自动显示）；失败重试已耗尽则优雅收束。
+    pub(crate) fn on_review_question_ready(
+        &mut self,
+        result: Result<review::ReviewQuestion, String>,
+    ) {
+        self.review_gen = None;
+        self.request_cost_sync();
+        let Some(rs) = &mut self.review else {
+            return; // 已退出复习：迟到事件丢弃
+        };
+        match result {
+            Ok(q) => {
+                rs.questions.push(q);
+                rs.next_pending = false;
+                // 若当前正指向等待槽位，workspace 会自动渲染新题
+                self.maybe_spawn_next_question(); // 继续预取
+            }
+            Err(e) => {
+                // 生成重试耗尽：已答的出部分摘要，不硬断
+                self.review_gen = None;
+                let rs = self.review.take();
+                if let Some(rs) = rs
+                    && !rs.results.is_empty()
+                {
+                    self.finish_review_state(rs);
+                }
                 self.push_entry(Entry::Error(format!("出题失败: {e}")));
             }
         }

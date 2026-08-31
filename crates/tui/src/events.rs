@@ -57,8 +57,10 @@ pub enum AppEvent {
     BudgetReset(Result<(), String>),
     /// /outline 完成：(LLM 返回的 JSON 文本, 课程名, 是否导出, 笔记标题列表)
     OutlineGenerated(Option<String>, String, bool, Vec<(i64, String)>),
-    /// /review 出题完成
+    /// /review 出题完成（首题；后续题走 ReviewQuestionReady）
     ReviewReady(Result<review::ReviewState, String>),
+    /// 复习逐题生成的后续题目回流（用户作答当前题时后台预取）
+    ReviewQuestionReady(Result<review::ReviewQuestion, String>),
     /// 简答题批改完成：(题目索引, (score, missing, comment))
     ReviewGraded(usize, Result<(i64, Vec<String>, Option<String>), String>),
     /// 整轮复习结束后的 LLM 小结建议（已格式化文本，多行）
