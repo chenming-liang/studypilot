@@ -196,7 +196,7 @@ pub async fn start_review(
             match &scope_owned {
                 Some(text) => {
                     // 用户自由文本范围：文本当检索 query，命中率远高于课程名
-                    let hits = store_clone.search_chunks(text, course_id, 12)?;
+                    let hits = store_clone.search_chunks(text, course_id, 8)?;
                     let chunks = if hits.is_empty() {
                         store_clone
                             .chunks_by_course(course_id, 24)?
@@ -287,7 +287,9 @@ pub async fn start_review(
         .iter()
         .enumerate()
         .map(|(i, (concept, h))| {
-            let preview: String = h.content.chars().take(700).collect();
+            // 400 字预览（原 700）：grounding 保留定义/示例核心，砍尾部冗余
+            // （问题12 结构性成本：素材占出题 prompt 的 ~68%，逐题重复发送）
+            let preview: String = h.content.chars().take(400).collect();
             let tag = concept
                 .as_deref()
                 .map(|c| format!("（概念：{c}）"))
@@ -610,7 +612,7 @@ async fn insert_question_db(
 /// 题面相似度：normalize 后字符 bigram Jaccard ≥ 0.75 视为【接近字面重复】。
 /// 只做最后的保守 lexical guard——校准：少量词语替换的换皮题 ≥0.75，
 /// 不同考点共用模板的题 <0.75（模板词占比被真实内容稀释）。
-fn too_similar(a: &str, b: &str) -> bool {
+pub fn too_similar(a: &str, b: &str) -> bool {
     let norm = |t: &str| {
         let c: Vec<char> = normalize_text(t)
             .chars()
@@ -794,6 +796,95 @@ pub async fn generate_review_question(
         "第 {} 题生成失败",
         index + 1
     ))));
+}
+
+/// 真实 LLM 回归（问题 13/18 验收）：同概念连续出 3 题，验证不再失败且互不重复。
+/// 运行：cargo test -p tui live_regression_same_concept -- --ignored --nocapture
+/// （需 DEEPSEEK_API_KEY 环境变量）
+#[tokio::test]
+#[ignore = "真调 LLM，花钱"]
+async fn live_regression_same_concept() {
+    let store = Arc::new(storage::Store::open_in_memory().unwrap());
+    let ctx = Arc::new(QuizContext {
+        course_id: None,
+        course_name: "rust".into(),
+        directive: "本次复习覆盖概念：「特型约束」。请只在该概念范围内出题，每题绑定该概念。".into(),
+        material: "特型约束（trait bound）是泛型函数/类型上对类型参数的能力限制，如 `fn f<T: Display>(x: T)` 要求 T 可显示。约束让编译器在编译期检查调用合法性。多个约束用 + 连接。where 子句可写更复杂的约束。".into(),
+        concept_list: "特型约束(0/0)、特型(0/0)、特型对象(0/0)".into(),
+    });
+    let provider_cfg = ProviderConfig {
+        name: "deepseek".into(),
+        endpoint: std::env::var("DEEPSEEK_ENDPOINT").unwrap_or_else(|_| "https://api.deepseek.com".into()),
+        api_key: std::env::var("DEEPSEEK_API_KEY").ok(),
+        api_key_env: Some("DEEPSEEK_API_KEY".into()),
+        model: std::env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| "deepseek-reasoner".into()),
+        price_prompt: 4.0,
+        price_prompt_cached: 1.0,
+        price_completion: 16.0,
+        context_length: 65536,
+        thinking: false,
+    };
+    let provider = Arc::new(OpenAiClient::new(provider_cfg.clone()).unwrap());
+    let quiz_id = store.create_quiz(None, "live-regression").unwrap();
+    let cancel = CancellationToken::new();
+
+    let mut same_round: Vec<QuestionContext> = Vec::new();
+    let mut generated: Vec<ReviewQuestion> = Vec::new();
+    for i in 0..3 {
+        let qtype = if i % 2 == 0 { QType::Choice } else { QType::ShortAnswer };
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        generate_review_question(
+            Arc::clone(&store),
+            Arc::clone(&provider),
+            provider_cfg.clone(),
+            Arc::clone(&ctx),
+            quiz_id,
+            i,
+            3,
+            qtype,
+            same_round.clone(),
+            cancel.clone(),
+            tx,
+        )
+        .await;
+        match rx.recv().await {
+            Some(AppEvent::ReviewQuestionReady(Ok((q, _)))) => {
+                println!(
+                    "Q{} [{:?}] aspect={:?}: {}",
+                    i + 1,
+                    q.q_type,
+                    q.aspect,
+                    q.question.replace('\n', " ").chars().take(80).collect::<String>()
+                );
+                same_round.push(QuestionContext {
+                    qtype: "回归",
+                    concept: q.concept_name.clone(),
+                    text: q.question.clone(),
+                    grading: None,
+                    aspect: q.aspect.clone(),
+                });
+                generated.push(q);
+            }
+            Some(AppEvent::ReviewQuestionReady(Err(e))) => {
+                panic!("出题失败（回归不通过）: {e}")
+            }
+            other => panic!("非预期事件: {other:?}"),
+        }
+    }
+    // 两两不重复（Jaccard guard 同款阈值语义）
+    for i in 0..generated.len() {
+        for j in (i + 1)..generated.len() {
+            assert!(
+                !too_similar(&generated[i].question, &generated[j].question),
+                "Q{} 与 Q{} 判为字面重复——回归不通过",
+                i + 1,
+                j + 1
+            );
+        }
+    }
+    // 生成即入库
+    assert!(generated.iter().all(|q| q.db_id > 0));
+    println!("══ 回归通过：3 题成功、互不重复、evidence 生效 ══");
 }
 
 /// 简答题批改：用户答案 + 笔记原文 + key_points → LLM → score/missing。
@@ -1242,5 +1333,70 @@ mod diversity_tests {
         assert!(text.contains("不是禁止重复的主题"));
         assert!(text.contains("换皮改写"));
         assert!(text.contains("aspect"));
+    }
+}
+
+#[cfg(test)]
+mod material_measure_tests {
+    use super::*;
+
+    /// 测量典型出题 prompt 的构成（问题12后续：素材瘦身前置测量）。
+    /// 不调 LLM——build_question_messages 是纯函数。
+    #[test]
+    fn measure_question_prompt_composition() {
+        // 典型随机范围场景（瘦身前：4 概念 × 3 chunks × 700 字 = 8400 字）
+        // 瘦身后：预览 400 字（chunk 数不变——grounding 优先）
+        let chunks: Vec<String> = (0..12)
+            .map(|i| format!("素材片段{i}：{}", "知".repeat(400 / 2 + i % 3)).repeat(1))
+            .collect();
+        let material = chunks
+            .iter()
+            .enumerate()
+            .map(|(i, c)| format!("[{i}] 《笔记》 > 章节{i}\n{c}"))
+            .collect::<Vec<_>>()
+            .join("\n---\n");
+        let ctx = QuizContext {
+            course_id: Some(1),
+            course_name: "rust".into(),
+            directive: "覆盖概念：A、B、C、D".into(),
+            material: material.clone(),
+            concept_list: "A(0/0)、B(1/2)、C(0/0)、D(3/3)".into(),
+        };
+        // 第 3 题（同轮已有 2 题 evidence）
+        let same_round: Vec<QuestionContext> = (0..2)
+            .map(|i| QuestionContext {
+                qtype: "choice",
+                concept: Some(format!("概念{i}")),
+                text: format!("这是第{i}题的题干，包含一些内容描述，用于测量 evidence 占用。"),
+                grading: Some("答对（100/100）".into()),
+                aspect: Some("definition".into()),
+            })
+            .collect();
+        let cross: Vec<QuestionContext> = (0..8)
+            .map(|i| QuestionContext {
+                qtype: "此前轮次",
+                concept: Some(format!("旧概念{i}")),
+                text: format!("历史题面{i}，{}。", "内".repeat(60)),
+                grading: None,
+                aspect: None,
+            })
+            .collect();
+        let messages = build_question_messages(&ctx, 2, 5, &QType::Choice, &same_round, &cross, false);
+        let prompt = messages[1].content.as_ref().unwrap();
+        let total = prompt.chars().count();
+        let mat = material.chars().count();
+        let ev = {
+            let i = prompt.find("# 已考察内容").unwrap();
+            let j = prompt.find("# 已覆盖").unwrap();
+            prompt[i..j].chars().count()
+        };
+        println!("prompt 总字符: {total}");
+        println!("  素材区: {mat} 字符（{:.0}%）", mat * 100 / total);
+        println!("  evidence 区: {ev} 字符（{:.0}%）", ev * 100 / total);
+        // 瘦身前同场景 ≈ 9000 字符 prompt（素材 8400）——预期省 ~40%
+        // deepseek 中文 ≈ 0.6 token/字（1 token ≈ 1.6 中文字符）
+        println!("  估算 tokens: {:.0}", total as f64 * 0.6);
+        // 断言：素材占 prompt 的绝对大头（瘦身的靶子）
+        assert!(mat * 100 / total > 50, "素材应占 >50%（实测 {:.0}%）", mat * 100 / total);
     }
 }
