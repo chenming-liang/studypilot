@@ -544,6 +544,7 @@ impl App {
                 self.course = name.clone();
                 self.sync_session_course();
                 self.push_entry(Entry::Info(format!("已切换到课程: {name}")));
+                self.spawn_course_summary(name);
             }
             CourseAction::Create(name) => self.create_course_flow(name),
             CourseAction::Delete(name) => {
@@ -571,6 +572,7 @@ impl App {
                         self.course = name.clone();
                         self.sync_session_course();
                         self.push_entry(Entry::Info(format!("已切换到课程: {name}")));
+                        self.spawn_course_summary(name);
                     }
                     None => {
                         self.push_entry(Entry::Error(format!("课程 #{id} 不存在（可能已删除）")))
@@ -640,15 +642,94 @@ impl App {
         match outcome {
             Ok((msg, list, switch_to)) => {
                 self.courses = list;
+                let entered = switch_to.clone();
                 if let Some(c) = switch_to {
                     self.course = c;
                 }
                 self.request_courses_refresh();
                 self.push_entry(Entry::Info(msg));
                 self.sync_session_course();
+                // 进入/创建课程后的上下文反馈卡（delete 回落 all 不算）
+                if let Some(c) = entered.as_deref()
+                    && c != "all"
+                {
+                    self.spawn_course_summary(c.to_owned());
+                }
             }
             Err(e) => self.push_entry(Entry::Error(format!("课程操作失败: {e}"))),
         }
+    }
+
+    /// 课程摘要卡：异步拉取现有统计/会话数据（D2：DB 读进 blocking 线程池），
+    /// 完成后经事件通道回流为 `Entry::Markdown` 卡片。
+    /// 只在 /course 切换与创建成功后触发；"all" 与普通聊天不触发。
+    pub(crate) fn spawn_course_summary(&mut self, course_name: String) {
+        if course_name == "all" {
+            return;
+        }
+        let Some(course_id) = self
+            .courses
+            .iter()
+            .find(|(_, n)| *n == course_name.as_str())
+            .map(|(id, _)| *id)
+        else {
+            return;
+        };
+        let store = Arc::clone(&self.store);
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let data = spawn_blocking(
+                move || -> Result<(usize, usize, usize, Option<String>), String> {
+                    let (notes, concepts) =
+                        store.course_stats(course_id).map_err(|e| e.to_string())?;
+                    let mastery = store
+                        .list_concepts_with_mastery(Some(course_id))
+                        .map_err(|e| e.to_string())?;
+                    // 需巩固 = 有作答且累计正确率 <70%（与 ReviewStatus::from_counts 同口径）
+                    let weak = mastery
+                        .iter()
+                        .filter(|c| c.attempts > 0 && c.correct * 100 < c.attempts * 70)
+                        .count();
+                    let last_session = store
+                        .list_sessions()
+                        .map_err(|e| e.to_string())?
+                        .into_iter()
+                        .find(|s| s.course_id == Some(course_id))
+                        .and_then(|s| s.title);
+                    Ok((notes, concepts, weak, last_session))
+                },
+            )
+            .await;
+            // 摘要失败静默（主操作反馈已在上方给出，不打扰用户）
+            let Ok(Ok((notes, concepts, weak, last_session))) = data else {
+                return;
+            };
+            let _ = tx.send(AppEvent::CourseSummary {
+                course_name,
+                notes,
+                concepts,
+                weak,
+                last_session,
+            });
+        });
+    }
+
+    /// 课程摘要卡渲染（进入/创建课程后的上下文反馈）。
+    pub(crate) fn on_course_summary(
+        &mut self,
+        course_name: String,
+        notes: usize,
+        concepts: usize,
+        weak: usize,
+        last_session: Option<String>,
+    ) {
+        self.push_entry(Entry::Markdown(crate::app::cards::course_summary(
+            &course_name,
+            notes,
+            concepts,
+            weak,
+            last_session.as_deref(),
+        )));
     }
 }
 
@@ -797,5 +878,288 @@ mod overlay_backup_tests {
         app.input = "保留".into();
         app.restore_input_backup();
         assert_eq!(app.input, "保留");
+    }
+}
+
+#[cfg(test)]
+mod onboarding_tests {
+    use super::*;
+    use crate::app::AppEvent;
+    use crate::app::cards;
+
+    /// 建无课程的空 App（fresh 状态：store 也空）。
+    fn empty_app() -> App {
+        let cfg = agent_providers::ProviderConfig {
+            name: "test".into(),
+            endpoint: "http://localhost".into(),
+            api_key: Some("k".into()),
+            api_key_env: None,
+            model: "m".into(),
+            price_prompt: 0.0,
+            price_completion: 0.0,
+            price_prompt_cached: 0.0,
+            context_length: 1000,
+            thinking: false,
+        };
+        let store = Arc::new(Store::open_in_memory().unwrap());
+        let client = Arc::new(OpenAiClient::new(cfg.clone()).unwrap());
+        App::new(client, store, cfg.clone(), vec![cfg], 5.0, Vec::new())
+    }
+
+    /// 建两门课的 App（老用户态）。
+    fn app_with_courses() -> App {
+        super::course_delete_tests::test_app()
+    }
+
+    /// 计数 Markdown 卡片中含 needle 的条数（welcome/summary/empty 都是 Entry::Markdown）。
+    fn count_md_containing(app: &App, needle: &str) -> usize {
+        app.entries
+            .iter()
+            .filter(|e| matches!(e, Entry::Markdown(m) if m.contains(needle)))
+            .count()
+    }
+
+    /// 排空事件：处理 CourseManaged（列表回填）与 CourseSummary（摘要卡）。
+    fn drain(app: &mut App) {
+        while let Ok(ev) = app.rx.try_recv() {
+            match ev {
+                AppEvent::CourseManaged(o) => app.on_course_managed(o),
+                AppEvent::CourseSummary {
+                    course_name,
+                    notes,
+                    concepts,
+                    weak,
+                    last_session,
+                } => app.on_course_summary(course_name, notes, concepts, weak, last_session),
+                _ => {}
+            }
+        }
+    }
+
+    /// 异步任务（spawn_blocking 读库）跑完需多轮让步。
+    async fn settle(app: &mut App) {
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            drain(app);
+        }
+    }
+
+    // ── 场景 1/2/10：Welcome 只在 0 courses 时出现 ──
+
+    #[test]
+    fn welcome_shown_only_when_no_courses() {
+        // 空库：Welcome 出现
+        let mut fresh = empty_app();
+        fresh.push_welcome_if_fresh();
+        assert_eq!(
+            count_md_containing(&fresh, "# StudyPilot"),
+            1,
+            "空库应显示 Welcome"
+        );
+
+        // 已有课程（含重启场景）：不重新显示 Welcome
+        let mut existing = app_with_courses();
+        existing.push_welcome_if_fresh();
+        assert_eq!(
+            count_md_containing(&existing, "# StudyPilot"),
+            0,
+            "老用户/重启不应显示 Welcome"
+        );
+    }
+
+    // ── 场景 3：创建第一门课程 → Welcome 让位，Course Summary 出现 ──
+
+    #[tokio::test]
+    async fn create_first_course_pushes_summary() {
+        let mut app = empty_app();
+        // 先确认是空库状态
+        app.push_welcome_if_fresh();
+        assert_eq!(count_md_containing(&app, "# StudyPilot"), 1);
+
+        app.handle_course_command("-new rust");
+        settle(&mut app).await;
+        assert!(app.courses.iter().any(|(_, n)| n == "rust"), "课程应已创建");
+        // 进入/创建课程反馈卡（0 材料态）
+        assert_eq!(
+            count_md_containing(&app, "# rust"),
+            1,
+            "创建课程后应出现 Course Summary"
+        );
+        assert_eq!(
+            count_md_containing(&app, "No materials yet."),
+            1,
+            "新课程应为 0 材料引导"
+        );
+    }
+
+    // ── 场景 4/5：切换只弹一次；普通命令不弹 ──
+
+    #[tokio::test]
+    async fn switch_course_pushes_summary_once() {
+        let mut app = app_with_courses();
+        app.course = "rust".into();
+        app.handle_course_command("csapp");
+        settle(&mut app).await;
+        assert_eq!(app.course, "csapp");
+        assert_eq!(
+            count_md_containing(&app, "# csapp"),
+            1,
+            "切换课程只应弹一次摘要卡"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_like_commands_do_not_push_summary() {
+        let mut app = app_with_courses();
+        app.course = "rust".into();
+        // /review 无参走向导：打开的是向导，不是课程上下文反馈
+        app.handle_review_command("");
+        settle(&mut app).await;
+        assert_eq!(
+            count_md_containing(&app, "need reinforcement"),
+            0,
+            "普通命令不应触发 Course Summary"
+        );
+        assert_eq!(
+            count_md_containing(&app, "No materials yet."),
+            0,
+            "普通命令不应触发 Course Summary"
+        );
+    }
+
+    // ── 场景 6/7：空课程 /review /outline → 引导卡，不露内部错误 ──
+
+    #[tokio::test]
+    async fn empty_course_review_shows_guidance() {
+        let mut app = app_with_courses();
+        // 引擎在空课程时上报的原始文案
+        app.on_review_ready(Err("该课程还没有笔记，先 /import 导入资料".into()));
+        assert_eq!(
+            count_md_containing(&app, "# Nothing to review yet"),
+            1,
+            "空课程 /review 应显示引导卡"
+        );
+        assert!(
+            !app.entries.iter().any(|e| matches!(e, Entry::Error(_))),
+            "不应出现内部错误条目"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_course_outline_shows_guidance() {
+        let mut app = app_with_courses();
+        app.on_outline_ready(Err(
+            "复习地图生成失败: 该课程还没有概念：先 /import 导入资料".into(),
+        ));
+        assert_eq!(
+            count_md_containing(&app, "# Nothing to outline yet"),
+            1,
+            "空课程 /outline 应显示引导卡"
+        );
+        assert!(
+            !app.entries.iter().any(|e| matches!(e, Entry::Error(_))),
+            "不应出现内部错误条目"
+        );
+    }
+
+    #[tokio::test]
+    async fn real_error_still_shown_as_error() {
+        let mut app = app_with_courses();
+        app.on_review_ready(Err("出题失败: 服务端 500".into()));
+        assert!(
+            app.entries
+                .iter()
+                .any(|e| matches!(e, Entry::Error(m) if m.contains("出题失败"))),
+            "真实错误仍走 Error 条目"
+        );
+    }
+
+    // ── 场景 8/9：摘要卡反映真实库状态；无历史不造假 ──
+
+    #[tokio::test]
+    async fn summary_reflects_real_counts() {
+        let mut app = app_with_courses();
+        // rust 课程(id=1)：2 篇笔记 + 2 概念（1 弱）+ 最近会话
+        let store = app.store.clone();
+        let note_ids: Vec<i64> = (0..2)
+            .map(|i| {
+                let out = store
+                    .insert_note(storage::NewNote {
+                        course_id: Some(1),
+                        title: &format!("note{i}"),
+                        source_path: None,
+                        content: &format!("content-{i} unique 内容"),
+                        fts_content: Some(&format!("content-{i} 分词")),
+                    })
+                    .unwrap();
+                match out {
+                    storage::InsertOutcome::Created(n) => n.id,
+                    _ => panic!("应创建成功"),
+                }
+            })
+            .collect();
+        let mastered = store.get_or_create_concept("mastered", Some(1)).unwrap();
+        let weak = store.get_or_create_concept("weak", Some(1)).unwrap();
+        for &nid in &note_ids {
+            store.link_note_concept(nid, mastered).unwrap();
+            store.link_note_concept(nid, weak).unwrap();
+        }
+        store.update_concept_mastery(mastered, true).unwrap();
+        store.update_concept_mastery(mastered, true).unwrap();
+        store.update_concept_mastery(mastered, true).unwrap();
+        store.update_concept_mastery(weak, false).unwrap();
+        store
+            .create_session(Some("Ownership & Borrowing"), Some(1))
+            .unwrap();
+
+        app.course = "rust".into();
+        app.spawn_course_summary("rust".into());
+        settle(&mut app).await;
+
+        let card: Vec<&Entry> = app
+            .entries
+            .iter()
+            .filter(|e| matches!(e, Entry::Markdown(m) if m.contains("# rust")))
+            .collect();
+        assert_eq!(card.len(), 1);
+        let Entry::Markdown(md) = card[0] else {
+            unreachable!()
+        };
+        assert!(md.contains("2 notes · 2 concepts"), "真实计数不符: {md}");
+        assert!(
+            md.contains("△ 1 need reinforcement"),
+            "弱概念计数不符: {md}"
+        );
+        assert!(
+            md.contains("Ownership & Borrowing"),
+            "最近会话应显示真实标题: {md}"
+        );
+    }
+
+    #[test]
+    fn summary_without_session_omits_last_session() {
+        let md = cards::course_summary("Rust", 5, 65, 3, None);
+        assert!(md.contains("5 notes · 65 concepts · △ 3 need reinforcement"));
+        assert!(!md.contains("Last session"), "无历史会话不得造假: {md}");
+        assert!(md.contains("`/review-map` · `/outline` · `/import`"));
+
+        // 空材料态
+        let empty = cards::course_summary("Rust", 0, 0, 0, None);
+        assert!(empty.contains("0 notes · 0 concepts"));
+        assert!(empty.contains("No materials yet."));
+    }
+
+    #[test]
+    fn welcome_and_empty_cards_are_concise() {
+        // 视觉一致性：三张卡都是 Markdown，且命令全部走 inline code
+        for md in [
+            cards::welcome_guide(),
+            cards::empty_review(),
+            cards::empty_outline(),
+        ] {
+            assert!(md.starts_with("# "), "卡片应以标题开头");
+            assert!(md.contains("`/"), "命令必须 inline code");
+        }
     }
 }

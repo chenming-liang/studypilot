@@ -14,6 +14,7 @@ use crate::review;
 
 use crate::ui;
 mod browser_flow;
+mod cards;
 mod chat;
 mod commands;
 mod import_flow;
@@ -439,6 +440,15 @@ impl App {
         self.scroll_up = 0;
     }
 
+    /// 空库首启：course 数 == 0 时 push Welcome Guide 卡片。
+    /// 课程数本身就是"尚未开始使用"的自然状态——无 first_run 旗标。
+    /// 已有课程的老用户升级/重启时 courses 非空 → 不会重复显示。
+    pub(crate) fn push_welcome_if_fresh(&mut self) {
+        if self.courses.is_empty() {
+            self.push_entry(Entry::Markdown(cards::welcome_guide()));
+        }
+    }
+
     /// Ctrl+C / Esc：导入中→中断导入；请求中→中断请求；空闲→退出。
     pub(crate) fn interrupt_or_quit(&mut self) {
         if let Some(token) = &self.import_cancel {
@@ -580,6 +590,13 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
             AppEvent::ReviewFollowup(idx, question, result, citations) => {
                 app.on_review_followup(idx, question, result, citations)
             }
+            AppEvent::CourseSummary {
+                course_name,
+                notes,
+                concepts,
+                weak,
+                last_session,
+            } => app.on_course_summary(course_name, notes, concepts, weak, last_session),
         }
     }
     Ok(())

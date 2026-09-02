@@ -486,7 +486,11 @@ impl App {
                 self.maybe_spawn_next_question();
             }
             Err(e) => {
-                self.push_entry(Entry::Error(format!("出题失败: {e}")));
+                if e.contains(crate::app::cards::EMPTY_COURSE_MARKER) {
+                    self.push_entry(Entry::Markdown(crate::app::cards::empty_review()));
+                } else {
+                    self.push_entry(Entry::Error(format!("出题失败: {e}")));
+                }
             }
         }
     }

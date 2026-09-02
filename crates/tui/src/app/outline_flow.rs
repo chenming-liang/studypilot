@@ -249,7 +249,13 @@ impl App {
                 }
             }
             Err(e) => {
-                self.push_entry(Entry::Error(format!("复习地图生成失败: {e}")));
+                if e.contains(crate::app::cards::EMPTY_COURSE_MARKER)
+                    || e.contains(crate::app::cards::NO_CONCEPT_MARKER)
+                {
+                    self.push_entry(Entry::Markdown(crate::app::cards::empty_outline()));
+                } else {
+                    self.push_entry(Entry::Error(format!("复习地图生成失败: {e}")));
+                }
             }
         }
     }

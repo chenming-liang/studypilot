@@ -34,6 +34,14 @@ pub enum AppEvent {
     Agent(AgentEvent),
     /// /course 管理操作（新建/删除）完成
     CourseManaged(CourseOpOutcome),
+    /// /course 切换/创建成功后的课程摘要卡数据（全部来自现有统计/会话查询）
+    CourseSummary {
+        course_name: String,
+        notes: usize,
+        concepts: usize,
+        weak: usize,
+        last_session: Option<String>,
+    },
     /// 新会话已创建（含首条待落库消息的会话）
     SessionReady(i64),
     /// 侧栏会话列表刷新完成
