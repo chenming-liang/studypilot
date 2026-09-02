@@ -16,7 +16,7 @@ pub(crate) const NO_CONCEPT_MARKER: &str = "还没有概念";
 /// 空库首启欢迎卡。
 pub(crate) fn welcome_guide() -> String {
     [
-        "# StudyPilot",
+        "# Welcome to StudyPilot",
         "",
         "Learn from your own materials.",
         "",
@@ -26,7 +26,7 @@ pub(crate) fn welcome_guide() -> String {
         "",
         "**2. Import your materials** — `/import --dir <path>`",
         "",
-        "**3. Start learning** — ask questions about your materials",
+        "**3. Ask questions** about your materials",
         "",
         "**4. Review what you've learned** — `/review` · `/review-map`",
         "",
@@ -35,10 +35,14 @@ pub(crate) fn welcome_guide() -> String {
     .join("\n")
 }
 
-/// 进入/创建课程后的摘要卡。
+/// 进入/创建课程后的上下文卡（三态自适应，反映真实库状态）。
+///
+/// - 0 材料：`No materials yet` + 导入引导
+/// - 有材料但无学习 session：`Your course is ready` + Get started 动作行
+/// - 有最近 session：`**Continue:** {标题}` + 下一步命令（突出继续，非 KPI）
 ///
 /// `weak` = 需巩固概念数（有作答且累计正确率 <70%）。
-/// `last_session` 为 None 时不渲染 "Last session" 行（不造假数据）。
+/// `last_session` 为 None 时不渲染 Continue 行（不造假数据）。
 pub(crate) fn course_summary(
     course: &str,
     notes: usize,
@@ -48,21 +52,32 @@ pub(crate) fn course_summary(
 ) -> String {
     let mut lines = vec![format!("# {course}"), String::new()];
     if notes == 0 && concepts == 0 {
+        // 0 材料态
         lines.push("0 notes · 0 concepts".into());
         lines.push(String::new());
         lines.push("No materials yet.".into());
         lines.push(String::new());
         lines.push("`/import --dir <path>` to add your first material.".into());
     } else {
+        // 统计只是上下文，不放大成 KPI
         lines.push(format!(
             "{notes} notes · {concepts} concepts · △ {weak} need reinforcement"
         ));
-        if let Some(title) = last_session {
-            lines.push(String::new());
-            lines.push(format!("**Last session:** {title}"));
-        }
         lines.push(String::new());
-        lines.push("`/review-map` · `/outline` · `/import`".into());
+        if let Some(title) = last_session {
+            // 已有学习历史 → 突出"继续"
+            lines.push(format!("**Continue:** {title}"));
+            lines.push(String::new());
+            lines.push("`/review` · `/review-map` · `/outline` · `/import`".into());
+        } else {
+            // 有材料但尚无 session → 空态引导
+            lines.push("Your course is ready.".into());
+            lines.push(String::new());
+            lines.push("**Ask** about your materials".into());
+            lines.push("`/review` to practice".into());
+            lines.push("`/outline` to view your knowledge map".into());
+            lines.push("`/import` to add more materials".into());
+        }
     }
     lines.join("\n")
 }
@@ -143,16 +158,49 @@ mod tests {
             "Rust",
             "5 notes",
             "△ 3 need reinforcement",
-            "Last session",
+            "Continue",
             "Ownership & Borrowing",
             "/review-map",
         ] {
             assert!(c.contains(needle), "summary 渲染丢内容: {needle}\n{c}");
         }
 
+        // 有材料但无 session：Get started 引导态（渲染后 inline code 剥掉反引号）
+        let ready = plain(&course_summary("Rust", 5, 65, 0, None));
+        for needle in ["Your course is ready", "/review to practice", "/import"] {
+            assert!(
+                ready.contains(needle),
+                "ready 渲染丢内容: {needle}\n{ready}"
+            );
+        }
+
         for md in [empty_review(), empty_outline()] {
             let p = plain(&md);
             assert!(p.contains("<path>"), "empty 渲染丢内容:\n{p}");
+        }
+    }
+
+    /// 首屏视觉检查（人工 + 保真断言）：实际运行所见的渲染内容。
+    #[test]
+    #[ignore = "cargo test -p tui preview_screen -- --ignored --nocapture"]
+    fn preview_screen() {
+        for (label, md) in [
+            ("WELCOME · first launch (0 courses)", welcome_guide()),
+            (
+                "CONTEXT CARD · restart into existing course",
+                course_summary("rust", 5, 65, 3, Some("Ownership & Borrowing")),
+            ),
+            (
+                "CONTEXT CARD · ready, no session yet",
+                course_summary("rust", 5, 65, 0, None),
+            ),
+            ("EMPTY STATE · /review on empty course", empty_review()),
+        ] {
+            println!("\n── {label} ──");
+            for l in render_markdown(&md, 44) {
+                let s: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+                println!("  {s}");
+            }
         }
     }
 }

@@ -544,6 +544,7 @@ impl App {
                 self.course = name.clone();
                 self.sync_session_course();
                 self.push_entry(Entry::Info(format!("已切换到课程: {name}")));
+                persist_last_course(&name);
                 self.spawn_course_summary(name);
             }
             CourseAction::Create(name) => self.create_course_flow(name),
@@ -572,6 +573,7 @@ impl App {
                         self.course = name.clone();
                         self.sync_session_course();
                         self.push_entry(Entry::Info(format!("已切换到课程: {name}")));
+                        persist_last_course(&name);
                         self.spawn_course_summary(name);
                     }
                     None => {
@@ -653,6 +655,7 @@ impl App {
                 if let Some(c) = entered.as_deref()
                     && c != "all"
                 {
+                    persist_last_course(c);
                     self.spawn_course_summary(c.to_owned());
                 }
             }
@@ -731,6 +734,16 @@ impl App {
             last_session.as_deref(),
         )));
     }
+}
+
+/// 持久化上次所在课程（data/last_course.json，仿 budget.json；重启恢复用）。
+pub(crate) fn persist_last_course(name: &str) {
+    let dir = std::path::Path::new("data");
+    let _ = std::fs::create_dir_all(dir);
+    let _ = std::fs::write(
+        dir.join("last_course.json"),
+        format!(r#"{{"course": {name:?}}}"#),
+    );
 }
 
 #[cfg(test)]
@@ -947,22 +960,23 @@ mod onboarding_tests {
 
     // ── 场景 1/2/10：Welcome 只在 0 courses 时出现 ──
 
-    #[test]
-    fn welcome_shown_only_when_no_courses() {
+    #[tokio::test]
+    async fn welcome_shown_only_when_no_courses() {
         // 空库：Welcome 出现
         let mut fresh = empty_app();
-        fresh.push_welcome_if_fresh();
+        fresh.push_startup_cards();
         assert_eq!(
-            count_md_containing(&fresh, "# StudyPilot"),
+            count_md_containing(&fresh, "# Welcome to StudyPilot"),
             1,
             "空库应显示 Welcome"
         );
 
         // 已有课程（含重启场景）：不重新显示 Welcome
         let mut existing = app_with_courses();
-        existing.push_welcome_if_fresh();
+        existing.push_startup_cards();
+        settle(&mut existing).await;
         assert_eq!(
-            count_md_containing(&existing, "# StudyPilot"),
+            count_md_containing(&existing, "# Welcome to StudyPilot"),
             0,
             "老用户/重启不应显示 Welcome"
         );
@@ -974,8 +988,8 @@ mod onboarding_tests {
     async fn create_first_course_pushes_summary() {
         let mut app = empty_app();
         // 先确认是空库状态
-        app.push_welcome_if_fresh();
-        assert_eq!(count_md_containing(&app, "# StudyPilot"), 1);
+        app.push_startup_cards();
+        assert_eq!(count_md_containing(&app, "# Welcome to StudyPilot"), 1);
 
         app.handle_course_command("-new rust");
         settle(&mut app).await;
@@ -991,6 +1005,47 @@ mod onboarding_tests {
             1,
             "新课程应为 0 材料引导"
         );
+    }
+
+    // ── 场景 C：重启恢复已有课程 → 首屏不空白（轻量 context 卡） ──
+
+    #[tokio::test]
+    async fn restart_with_existing_course_shows_context_card() {
+        let mut app = app_with_courses();
+        app.push_startup_cards();
+        settle(&mut app).await;
+        assert_eq!(
+            count_md_containing(&app, "# Welcome to StudyPilot"),
+            0,
+            "已有课程不应显示 Welcome"
+        );
+        assert_eq!(
+            count_md_containing(&app, "# rust"),
+            1,
+            "重启恢复课程应显示轻量 context 卡，聊天区不空白"
+        );
+    }
+
+    // ── last course 持久化：/course 切换/创建写盘，启动恢复 ──
+
+    #[test]
+    fn last_course_persist_and_restore() {
+        let path = std::path::Path::new("data/last_course.json");
+        let _ = std::fs::remove_file(path);
+
+        persist_last_course("csapp");
+        let mut app = app_with_courses();
+        assert_eq!(app.course, "rust", "默认课程为 rust");
+        app.restore_last_course();
+        assert_eq!(app.course, "csapp", "重启应恢复上次所在课程");
+
+        // 课程已不存在 → 忽略，保留默认
+        persist_last_course("已删除课");
+        app.course = "rust".into();
+        app.restore_last_course();
+        assert_eq!(app.course, "rust", "失效课程不恢复");
+
+        let _ = std::fs::remove_file(path);
     }
 
     // ── 场景 4/5：切换只弹一次；普通命令不弹 ──
@@ -1138,16 +1193,33 @@ mod onboarding_tests {
     }
 
     #[test]
-    fn summary_without_session_omits_last_session() {
+    fn summary_without_session_shows_get_started() {
         let md = cards::course_summary("Rust", 5, 65, 3, None);
         assert!(md.contains("5 notes · 65 concepts · △ 3 need reinforcement"));
-        assert!(!md.contains("Last session"), "无历史会话不得造假: {md}");
-        assert!(md.contains("`/review-map` · `/outline` · `/import`"));
+        assert!(!md.contains("Continue"), "无历史会话不得造假: {md}");
+        assert!(
+            md.contains("Your course is ready"),
+            "应显示 Get started 引导: {md}"
+        );
+        assert!(md.contains("`/review` to practice"));
+        assert!(md.contains("`/outline` to view your knowledge map"));
 
         // 空材料态
         let empty = cards::course_summary("Rust", 0, 0, 0, None);
         assert!(empty.contains("0 notes · 0 concepts"));
         assert!(empty.contains("No materials yet."));
+    }
+
+    /// 有最近 session：突出 Continue，不造假。
+    #[test]
+    fn summary_with_session_shows_continue() {
+        let md = cards::course_summary("Rust", 5, 65, 3, Some("Ownership & Borrowing"));
+        assert!(md.contains("**Continue:** Ownership & Borrowing"));
+        assert!(md.contains("`/review` · `/review-map` · `/outline` · `/import`"));
+        assert!(
+            !md.contains("Your course is ready"),
+            "有历史时不显示空态引导"
+        );
     }
 
     #[test]

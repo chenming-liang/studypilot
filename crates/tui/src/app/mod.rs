@@ -27,6 +27,9 @@ pub use crate::events::{AgentEvent, AppEvent, CourseOpOutcome, Entry};
 pub use crate::palette::{CommandPalette, ListPicker, ModelPicker};
 pub use crate::wizard::Wizard;
 
+/// 上次所在课程持久化（仿 data/budget.json 模式，无 schema 变更）。
+pub(crate) const LAST_COURSE_PATH: &str = "data/last_course.json";
+
 use storage::Store;
 
 /// 会话持久化状态机：首条消息触发建会话，就绪后经单写泵顺序落库。
@@ -440,12 +443,38 @@ impl App {
         self.scroll_up = 0;
     }
 
-    /// 空库首启：course 数 == 0 时 push Welcome Guide 卡片。
-    /// 课程数本身就是"尚未开始使用"的自然状态——无 first_run 旗标。
-    /// 已有课程的老用户升级/重启时 courses 非空 → 不会重复显示。
-    pub(crate) fn push_welcome_if_fresh(&mut self) {
+    /// 启动时的首屏卡分发（区分四场景）：
+    /// - first launch（0 courses）→ Welcome Guide
+    /// - 已有课程 → 恢复 last course（若失效则落到第一门）→ 轻量 current-course context 卡
+    ///   （复用 Course Summary，不重复 onboarding；让聊天区首屏不空白）
+    pub(crate) fn push_startup_cards(&mut self) {
         if self.courses.is_empty() {
             self.push_entry(Entry::Markdown(cards::welcome_guide()));
+            return;
+        }
+        // 当前课程不在地图（默认 "rust" 失效）→ 落到第一门课
+        if (self.course == "all" || !self.courses.iter().any(|(_, n)| *n == self.course))
+            && let Some((_, first)) = self.courses.first()
+        {
+            self.course = first.clone();
+        }
+        self.spawn_course_summary(self.course.clone());
+    }
+
+    /// 启动时恢复上次所在课程（data/last_course.json，仿 budget.json）。
+    /// 课程已不存在则忽略，保留默认/后续兜底。
+    pub(crate) fn restore_last_course(&mut self) {
+        let Ok(raw) = std::fs::read_to_string(LAST_COURSE_PATH) else {
+            return;
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return;
+        };
+        let Some(name) = v.get("course").and_then(serde_json::Value::as_str) else {
+            return;
+        };
+        if self.courses.iter().any(|(_, n)| n == name) {
+            self.course = name.to_owned();
         }
     }
 

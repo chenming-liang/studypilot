@@ -63,8 +63,9 @@ async fn main() -> anyhow::Result<()> {
         app.sidebar_course_stats = course_stats;
         // R6：状态栏显示含历史的累计成本，预算熔断按累计值判断
         app.total_cost = recorded_cost;
-        // 空库首启（course 数 == 0）：聊天流 push Welcome Guide 卡片
-        app.push_welcome_if_fresh();
+        // 恢复上次所在课程 → 分发首屏卡（空库 Welcome / 已有课程轻量 context 卡）
+        app.restore_last_course();
+        app.push_startup_cards();
         app::run(terminal, app).await
     };
     restore_terminal();
