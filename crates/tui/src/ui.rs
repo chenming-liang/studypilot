@@ -2227,4 +2227,69 @@ mod home_lines_tests {
         assert!(text.contains("+ New Course"));
         assert!(!text.contains("Your courses"), "空库不显示课程区");
     }
+
+    /// 人工检查：三态 Home 的实际渲染文本（headless 无法截图，用纯函数输出核对）。
+    #[test]
+    #[ignore = "cargo test -p tui preview_home -- --ignored --nocapture"]
+    fn preview_home() {
+        // 态 A：空库
+        let empty = App::new(
+            std::sync::Arc::new(
+                agent_providers::OpenAiClient::new(agent_providers::ProviderConfig {
+                    name: "t".into(),
+                    endpoint: "http://localhost".into(),
+                    api_key: Some("k".into()),
+                    api_key_env: None,
+                    model: "m".into(),
+                    price_prompt: 0.0,
+                    price_completion: 0.0,
+                    price_prompt_cached: 0.0,
+                    context_length: 1000,
+                    thinking: false,
+                })
+                .unwrap(),
+            ),
+            std::sync::Arc::new(storage::Store::open_in_memory().unwrap()),
+            agent_providers::ProviderConfig {
+                name: "t".into(),
+                endpoint: "http://localhost".into(),
+                api_key: Some("k".into()),
+                api_key_env: None,
+                model: "m".into(),
+                price_prompt: 0.0,
+                price_completion: 0.0,
+                price_prompt_cached: 0.0,
+                context_length: 1000,
+                thinking: false,
+            },
+            vec![],
+            5.0,
+            vec![],
+        );
+        // 态 B：有课程无 session
+        let mut has_courses = app_with_courses();
+        has_courses.workspace = crate::app::Workspace::Home;
+        // 态 C：有课程 + 最近 session
+        let mut has_session = app_with_courses();
+        has_session.workspace = crate::app::Workspace::Home;
+        has_session.sidebar_sessions = vec![storage::SessionMeta {
+            id: 26,
+            title: Some("Ownership & Borrowing".into()),
+            course_id: Some(1),
+            created_at: "2026-09-02 10:00:00".into(),
+        }];
+        for (label, app) in [
+            ("A · 空库 Welcome", &empty),
+            ("B · 有课程无 session", &has_courses),
+            ("C · 有课程 + 最近 session", &has_session),
+        ] {
+            println!("\n── {label} ──");
+            for l in home_lines(app) {
+                let s: String = l.spans.iter().map(|s| s.content.as_ref()).collect();
+                if !s.trim().is_empty() {
+                    println!("  {s}");
+                }
+            }
+        }
+    }
 }
