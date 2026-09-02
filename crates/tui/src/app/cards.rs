@@ -13,7 +13,8 @@ pub(crate) const EMPTY_COURSE_MARKER: &str = "还没有笔记";
 /// 有笔记但概念未抽取时的引导检测标记（/outline 路径）。
 pub(crate) const NO_CONCEPT_MARKER: &str = "还没有概念";
 
-/// 空库首启欢迎卡。
+/// 空库首启欢迎卡（Home workspace 的 Welcome 由 draw_home 原生渲染，此内容仅测试引用）。
+#[cfg(test)]
 pub(crate) fn welcome_guide() -> String {
     [
         "# Welcome to StudyPilot",

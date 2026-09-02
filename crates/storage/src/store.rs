@@ -100,6 +100,8 @@ pub struct SessionMeta {
     pub id: i64,
     pub title: Option<String>,
     pub course_id: Option<i64>,
+    /// 会话创建时间（sessions.created_at，YYYY-MM-DD HH:MM:SS UTC）；Home Continue 卡显示
+    pub created_at: String,
 }
 
 /// 同步存储门面。Connection 包在 Mutex 里使其 Sync，
@@ -446,12 +448,13 @@ impl Store {
     pub fn list_sessions(&self) -> Result<Vec<SessionMeta>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt =
-            conn.prepare("SELECT id, title, course_id FROM sessions ORDER BY id DESC")?;
+            conn.prepare("SELECT id, title, course_id, created_at FROM sessions ORDER BY id DESC")?;
         let rows = stmt.query_map([], |r| {
             Ok(SessionMeta {
                 id: r.get(0)?,
                 title: r.get(1)?,
                 course_id: r.get(2)?,
+                created_at: r.get(3)?,
             })
         })?;
         Ok(rows.flatten().collect())
@@ -1077,7 +1080,7 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         let pattern = format!("%{}%", query);
         let mut stmt = conn.prepare(
-            "SELECT id, title, course_id FROM sessions
+            "SELECT id, title, course_id, created_at FROM sessions
              WHERE COALESCE(title, '') LIKE ?1
              ORDER BY id DESC LIMIT ?2",
         )?;
@@ -1086,6 +1089,7 @@ impl Store {
                 id: r.get(0)?,
                 title: r.get(1)?,
                 course_id: r.get(2)?,
+                created_at: r.get(3)?,
             })
         })?;
         Ok(rows.flatten().collect())

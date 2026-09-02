@@ -565,14 +565,18 @@ impl App {
 
     // ── Home / Course / Session 顶层导航 ──
 
-    /// Home 视图可选条数：Continue（有可继续 session 时）+ 课程数。
+    /// Home 视图可选条数：Continue（有可继续 session 时）+ 课程数 + [+ New Course]。
     pub(crate) fn home_cursor_count(&self) -> usize {
+        if self.courses.is_empty() {
+            return 1; // [+ New Course]（Welcome 态）
+        }
         let courses = self.courses.len();
-        if self.continue_session_id().is_some() {
+        let items = if self.continue_session_id().is_some() {
             courses + 1
         } else {
             courses
-        }
+        };
+        items + 1 // [+ New Course] 恒在末尾
     }
 
     /// Course 视图可选动作条数：Continue（本课程有 session 时）+ New conversation/Review Map/
@@ -665,8 +669,14 @@ impl App {
     }
 
     /// Home 视图 Enter：光标项动作。
-    /// 光标布局 = [Continue?] + courses...；无 Continue 时首项即第一门课。
+    /// 光标布局 = [Continue?] + courses... + [+ New Course]；无 Continue 时首项即第一门课。
     pub(crate) fn home_activate(&mut self) {
+        let last = self.home_cursor_count().saturating_sub(1);
+        if self.home_cursor == last {
+            // [+ New Course]：打开创建向导
+            self.open_course_creation_wizard();
+            return;
+        }
         let continue_course = self.continue_session();
         if self.home_cursor == 0
             && let Some((id, course, _)) = continue_course
@@ -682,6 +692,17 @@ impl App {
         if let Some(name) = name {
             self.enter_course_workspace(&name);
         }
+    }
+
+    /// 打开 `/course -new` 创建向导（Home「+ New Course」入口）。
+    pub(crate) fn open_course_creation_wizard(&mut self) {
+        self.enter_session_workspace();
+        self.wizard = Some(crate::wizard::Wizard::new_for(
+            crate::wizard::WizardKind::CreateCourse,
+            "新建课程",
+            "课程名",
+        ));
+        self.enter_wizard_step();
     }
 
     /// Course 视图 Enter：动作项。

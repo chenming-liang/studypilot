@@ -48,20 +48,25 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Constraint::Length(input_h),
     ])
     .areas(root);
-    let [sidebar, chat] =
-        Layout::horizontal([Constraint::Length(28), Constraint::Min(20)]).areas(main_area);
 
     draw_header(f, header, app);
-    draw_sidebar(f, sidebar, app);
-    match app.workspace {
-        crate::app::Workspace::Home => draw_home(f, chat, app),
-        crate::app::Workspace::Course => draw_course(f, chat, app),
-        crate::app::Workspace::Session => {
-            if app.review.is_some() {
-                draw_review_workspace(f, chat, app);
-            } else {
-                draw_chat(f, chat, app);
+    if app.workspace == crate::app::Workspace::Home {
+        // Home = 独立 Launchpad：全宽主区，不显示课程侧栏
+        draw_home(f, main_area, app);
+    } else {
+        let [sidebar, chat] =
+            Layout::horizontal([Constraint::Length(28), Constraint::Min(20)]).areas(main_area);
+        draw_sidebar(f, sidebar, app);
+        match app.workspace {
+            crate::app::Workspace::Course => draw_course(f, chat, app),
+            crate::app::Workspace::Session => {
+                if app.review.is_some() {
+                    draw_review_workspace(f, chat, app);
+                } else {
+                    draw_chat(f, chat, app);
+                }
             }
+            crate::app::Workspace::Home => unreachable!(),
         }
     }
     draw_input(f, input_area, app);
@@ -90,13 +95,30 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 }
 
 /// Home workspace（Launchpad）：Continue learning / Your courses / + New Course。
-/// 无聊天历史、无输入框——只回答"我现在要继续什么"。
+/// 全宽主区、无课程侧栏、无聊天/输入框——只回答"我接下来要做什么"。
 fn draw_home(f: &mut Frame, area: Rect, app: &mut App) {
     use crate::app::Workspace;
     if app.workspace != Workspace::Home {
         return;
     }
-    let mut lines: Vec<Line<'static>> = Vec::new();
+    // 居中偏上：水平让出侧栏宽度（让内容更集中），垂直留白半屏
+    let indent = (area.width / 6).min(16);
+    let width = area.width.saturating_sub(indent * 2).max(20);
+    let content = Rect {
+        x: area.x + indent,
+        y: area.y,
+        width,
+        height: area.height,
+    };
+    f.render_widget(Paragraph::new(home_lines(app)), content);
+}
+
+/// Home 视图内容行（纯函数，供 draw + 单测/预览复用）。
+/// 层级：StudyPilot → Continue learning（主入口）→ Your courses → + New Course。
+/// 不暴露 CLI 命令；选中指示用轻量 ●。
+fn home_lines(app: &App) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = vec![Line::default(), Line::default()];
+    // 顶部留白（垂直重心偏上，不用真居中）
     lines.push(Line::from(Span::styled(
         "StudyPilot",
         Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
@@ -104,48 +126,103 @@ fn draw_home(f: &mut Frame, area: Rect, app: &mut App) {
     lines.push(Line::default());
 
     if app.courses.is_empty() {
-        // 空库：Home 直接渲染 Welcome 内容（复用卡内容，非聊天流）
-        for l in markdown::render_markdown(&crate::app::cards::welcome_guide(), 48) {
-            lines.push(l);
-        }
-        f.render_widget(Paragraph::new(lines), area);
-        return;
+        // 新用户：Welcome + 创建入口（不暴露 CLI 语法）
+        lines.push(Line::from(Span::styled(
+            "Welcome.",
+            Style::new().fg(theme::FG),
+        )));
+        lines.push(Line::from(Span::styled(
+            "Learn from your own materials.",
+            Style::new().fg(theme::FG),
+        )));
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            "Create a course to get started.",
+            Style::new().fg(DIM),
+        )));
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            "  1  Create a course",
+            Style::new().fg(DIM),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  2  Import your materials",
+            Style::new().fg(DIM),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  3  Ask questions",
+            Style::new().fg(DIM),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  4  Review what you've learned",
+            Style::new().fg(DIM),
+        )));
+        lines.push(Line::default());
+        lines.push(Line::default());
+        let selected = app.home_cursor == 0;
+        lines.push(Line::from(vec![
+            Span::styled(if selected { "● " } else { "  " }, Style::new().fg(ACCENT)),
+            Span::styled(
+                "+ New Course",
+                if selected {
+                    Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::new().fg(theme::FG)
+                },
+            ),
+        ]));
+        return lines;
     }
 
-    // Continue learning（最近 session）
+    // ── 主入口：Continue learning ──
     let mut idx = 0usize;
     if let Some((_, course, title)) = app.continue_session() {
         let selected = app.home_cursor == idx;
-        let marker = if selected { "▶ " } else { "  " };
-        let style = if selected {
+        let sel_style = if selected {
             Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
         } else {
             Style::new().fg(theme::FG)
         };
+        let mark = if selected { "● " } else { "  " };
         lines.push(Line::from(Span::styled(
             "Continue learning",
             Style::new().fg(DIM),
         )));
         lines.push(Line::from(vec![
-            Span::styled(marker, Style::new().fg(ACCENT)),
-            Span::styled(course, style),
+            Span::styled(mark, Style::new().fg(ACCENT)),
+            Span::styled(format!("{course} · {title}"), sel_style),
         ]));
         lines.push(Line::from(Span::styled(
-            format!("  {title}"),
+            format!("  {}", last_studied(app)),
             Style::new().fg(DIM),
+        )));
+        lines.push(Line::from(Span::styled(
+            "  Continue →",
+            Style::new().fg(if selected { ACCENT } else { theme::MUTED }),
         )));
         lines.push(Line::default());
         idx += 1;
+    } else {
+        // 有课程但无 session：轻量引导
+        lines.push(Line::from(Span::styled(
+            "Start learning",
+            Style::new().fg(DIM),
+        )));
+        lines.push(Line::from(Span::styled(
+            "Choose a course to begin.",
+            Style::new().fg(theme::FG),
+        )));
+        lines.push(Line::default());
     }
 
-    // Your courses
+    // ── 次级导航：Your courses ──
     lines.push(Line::from(Span::styled(
         "Your courses",
         Style::new().fg(DIM),
     )));
     for (cid, name) in &app.courses {
         let selected = app.home_cursor == idx;
-        let marker = if selected { "▶ " } else { "  " };
+        let mark = if selected { "● " } else { "  " };
         let style = if selected {
             Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
         } else {
@@ -157,7 +234,7 @@ fn draw_home(f: &mut Frame, area: Rect, app: &mut App) {
             .map(|(n, c)| format!("{n} notes · {c} concepts"))
             .unwrap_or_default();
         lines.push(Line::from(vec![
-            Span::styled(marker, Style::new().fg(ACCENT)),
+            Span::styled(mark, Style::new().fg(ACCENT)),
             Span::styled(name.clone(), style),
             Span::styled(
                 if stats.is_empty() {
@@ -170,19 +247,90 @@ fn draw_home(f: &mut Frame, area: Rect, app: &mut App) {
         ]));
         idx += 1;
     }
-    lines.push(Line::default());
-    lines.push(Line::from(Span::styled(
-        "+ New Course   (`/course -new <name>`)",
-        Style::new().fg(DIM),
-    )));
 
-    // 底部提示（输入区在 Home 不渲染输入框，这里给操作说明）
+    // ── 新建课程 ──
     lines.push(Line::default());
-    lines.push(Line::from(Span::styled(
-        "↑↓ select · Enter open · Esc quit · `/` command palette",
-        Style::new().fg(DIM),
-    )));
-    f.render_widget(Paragraph::new(lines), area);
+    let new_selected = app.home_cursor == idx;
+    lines.push(Line::from(vec![
+        Span::styled(
+            if new_selected { "● " } else { "  " },
+            Style::new().fg(ACCENT),
+        ),
+        Span::styled(
+            "+ New Course",
+            if new_selected {
+                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+            } else {
+                Style::new().fg(theme::FG)
+            },
+        ),
+    ]));
+
+    lines
+}
+
+/// "Last studied …" 相对时间（sessions.created_at，SQLite UTC datetime）。
+/// 解析失败或会话过旧时降级为简要文案。
+fn last_studied(app: &App) -> String {
+    if app.continue_session().is_none() {
+        return String::new();
+    }
+    let Some(ts) = app.sidebar_sessions.first().map(|s| s.created_at.clone()) else {
+        return "Last studied recently".into();
+    };
+    // "YYYY-MM-DD HH:MM:SS" → epoch
+    let Some(d) = ts.get(..10) else {
+        return "Last studied recently".into();
+    };
+    let Some(t) = ts.get(11..19) else {
+        return "Last studied recently".into();
+    };
+    let Ok(y) = d[0..4].parse::<i64>() else {
+        return "Last studied recently".into();
+    };
+    let Ok(mo) = d[5..7].parse::<u32>() else {
+        return "Last studied recently".into();
+    };
+    let Ok(day) = d[8..10].parse::<u32>() else {
+        return "Last studied recently".into();
+    };
+    let Ok(h) = t[0..2].parse::<u32>() else {
+        return "Last studied recently".into();
+    };
+    let Ok(mi) = t[3..5].parse::<u32>() else {
+        return "Last studied recently".into();
+    };
+    let Ok(sec) = t[6..8].parse::<u32>() else {
+        return "Last studied recently".into();
+    };
+    let days_in = |mo: u32| -> u32 {
+        match mo {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            2 => 28, // 近似，TUI 首页不必精确闰年
+            _ => 30,
+        }
+    };
+    let ts = y * 365 * 86400
+        + (0..mo).map(days_in).sum::<u32>() as i64 * 86400
+        + day as i64 * 86400
+        + h as i64 * 3600
+        + mi as i64 * 60
+        + sec as i64;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let diff = (now - ts).max(0);
+    if diff < 60 {
+        "Last studied just now".into()
+    } else if diff < 3600 {
+        format!("Last studied {} min ago", diff / 60)
+    } else if diff < 86400 {
+        format!("Last studied {} hr ago", diff / 3600)
+    } else {
+        format!("Last studied {} d ago", diff / 86400)
+    }
 }
 
 /// Course workspace（课程上下文）：统计 / Continue / Knowledge / Materials / Recent learning。
@@ -223,10 +371,10 @@ fn draw_course(f: &mut Frame, area: Rect, app: &mut App) {
     lines.push(Line::default());
 
     let mut idx = 0usize;
-    // 每个动作行：▶ 当前项 / 空格其他；选中项 accent 加粗
+    // 每个动作行：● 当前项 / 空格其他；选中项 accent 加粗（与 Home 同款轻量指示）
     let push_action = |lines: &mut Vec<Line<'static>>, idx: usize, label: &str, sub: &str| {
         let selected = app.course_cursor == idx;
-        let marker = if selected { "▶ " } else { "  " };
+        let marker = if selected { "● " } else { "  " };
         let style = if selected {
             Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
         } else {
@@ -1079,12 +1227,8 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     // Home / Course workspace：不渲染输入框，只给操作提示（Ask 输入框只在 Session 出现）
     if app.workspace != crate::app::Workspace::Session {
         let hint = match app.workspace {
-            crate::app::Workspace::Home => {
-                "↑↓ select · Enter open · Esc quit · `/` command palette"
-            }
-            crate::app::Workspace::Course => {
-                "↑↓ select · Enter open · Esc back to Home · `/` command palette"
-            }
+            crate::app::Workspace::Home => "↑↓ navigate    Enter open    / commands",
+            crate::app::Workspace::Course => "↑↓ navigate    Enter open    Esc back    / commands",
             _ => unreachable!(),
         };
         f.render_widget(
@@ -1957,5 +2101,130 @@ mod wrap_cursor_tests {
         let (lines, cl, cc) = wrap_input_with_cursor("", 0, 10);
         assert_eq!(lines, vec![""]);
         assert_eq!((cl, cc), (0, 0));
+    }
+}
+
+#[cfg(test)]
+mod home_lines_tests {
+    use super::*;
+    use crate::app::App;
+
+    /// 两门课 + 一门有历史 session 的 App（复用 commands 测试的构造方式）。
+    fn app_with_courses() -> App {
+        let cfg = agent_providers::ProviderConfig {
+            name: "test".into(),
+            endpoint: "http://localhost".into(),
+            api_key: Some("k".into()),
+            api_key_env: None,
+            model: "m".into(),
+            price_prompt: 0.0,
+            price_completion: 0.0,
+            price_prompt_cached: 0.0,
+            context_length: 1000,
+            thinking: false,
+        };
+        let store = std::sync::Arc::new(storage::Store::open_in_memory().unwrap());
+        store.get_or_create_course("rust").unwrap();
+        store.get_or_create_course("csapp").unwrap();
+        let client = std::sync::Arc::new(agent_providers::OpenAiClient::new(cfg.clone()).unwrap());
+        let mut app = App::new(
+            client,
+            store,
+            cfg.clone(),
+            vec![cfg],
+            5.0,
+            vec![(1, "rust".into()), (2, "csapp".into())],
+        );
+        app.sidebar_course_stats.insert(1, (5, 65));
+        app.sidebar_course_stats.insert(2, (12, 48));
+        app
+    }
+
+    fn flatten(lines: &[Line<'static>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn home_has_launchpad_hierarchy() {
+        let app = app_with_courses();
+        let text = flatten(&home_lines(&app)).join("\n");
+        // 主入口（无 session → 轻量引导；有 session 见下一测试）
+        assert!(text.contains("StudyPilot"));
+        assert!(text.contains("Start learning"));
+        assert!(
+            text.contains("Choose a course to begin"),
+            "无 session 时给轻量引导"
+        );
+        // 次级导航 + 内容项
+        assert!(text.contains("Your courses"));
+        assert!(text.contains("rust"));
+        assert!(text.contains("5 notes · 65 concepts"));
+        assert!(text.contains("csapp"));
+        // 新建
+        assert!(text.contains("+ New Course"));
+        // 不暴露 CLI 命令 / 不用 ▶
+        assert!(!text.contains("/course -new"), "Home 不暴露 CLI 命令");
+        assert!(!text.contains("▶"), "不用列表选择器箭头");
+    }
+
+    #[test]
+    fn home_continue_shows_session_title_not_id() {
+        let mut app = app_with_courses();
+        app.sidebar_sessions = vec![storage::SessionMeta {
+            id: 26,
+            title: Some("Ownership & Borrowing".into()),
+            course_id: Some(1),
+            created_at: "2026-09-02 10:00:00".into(),
+        }];
+        let text = flatten(&home_lines(&app)).join("\n");
+        assert!(text.contains("Ownership & Borrowing"), "显示人类可读标题");
+        assert!(!text.contains("#26"), "不显示 session ID");
+        assert!(text.contains("Continue →"));
+        assert!(text.contains("Last studied"), "显示相对时间");
+    }
+
+    #[test]
+    fn home_welcome_when_no_courses() {
+        let app = App::new(
+            std::sync::Arc::new(
+                agent_providers::OpenAiClient::new(agent_providers::ProviderConfig {
+                    name: "t".into(),
+                    endpoint: "http://localhost".into(),
+                    api_key: Some("k".into()),
+                    api_key_env: None,
+                    model: "m".into(),
+                    price_prompt: 0.0,
+                    price_completion: 0.0,
+                    price_prompt_cached: 0.0,
+                    context_length: 1000,
+                    thinking: false,
+                })
+                .unwrap(),
+            ),
+            std::sync::Arc::new(storage::Store::open_in_memory().unwrap()),
+            agent_providers::ProviderConfig {
+                name: "t".into(),
+                endpoint: "http://localhost".into(),
+                api_key: Some("k".into()),
+                api_key_env: None,
+                model: "m".into(),
+                price_prompt: 0.0,
+                price_completion: 0.0,
+                price_prompt_cached: 0.0,
+                context_length: 1000,
+                thinking: false,
+            },
+            vec![],
+            5.0,
+            vec![],
+        );
+        let text = flatten(&home_lines(&app)).join("\n");
+        assert!(text.contains("Welcome."));
+        assert!(text.contains("Create a course to get started."));
+        assert!(text.contains("+ New Course"));
+        assert!(!text.contains("Your courses"), "空库不显示课程区");
     }
 }

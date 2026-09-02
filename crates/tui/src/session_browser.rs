@@ -99,6 +99,7 @@ mod tests {
             id,
             title: Some(title.to_owned()),
             course_id: Some(1),
+            created_at: "2026-09-02 10:00:00".into(),
         }
     }
 

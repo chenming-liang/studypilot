@@ -1234,6 +1234,7 @@ mod onboarding_tests {
             id: 26,
             title: Some("Ownership & Borrowing".into()),
             course_id: Some(1),
+            created_at: "2026-09-02 10:00:00".into(),
         }];
         app
     }
@@ -1242,7 +1243,7 @@ mod onboarding_tests {
     async fn home_activate_enters_course_workspace() {
         // 无 session：Home 光标 = 课程列表，Enter 第一项 → Course workspace
         let mut app = app_with_courses();
-        assert_eq!(app.home_cursor_count(), 2, "2 门课、无 Continue");
+        assert_eq!(app.home_cursor_count(), 3, "2 门课 + New Course");
         app.home_activate();
         settle(&mut app).await;
         assert_eq!(app.workspace, crate::app::Workspace::Course);
@@ -1252,7 +1253,7 @@ mod onboarding_tests {
     #[tokio::test]
     async fn home_continue_enters_session_workspace() {
         let mut app = app_with_session();
-        assert_eq!(app.home_cursor_count(), 3, "Continue + 2 门课");
+        assert_eq!(app.home_cursor_count(), 4, "Continue + 2 门课 + New Course");
         // 光标在 Continue（0）→ 打开最近 session
         app.home_activate();
         settle(&mut app).await;
@@ -1313,9 +1314,23 @@ mod onboarding_tests {
 
     #[tokio::test]
     async fn no_session_hides_continue_in_home() {
-        // 无 session：Home 不应显示 Continue 项（cursor_count 无 +1）
+        // 无 session：Home 不应显示 Continue 项（cursor_count 无 Continue 的 +1）
         let app = app_with_courses();
-        assert_eq!(app.home_cursor_count(), 2);
+        assert_eq!(
+            app.home_cursor_count(),
+            3,
+            "2 门课 + New Course，无 Continue"
+        );
         assert_eq!(app.continue_session(), None, "无 session 不得伪造 Continue");
+    }
+
+    #[tokio::test]
+    async fn home_new_course_opens_creation_wizard() {
+        // 光标到 [+ New Course]（末尾）→ 打开创建向导（Session workspace）
+        let mut app = app_with_courses();
+        app.home_cursor = app.home_cursor_count() - 1;
+        app.home_activate();
+        assert_eq!(app.workspace, crate::app::Workspace::Session);
+        assert!(app.wizard.is_some(), "应打开课程创建向导");
     }
 }
