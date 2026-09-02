@@ -101,41 +101,66 @@ fn draw_home(f: &mut Frame, area: Rect, app: &mut App) {
     if app.workspace != Workspace::Home {
         return;
     }
-    // 居中偏上：水平让出侧栏宽度（让内容更集中），垂直留白半屏
-    let indent = (area.width / 6).min(16);
-    let width = area.width.saturating_sub(indent * 2).max(20);
+    // 居中偏上：内容列水平居中（最大 76 列，避免文字无限拉开），垂直留白半屏
+    let col_w = (area.width * 3 / 4).clamp(20, 76);
+    let x = area.x + area.width.saturating_sub(col_w) / 2;
     let content = Rect {
-        x: area.x + indent,
+        x,
         y: area.y,
-        width,
+        width: col_w,
         height: area.height,
     };
     f.render_widget(Paragraph::new(home_lines(app)), content);
 }
 
+/// 无意义 session 标题 → "Recent conversation"（首条测试消息如「你好」不当首页主标题）。
+/// 规则：空 / <3 字符 / 常见问候与测试词。纯展示 fallback，不改 DB。
+fn session_display_title(title: Option<&str>) -> String {
+    const MEANINGLESS: &[&str] = &[
+        "你好",
+        "hello",
+        "hi",
+        "hey",
+        "test",
+        "ok",
+        "okay",
+        "hi there",
+        "hello world",
+        "testing",
+        "asdf",
+        "qwerty",
+        "abc",
+        "1",
+        "123",
+    ];
+    let t = title.unwrap_or("").trim();
+    if t.is_empty() || t.chars().count() < 3 {
+        return "Recent conversation".into();
+    }
+    if MEANINGLESS.contains(&t.to_ascii_lowercase().as_str()) {
+        return "Recent conversation".into();
+    }
+    t.to_owned()
+}
+
 /// Home 视图内容行（纯函数，供 draw + 单测/预览复用）。
-/// 层级：StudyPilot → Continue learning（主入口）→ Your courses → + New Course。
-/// 不暴露 CLI 命令；选中指示用轻量 ●。
+/// 三级层级：PRIMARY Continue learning → SECONDARY Your courses → TERTIARY + New Course。
+/// 无重复产品名（header 已有）；选中指示用轻量 ●；不暴露 CLI 命令。
 fn home_lines(app: &App) -> Vec<Line<'static>> {
-    let mut lines: Vec<Line<'static>> = vec![Line::default(), Line::default()];
+    let mut lines: Vec<Line<'static>> = vec![Line::default(), Line::default(), Line::default()];
     // 顶部留白（垂直重心偏上，不用真居中）
-    lines.push(Line::from(Span::styled(
-        "StudyPilot",
-        Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
-    )));
-    lines.push(Line::default());
 
     if app.courses.is_empty() {
         // 新用户：Welcome + 创建入口（不暴露 CLI 语法）
         lines.push(Line::from(Span::styled(
             "Welcome.",
-            Style::new().fg(theme::FG),
+            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
         )));
+        lines.push(Line::default());
         lines.push(Line::from(Span::styled(
             "Learn from your own materials.",
             Style::new().fg(theme::FG),
         )));
-        lines.push(Line::default());
         lines.push(Line::from(Span::styled(
             "Create a course to get started.",
             Style::new().fg(DIM),
@@ -174,82 +199,86 @@ fn home_lines(app: &App) -> Vec<Line<'static>> {
         return lines;
     }
 
-    // ── 主入口：Continue learning ──
+    // ── PRIMARY：Continue learning（首页第一视觉焦点）──
     let mut idx = 0usize;
     if let Some((_, course, title)) = app.continue_session() {
+        let title = session_display_title(Some(&title));
         let selected = app.home_cursor == idx;
-        let sel_style = if selected {
-            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
-        } else {
-            Style::new().fg(theme::FG)
-        };
         let mark = if selected { "● " } else { "  " };
         lines.push(Line::from(Span::styled(
             "Continue learning",
-            Style::new().fg(DIM),
+            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
         )));
+        lines.push(Line::default());
         lines.push(Line::from(vec![
             Span::styled(mark, Style::new().fg(ACCENT)),
-            Span::styled(format!("{course} · {title}"), sel_style),
+            Span::styled(
+                format!("{course} · {title}"),
+                if selected {
+                    Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::new().fg(theme::FG)
+                },
+            ),
         ]));
         lines.push(Line::from(Span::styled(
             format!("  {}", last_studied(app)),
             Style::new().fg(DIM),
         )));
+        lines.push(Line::default());
         lines.push(Line::from(Span::styled(
             "  Continue →",
             Style::new().fg(if selected { ACCENT } else { theme::MUTED }),
         )));
         lines.push(Line::default());
+        lines.push(Line::default());
         idx += 1;
     } else {
-        // 有课程但无 session：轻量引导
+        // 有课程但无 session：轻量引导（无空 Continue 区）
         lines.push(Line::from(Span::styled(
             "Start learning",
-            Style::new().fg(DIM),
+            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
         )));
+        lines.push(Line::default());
         lines.push(Line::from(Span::styled(
             "Choose a course to begin.",
             Style::new().fg(theme::FG),
         )));
         lines.push(Line::default());
+        lines.push(Line::default());
     }
 
-    // ── 次级导航：Your courses ──
+    // ── SECONDARY：Your courses（课程名 = 主要信息，统计 = secondary）──
     lines.push(Line::from(Span::styled(
         "Your courses",
-        Style::new().fg(DIM),
+        Style::new().fg(theme::MUTED).add_modifier(Modifier::BOLD),
     )));
+    lines.push(Line::default());
     for (cid, name) in &app.courses {
         let selected = app.home_cursor == idx;
         let mark = if selected { "● " } else { "  " };
-        let style = if selected {
-            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
-        } else {
-            Style::new().fg(theme::FG)
-        };
-        let stats = app
-            .sidebar_course_stats
-            .get(cid)
-            .map(|(n, c)| format!("{n} notes · {c} concepts"))
-            .unwrap_or_default();
         lines.push(Line::from(vec![
             Span::styled(mark, Style::new().fg(ACCENT)),
-            Span::styled(name.clone(), style),
             Span::styled(
-                if stats.is_empty() {
-                    String::new()
+                name.clone(),
+                if selected {
+                    Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
                 } else {
-                    format!("   {stats}")
+                    Style::new().fg(theme::FG)
                 },
-                Style::new().fg(DIM),
             ),
         ]));
+        if let Some((n, c)) = app.sidebar_course_stats.get(cid) {
+            lines.push(Line::from(Span::styled(
+                format!("    {n} notes · {c} concepts"),
+                Style::new().fg(DIM),
+            )));
+        }
+        lines.push(Line::default());
         idx += 1;
     }
 
-    // ── 新建课程 ──
-    lines.push(Line::default());
+    // ── TERTIARY：New Course ──
     let new_selected = app.home_cursor == idx;
     lines.push(Line::from(vec![
         Span::styled(
@@ -2152,7 +2181,10 @@ mod home_lines_tests {
         let app = app_with_courses();
         let text = flatten(&home_lines(&app)).join("\n");
         // 主入口（无 session → 轻量引导；有 session 见下一测试）
-        assert!(text.contains("StudyPilot"));
+        assert!(
+            !text.contains("StudyPilot"),
+            "header 已有产品名，正文不重复"
+        );
         assert!(text.contains("Start learning"));
         assert!(
             text.contains("Choose a course to begin"),
@@ -2184,6 +2216,20 @@ mod home_lines_tests {
         assert!(!text.contains("#26"), "不显示 session ID");
         assert!(text.contains("Continue →"));
         assert!(text.contains("Last studied"), "显示相对时间");
+    }
+
+    #[test]
+    fn home_meaningless_session_title_falls_back() {
+        let mut app = app_with_courses();
+        app.sidebar_sessions = vec![storage::SessionMeta {
+            id: 3,
+            title: Some("你好".into()),
+            course_id: Some(1),
+            created_at: "2026-09-02 10:00:00".into(),
+        }];
+        let text = flatten(&home_lines(&app)).join("\n");
+        assert!(!text.contains("你好"), "无意义测试标题不得作为首页主标题");
+        assert!(text.contains("Recent conversation"), "fallback 文案");
     }
 
     #[test]
