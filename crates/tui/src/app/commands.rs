@@ -16,6 +16,8 @@ impl App {
     /// 用户按 Enter 提交。斜杠命令随时可执行；
     /// 普通消息请求中忽略新提交（串行，避免费用与状态混乱）。
     pub(crate) fn submit(&mut self) {
+        // 命令/聊天都是 Session workspace 的行为：从 Home/Course 发起时先切入会话工作区
+        self.enter_session_workspace();
         let text = self.input.trim().to_owned();
         self.input.clear();
         if text.is_empty() {
@@ -152,6 +154,7 @@ impl App {
     /// 唯一输入 = DB 存储全文（canonical content，不依赖源文件）；
     /// 收尾清理「零关联零历史」概念，有学习记录的绝不删。
     pub(crate) fn handle_refresh_concepts(&mut self) {
+        self.enter_session_workspace();
         if self.is_inflight() || self.import_cancel.is_some() {
             self.push_entry(Entry::Error("有任务进行中，请先完成或 Ctrl+C 中断".into()));
             return;
@@ -264,6 +267,7 @@ impl App {
 
     /// `/review <课程> [概念] [--n 数量]`：启动复习出题。
     pub(crate) fn handle_review_command(&mut self, arg: &str) {
+        self.enter_session_workspace();
         // 无参 = 参数向导（课程自动取当前分区），与 /help 承诺一致
         if arg.trim().is_empty() {
             self.open_review_wizard();
@@ -738,12 +742,11 @@ impl App {
 
 /// 持久化上次所在课程（data/last_course.json，仿 budget.json；重启恢复用）。
 pub(crate) fn persist_last_course(name: &str) {
-    let dir = std::path::Path::new("data");
-    let _ = std::fs::create_dir_all(dir);
-    let _ = std::fs::write(
-        dir.join("last_course.json"),
-        format!(r#"{{"course": {name:?}}}"#),
-    );
+    let path = super::resolve_last_course_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(path, format!(r#"{{"course": {name:?}}}"#));
 }
 
 #[cfg(test)]
@@ -958,71 +961,50 @@ mod onboarding_tests {
         }
     }
 
-    // ── 场景 1/2/10：Welcome 只在 0 courses 时出现 ──
+    // ── 场景 A/B/I：Home workspace 启动，不往聊天流塞卡片 ──
 
     #[tokio::test]
-    async fn welcome_shown_only_when_no_courses() {
-        // 空库：Welcome 出现
+    async fn startup_enters_home_not_chat() {
+        // 空库：启动进 Home（原生 Welcome，不 push 聊天卡）
         let mut fresh = empty_app();
         fresh.push_startup_cards();
+        assert_eq!(fresh.workspace, crate::app::Workspace::Home);
         assert_eq!(
             count_md_containing(&fresh, "# Welcome to StudyPilot"),
-            1,
-            "空库应显示 Welcome"
+            0,
+            "Welcome 由 Home workspace 原生渲染，不再进聊天流"
         );
 
-        // 已有课程（含重启场景）：不重新显示 Welcome
+        // 已有课程：同样进 Home，聊天流保持干净
         let mut existing = app_with_courses();
         existing.push_startup_cards();
         settle(&mut existing).await;
-        assert_eq!(
-            count_md_containing(&existing, "# Welcome to StudyPilot"),
-            0,
-            "老用户/重启不应显示 Welcome"
-        );
+        assert_eq!(existing.workspace, crate::app::Workspace::Home);
+        assert_eq!(count_md_containing(&existing, "# rust"), 0, "不 push 卡片");
     }
 
-    // ── 场景 3：创建第一门课程 → Welcome 让位，Course Summary 出现 ──
+    // ── 场景 B：创建第一门课程 → Home 让位，进入 Course workspace ──
 
     #[tokio::test]
-    async fn create_first_course_pushes_summary() {
+    async fn create_first_course_enters_course_workspace() {
         let mut app = empty_app();
-        // 先确认是空库状态
-        app.push_startup_cards();
-        assert_eq!(count_md_containing(&app, "# Welcome to StudyPilot"), 1);
-
         app.handle_course_command("-new rust");
         settle(&mut app).await;
         assert!(app.courses.iter().any(|(_, n)| n == "rust"), "课程应已创建");
-        // 进入/创建课程反馈卡（0 材料态）
-        assert_eq!(
-            count_md_containing(&app, "# rust"),
-            1,
-            "创建课程后应出现 Course Summary"
-        );
-        assert_eq!(
-            count_md_containing(&app, "No materials yet."),
-            1,
-            "新课程应为 0 材料引导"
-        );
+        assert_eq!(app.course, "rust", "创建后当前课程应切到新课程");
     }
 
-    // ── 场景 C：重启恢复已有课程 → 首屏不空白（轻量 context 卡） ──
+    // ── 场景 I：重启已有课程 → 仍进 Home（不自动跳工作区） ──
 
     #[tokio::test]
-    async fn restart_with_existing_course_shows_context_card() {
+    async fn restart_stays_home() {
         let mut app = app_with_courses();
         app.push_startup_cards();
         settle(&mut app).await;
-        assert_eq!(
-            count_md_containing(&app, "# Welcome to StudyPilot"),
-            0,
-            "已有课程不应显示 Welcome"
-        );
-        assert_eq!(
-            count_md_containing(&app, "# rust"),
-            1,
-            "重启恢复课程应显示轻量 context 卡，聊天区不空白"
+        assert_eq!(app.workspace, crate::app::Workspace::Home);
+        assert!(
+            app.courses.iter().any(|(_, n)| n == "rust"),
+            "课程上下文已恢复"
         );
     }
 
@@ -1030,7 +1012,14 @@ mod onboarding_tests {
 
     #[test]
     fn last_course_persist_and_restore() {
-        let path = std::path::Path::new("data/last_course.json");
+        // 每次运行用唯一隔离路径（并行测试防共享文件竞争）
+        let ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp = format!("/tmp/opencode/last_course-{}-{ns}.json", std::process::id());
+        crate::app::last_course_path_override(Some(tmp.clone()));
+        let path = std::path::Path::new(&tmp);
         let _ = std::fs::remove_file(path);
 
         persist_last_course("csapp");
@@ -1046,6 +1035,7 @@ mod onboarding_tests {
         assert_eq!(app.course, "rust", "失效课程不恢复");
 
         let _ = std::fs::remove_file(path);
+        crate::app::last_course_path_override(None); // 复位，防污染同线程后续测试
     }
 
     // ── 场景 4/5：切换只弹一次；普通命令不弹 ──
@@ -1233,5 +1223,99 @@ mod onboarding_tests {
             assert!(md.starts_with("# "), "卡片应以标题开头");
             assert!(md.contains("`/"), "命令必须 inline code");
         }
+    }
+
+    // ── Home / Course / Session 顶层导航转换 ──
+
+    /// 构造「有最近 session」的 App：sidebar_sessions 直接注入。
+    fn app_with_session() -> App {
+        let mut app = app_with_courses();
+        app.sidebar_sessions = vec![storage::SessionMeta {
+            id: 26,
+            title: Some("Ownership & Borrowing".into()),
+            course_id: Some(1),
+        }];
+        app
+    }
+
+    #[tokio::test]
+    async fn home_activate_enters_course_workspace() {
+        // 无 session：Home 光标 = 课程列表，Enter 第一项 → Course workspace
+        let mut app = app_with_courses();
+        assert_eq!(app.home_cursor_count(), 2, "2 门课、无 Continue");
+        app.home_activate();
+        settle(&mut app).await;
+        assert_eq!(app.workspace, crate::app::Workspace::Course);
+        assert_eq!(app.course, "rust", "应进入光标所在的课程");
+    }
+
+    #[tokio::test]
+    async fn home_continue_enters_session_workspace() {
+        let mut app = app_with_session();
+        assert_eq!(app.home_cursor_count(), 3, "Continue + 2 门课");
+        // 光标在 Continue（0）→ 打开最近 session
+        app.home_activate();
+        settle(&mut app).await;
+        assert_eq!(app.workspace, crate::app::Workspace::Session);
+        assert_eq!(app.course, "rust", "session 归属课程");
+    }
+
+    #[tokio::test]
+    async fn home_course_switch_selects_csapp() {
+        let mut app = app_with_courses();
+        app.home_cursor = 1; // 第二门课
+        app.home_activate();
+        settle(&mut app).await;
+        assert_eq!(app.workspace, crate::app::Workspace::Course);
+        assert_eq!(app.course, "csapp");
+    }
+
+    #[tokio::test]
+    async fn course_new_conversation_enters_session() {
+        // 无 session 的课程：光标 0 = New conversation
+        let mut app = app_with_courses();
+        app.enter_course_workspace("rust");
+        assert_eq!(app.course_cursor_count(), 4, "无 Continue：4 个动作");
+        app.course_activate();
+        settle(&mut app).await;
+        assert_eq!(app.workspace, crate::app::Workspace::Session);
+        assert!(app.entries.iter().all(|e| !matches!(e, Entry::User(_))));
+    }
+
+    #[tokio::test]
+    async fn course_continue_opens_recent_session() {
+        let mut app = app_with_session();
+        app.enter_course_workspace("rust");
+        assert_eq!(
+            app.course_cursor_count(),
+            5 + 1,
+            "Continue + 4 动作 + 1 recent"
+        );
+        app.course_activate(); // 光标 0 = Continue
+        settle(&mut app).await;
+        assert_eq!(app.workspace, crate::app::Workspace::Session);
+    }
+
+    #[tokio::test]
+    async fn esc_navigates_session_back_to_course_then_home() {
+        let mut app = app_with_session();
+        app.enter_session_workspace();
+        assert_eq!(app.workspace, crate::app::Workspace::Session);
+        app.go_back();
+        assert_eq!(
+            app.workspace,
+            crate::app::Workspace::Course,
+            "Session→Course"
+        );
+        app.go_back();
+        assert_eq!(app.workspace, crate::app::Workspace::Home, "Course→Home");
+    }
+
+    #[tokio::test]
+    async fn no_session_hides_continue_in_home() {
+        // 无 session：Home 不应显示 Continue 项（cursor_count 无 +1）
+        let app = app_with_courses();
+        assert_eq!(app.home_cursor_count(), 2);
+        assert_eq!(app.continue_session(), None, "无 session 不得伪造 Continue");
     }
 }

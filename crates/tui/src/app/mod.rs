@@ -14,7 +14,7 @@ use crate::review;
 
 use crate::ui;
 mod browser_flow;
-mod cards;
+pub(crate) mod cards;
 mod chat;
 mod commands;
 mod import_flow;
@@ -29,6 +29,45 @@ pub use crate::wizard::Wizard;
 
 /// 上次所在课程持久化（仿 data/budget.json 模式，无 schema 变更）。
 pub(crate) const LAST_COURSE_PATH: &str = "data/last_course.json";
+
+/// 测试可覆盖持久化路径（并行单测隔离 data/last_course.json，防写竞争）。
+/// 单个共享 thread_local：setter 与 resolver 必须引用同一 static（写在不同函数体
+/// 里会各生成一份，override 永不生效）。
+#[cfg(test)]
+thread_local! {
+    static LAST_COURSE_OVERRIDE: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// 测试可覆盖持久化路径（并行单测隔离 data/last_course.json，防写竞争）。
+#[cfg(test)]
+pub(crate) fn last_course_path_override(path: Option<String>) {
+    LAST_COURSE_OVERRIDE.with(|c| *c.borrow_mut() = path);
+}
+
+/// 解析持久化路径：测试覆盖优先，否则默认 data/last_course.json。
+pub(crate) fn resolve_last_course_path() -> std::path::PathBuf {
+    #[cfg(test)]
+    {
+        let p = LAST_COURSE_OVERRIDE.with(|c| c.borrow().clone());
+        if let Some(p) = p {
+            return std::path::PathBuf::from(p);
+        }
+    }
+    std::path::PathBuf::from(LAST_COURSE_PATH)
+}
+
+/// 顶层信息架构：Home（Launchpad）→ Course（课程上下文）→ Session（聊天工作区）。
+/// 三个 workspace 是 UI state，不写入 session history。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Workspace {
+    /// Launchpad：Continue learning / Your courses / + New Course。无聊天、无输入框。
+    Home,
+    /// 课程上下文：统计 / Continue / Knowledge / Materials / Recent learning。
+    Course,
+    /// 真正的干活工作区：聊天 / Review / Outline / Import 输出。
+    Session,
+}
 
 use storage::Store;
 
@@ -69,6 +108,14 @@ pub struct App {
     input_backup: Option<String>,
     /// 当前课程分区（M4 仅展示与检索范围占位，/course 切换属后续里程碑）
     pub course: String,
+    /// 当前顶层 workspace（Home/Course/Session）
+    pub workspace: Workspace,
+    /// Home 视图光标（课程列表项索引）
+    pub home_cursor: usize,
+    /// Course 视图光标（动作项索引）
+    pub course_cursor: usize,
+    /// Course 视图需巩固概念数缓存 {course_id: weak}（进入 Course 时异步刷新）
+    pub weak_stats: std::collections::HashMap<i64, usize>,
 
     pub total_usage: Usage,
     pub total_cost: f64,
@@ -359,6 +406,10 @@ impl App {
             cursor_pos: 0,
             input_backup: None,
             course: "rust".into(),
+            workspace: Workspace::Home,
+            home_cursor: 0,
+            course_cursor: 0,
+            weak_stats: std::collections::HashMap::new(),
             total_usage: Usage::default(),
             total_cost: 0.0,
             session_cost: 0.0,
@@ -443,28 +494,24 @@ impl App {
         self.scroll_up = 0;
     }
 
-    /// 启动时的首屏卡分发（区分四场景）：
-    /// - first launch（0 courses）→ Welcome Guide
-    /// - 已有课程 → 恢复 last course（若失效则落到第一门）→ 轻量 current-course context 卡
-    ///   （复用 Course Summary，不重复 onboarding；让聊天区首屏不空白）
+    /// 启动时的上下文恢复：若当前课程不在地图（默认 "rust" 失效）落到第一门课。
+    /// Home workspace 本身按 course 数渲染 Welcome / Continue / 课程列表——
+    /// 首屏不再往聊天流 push 卡片（导航状态不伪装成聊天消息）。
     pub(crate) fn push_startup_cards(&mut self) {
         if self.courses.is_empty() {
-            self.push_entry(Entry::Markdown(cards::welcome_guide()));
             return;
         }
-        // 当前课程不在地图（默认 "rust" 失效）→ 落到第一门课
         if (self.course == "all" || !self.courses.iter().any(|(_, n)| *n == self.course))
             && let Some((_, first)) = self.courses.first()
         {
             self.course = first.clone();
         }
-        self.spawn_course_summary(self.course.clone());
     }
 
     /// 启动时恢复上次所在课程（data/last_course.json，仿 budget.json）。
     /// 课程已不存在则忽略，保留默认/后续兜底。
     pub(crate) fn restore_last_course(&mut self) {
-        let Ok(raw) = std::fs::read_to_string(LAST_COURSE_PATH) else {
+        let Ok(raw) = std::fs::read_to_string(resolve_last_course_path()) else {
             return;
         };
         let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
@@ -478,7 +525,7 @@ impl App {
         }
     }
 
-    /// Ctrl+C / Esc：导入中→中断导入；请求中→中断请求；空闲→退出。
+    /// Ctrl+C：导入中→中断导入；请求中→中断请求；空闲→退出（保持既有语义）。
     pub(crate) fn interrupt_or_quit(&mut self) {
         if let Some(token) = &self.import_cancel {
             token.cancel();
@@ -486,6 +533,21 @@ impl App {
         } else if let Some(token) = &self.inflight {
             token.cancel();
             self.push_entry(Entry::Info("中断请求…".into()));
+        } else {
+            self.should_quit = true;
+        }
+    }
+
+    /// Esc：导入中/请求中→中断；否则按 workspace 回退（Session→Course→Home，Home 才退出）。
+    pub(crate) fn esc_or_back(&mut self) {
+        if let Some(token) = &self.import_cancel {
+            token.cancel();
+            self.push_entry(Entry::Info("中断导入…".into()));
+        } else if let Some(token) = &self.inflight {
+            token.cancel();
+            self.push_entry(Entry::Info("中断请求…".into()));
+        } else if self.workspace == Workspace::Session || self.workspace == Workspace::Course {
+            self.go_back();
         } else {
             self.should_quit = true;
         }
@@ -499,6 +561,183 @@ impl App {
             token.cancel();
         }
         self.should_quit = true;
+    }
+
+    // ── Home / Course / Session 顶层导航 ──
+
+    /// Home 视图可选条数：Continue（有可继续 session 时）+ 课程数。
+    pub(crate) fn home_cursor_count(&self) -> usize {
+        let courses = self.courses.len();
+        if self.continue_session_id().is_some() {
+            courses + 1
+        } else {
+            courses
+        }
+    }
+
+    /// Course 视图可选动作条数：Continue（本课程有 session 时）+ New conversation/Review Map/
+    /// Outline/Import + 最近学习 session 数。
+    pub(crate) fn course_cursor_count(&self) -> usize {
+        let course_id = self.current_course_id();
+        let has_continue = self
+            .sidebar_sessions
+            .iter()
+            .any(|s| s.course_id == course_id);
+        let base = if has_continue { 5 } else { 4 };
+        let recent = self
+            .sidebar_sessions
+            .iter()
+            .filter(|s| s.course_id == course_id)
+            .take(3)
+            .count();
+        base + recent
+    }
+
+    /// 可继续的 session：最近一次 session（sidebar_sessions 按 id 降序，首个即最新）。
+    /// 返回 (session_id, course_name, title)。
+    pub(crate) fn continue_session(&self) -> Option<(i64, String, String)> {
+        let s = self.sidebar_sessions.first()?;
+        let course = self.course_label(s.course_id).to_string();
+        let title = s.title.as_deref().unwrap_or("(未命名)").to_string();
+        Some((s.id, course, title))
+    }
+
+    /// Continue 目标 session_id（Home/Course 是否有 Continue 行的依据）。
+    pub(crate) fn continue_session_id(&self) -> Option<i64> {
+        self.continue_session().map(|(id, _, _)| id)
+    }
+
+    /// 进入 Course workspace：设置课程上下文 + 进入 Course 视图 + 异步刷新 weak 数。
+    pub(crate) fn enter_course_workspace(&mut self, course: &str) {
+        self.course = course.to_string();
+        self.workspace = Workspace::Course;
+        self.course_cursor = 0;
+        self.spawn_weak_stats(self.current_course_id());
+        self.persist_last_course_inner();
+    }
+
+    /// 进入 Session workspace：恢复聊天工作区（内容保持不变）。
+    pub(crate) fn enter_session_workspace(&mut self) {
+        self.workspace = Workspace::Session;
+    }
+
+    /// 返回上一级：Session→Course→Home。
+    pub(crate) fn go_back(&mut self) {
+        match self.workspace {
+            Workspace::Session => self.enter_course_workspace(&self.course.clone()),
+            Workspace::Course => {
+                self.workspace = Workspace::Home;
+                self.home_cursor = 0;
+            }
+            Workspace::Home => {}
+        }
+    }
+
+    /// 异步刷新 Course 视图的需巩固概念数（D2）。
+    pub(crate) fn spawn_weak_stats(&mut self, course_id: Option<i64>) {
+        let Some(course_id) = course_id else {
+            return;
+        };
+        let store = Arc::clone(&self.store);
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let weak = spawn_blocking(move || -> Result<usize, String> {
+                let mastery = store
+                    .list_concepts_with_mastery(Some(course_id))
+                    .map_err(|e| e.to_string())?;
+                Ok(mastery
+                    .iter()
+                    .filter(|c| c.attempts > 0 && c.correct * 100 < c.attempts * 70)
+                    .count())
+            })
+            .await;
+            if let Ok(Ok(weak)) = weak {
+                let _ = tx.send(AppEvent::WeakStats(course_id, weak));
+            }
+        });
+    }
+
+    /// 持久化当前课程（切换/创建/进入 Course 时调用；供 commands.rs 复用）。
+    pub(crate) fn persist_last_course_inner(&mut self) {
+        if self.course != "all" {
+            crate::app::commands::persist_last_course(&self.course);
+        }
+    }
+
+    /// Home 视图 Enter：光标项动作。
+    /// 光标布局 = [Continue?] + courses...；无 Continue 时首项即第一门课。
+    pub(crate) fn home_activate(&mut self) {
+        let continue_course = self.continue_session();
+        if self.home_cursor == 0
+            && let Some((id, course, _)) = continue_course
+        {
+            self.course = course;
+            self.enter_session_workspace();
+            self.open_session(id);
+            return;
+        }
+        let offset = if continue_course.is_some() { 1 } else { 0 };
+        let i = self.home_cursor.saturating_sub(offset);
+        let name = self.courses.get(i).map(|(_, n)| n.clone());
+        if let Some(name) = name {
+            self.enter_course_workspace(&name);
+        }
+    }
+
+    /// Course 视图 Enter：动作项。
+    /// 光标布局 = [Continue?] New conversation ReviewMap Outline Import + recent sessions。
+    pub(crate) fn course_activate(&mut self) {
+        let course_id = self.current_course_id();
+        let has_continue = self
+            .sidebar_sessions
+            .iter()
+            .any(|s| s.course_id == course_id);
+        let mut i = self.course_cursor;
+        if has_continue {
+            if i == 0 {
+                if let Some(id) = self
+                    .sidebar_sessions
+                    .iter()
+                    .find(|s| s.course_id == course_id)
+                    .map(|s| s.id)
+                {
+                    self.enter_session_workspace();
+                    self.open_session(id);
+                }
+                return;
+            }
+            i -= 1;
+        }
+        match i {
+            0 => self.start_new_session_and_enter(),
+            1 => {
+                self.enter_session_workspace();
+                self.handle_review_map_command(""); // /review-map：打开知识点选择器
+            }
+            2 => self.handle_outline_command(""),
+            3 => self.handle_import_command(""),
+            _ => {
+                // recent sessions（has_continue 时 offset 已扣）
+                let idx = i - 4;
+                let sessions: Vec<i64> = self
+                    .sidebar_sessions
+                    .iter()
+                    .filter(|s| s.course_id == course_id)
+                    .take(3)
+                    .map(|s| s.id)
+                    .collect();
+                if let Some(&id) = sessions.get(idx) {
+                    self.enter_session_workspace();
+                    self.open_session(id);
+                }
+            }
+        }
+    }
+
+    /// 新会话：清上下文 + 进入 Session workspace（首条消息自动建会话）。
+    pub(crate) fn start_new_session_and_enter(&mut self) {
+        self.start_new_session();
+        self.enter_session_workspace();
     }
 }
 
@@ -626,6 +865,9 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
                 weak,
                 last_session,
             } => app.on_course_summary(course_name, notes, concepts, weak, last_session),
+            AppEvent::WeakStats(course_id, weak) => {
+                app.weak_stats.insert(course_id, weak);
+            }
         }
     }
     Ok(())

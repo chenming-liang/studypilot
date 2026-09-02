@@ -53,10 +53,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     draw_header(f, header, app);
     draw_sidebar(f, sidebar, app);
-    if app.review.is_some() {
-        draw_review_workspace(f, chat, app);
-    } else {
-        draw_chat(f, chat, app);
+    match app.workspace {
+        crate::app::Workspace::Home => draw_home(f, chat, app),
+        crate::app::Workspace::Course => draw_course(f, chat, app),
+        crate::app::Workspace::Session => {
+            if app.review.is_some() {
+                draw_review_workspace(f, chat, app);
+            } else {
+                draw_chat(f, chat, app);
+            }
+        }
     }
     draw_input(f, input_area, app);
 
@@ -81,6 +87,216 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.toast.is_some() {
         draw_toast(f, app);
     }
+}
+
+/// Home workspace（Launchpad）：Continue learning / Your courses / + New Course。
+/// 无聊天历史、无输入框——只回答"我现在要继续什么"。
+fn draw_home(f: &mut Frame, area: Rect, app: &mut App) {
+    use crate::app::Workspace;
+    if app.workspace != Workspace::Home {
+        return;
+    }
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        "StudyPilot",
+        Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::default());
+
+    if app.courses.is_empty() {
+        // 空库：Home 直接渲染 Welcome 内容（复用卡内容，非聊天流）
+        for l in markdown::render_markdown(&crate::app::cards::welcome_guide(), 48) {
+            lines.push(l);
+        }
+        f.render_widget(Paragraph::new(lines), area);
+        return;
+    }
+
+    // Continue learning（最近 session）
+    let mut idx = 0usize;
+    if let Some((_, course, title)) = app.continue_session() {
+        let selected = app.home_cursor == idx;
+        let marker = if selected { "▶ " } else { "  " };
+        let style = if selected {
+            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+        } else {
+            Style::new().fg(theme::FG)
+        };
+        lines.push(Line::from(Span::styled(
+            "Continue learning",
+            Style::new().fg(DIM),
+        )));
+        lines.push(Line::from(vec![
+            Span::styled(marker, Style::new().fg(ACCENT)),
+            Span::styled(course, style),
+        ]));
+        lines.push(Line::from(Span::styled(
+            format!("  {title}"),
+            Style::new().fg(DIM),
+        )));
+        lines.push(Line::default());
+        idx += 1;
+    }
+
+    // Your courses
+    lines.push(Line::from(Span::styled(
+        "Your courses",
+        Style::new().fg(DIM),
+    )));
+    for (cid, name) in &app.courses {
+        let selected = app.home_cursor == idx;
+        let marker = if selected { "▶ " } else { "  " };
+        let style = if selected {
+            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+        } else {
+            Style::new().fg(theme::FG)
+        };
+        let stats = app
+            .sidebar_course_stats
+            .get(cid)
+            .map(|(n, c)| format!("{n} notes · {c} concepts"))
+            .unwrap_or_default();
+        lines.push(Line::from(vec![
+            Span::styled(marker, Style::new().fg(ACCENT)),
+            Span::styled(name.clone(), style),
+            Span::styled(
+                if stats.is_empty() {
+                    String::new()
+                } else {
+                    format!("   {stats}")
+                },
+                Style::new().fg(DIM),
+            ),
+        ]));
+        idx += 1;
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        "+ New Course   (`/course -new <name>`)",
+        Style::new().fg(DIM),
+    )));
+
+    // 底部提示（输入区在 Home 不渲染输入框，这里给操作说明）
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        "↑↓ select · Enter open · Esc quit · `/` command palette",
+        Style::new().fg(DIM),
+    )));
+    f.render_widget(Paragraph::new(lines), area);
+}
+
+/// Course workspace（课程上下文）：统计 / Continue / Knowledge / Materials / Recent learning。
+/// 决定"这门课里做什么"，再进入 Session 执行。
+fn draw_course(f: &mut Frame, area: Rect, app: &mut App) {
+    use crate::app::Workspace;
+    if app.workspace != Workspace::Course {
+        return;
+    }
+    let course_id = app.current_course_id();
+    let course_name = app.course.clone();
+    let stats = course_id
+        .and_then(|id| app.sidebar_course_stats.get(&id))
+        .copied()
+        .unwrap_or((0, 0));
+    let weak = course_id
+        .and_then(|id| app.weak_stats.get(&id))
+        .copied()
+        .unwrap_or(0);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        "← Back to Home",
+        Style::new().fg(DIM),
+    )));
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        course_name.clone(),
+        Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!(
+            "{} notes · {} concepts · {} need reinforcement",
+            stats.0, stats.1, weak
+        ),
+        Style::new().fg(DIM),
+    )));
+    lines.push(Line::default());
+
+    let mut idx = 0usize;
+    // 每个动作行：▶ 当前项 / 空格其他；选中项 accent 加粗
+    let push_action = |lines: &mut Vec<Line<'static>>, idx: usize, label: &str, sub: &str| {
+        let selected = app.course_cursor == idx;
+        let marker = if selected { "▶ " } else { "  " };
+        let style = if selected {
+            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+        } else {
+            Style::new().fg(theme::FG)
+        };
+        let sub_span = if sub.is_empty() {
+            String::new()
+        } else {
+            format!("   {sub}")
+        };
+        lines.push(Line::from(vec![
+            Span::styled(marker, Style::new().fg(ACCENT)),
+            Span::styled(label.to_string(), style),
+            Span::styled(sub_span, Style::new().fg(DIM)),
+        ]));
+    };
+
+    // Continue learning（本课程最近 session）
+    if let Some(s) = app
+        .sidebar_sessions
+        .iter()
+        .find(|s| s.course_id == course_id)
+    {
+        push_action(
+            &mut lines,
+            idx,
+            "Continue learning",
+            s.title.as_deref().unwrap_or("(未命名)"),
+        );
+        idx += 1;
+    }
+    push_action(&mut lines, idx, "New conversation", "");
+    idx += 1;
+    push_action(&mut lines, idx, "Knowledge · Review Map", "/review-map");
+    idx += 1;
+    push_action(&mut lines, idx, "Knowledge · Outline", "/outline");
+    idx += 1;
+    push_action(&mut lines, idx, "Materials · Import", "/import");
+    idx += 1;
+
+    // Recent learning（本课程 session）
+    let recent: Vec<&storage::SessionMeta> = app
+        .sidebar_sessions
+        .iter()
+        .filter(|s| s.course_id == course_id)
+        .take(3)
+        .collect();
+    if !recent.is_empty() {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            "Recent learning",
+            Style::new().fg(DIM),
+        )));
+        for s in recent {
+            push_action(
+                &mut lines,
+                idx,
+                s.title.as_deref().unwrap_or("(未命名)"),
+                "",
+            );
+            idx += 1;
+        }
+    }
+
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        "↑↓ select · Enter open · Esc back to Home",
+        Style::new().fg(DIM),
+    )));
+    f.render_widget(Paragraph::new(lines), area);
 }
 
 /// Review workspace：进度点 → 标签 → 题干 → 选项/反馈 → Sources。
@@ -460,8 +676,19 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
     // 状态由覆盖层状态推导（复习/导入/思考中/就绪），符号+语义色（◌ 进行中 / ● 就绪）
     let (status_text, status_color) = app.status_label();
 
-    // 左侧 = 学习位置（我是谁、在哪门课）；右侧 = 模型 + 费用 + 状态
-    let left = format!(" StudyPilot │ {}", app.course);
+    // 左侧 = 位置面包屑：Home / Course / Session 三级清晰可见
+    let left = match app.workspace {
+        crate::app::Workspace::Home => " StudyPilot".to_string(),
+        crate::app::Workspace::Course => format!(" StudyPilot │ {}", app.course),
+        crate::app::Workspace::Session => {
+            let session = app
+                .current_session_id()
+                .and_then(|id| app.sidebar_sessions.iter().find(|s| s.id == id))
+                .and_then(|s| s.title.as_deref())
+                .unwrap_or("New conversation");
+            format!(" StudyPilot │ {} │ {}", app.course, session)
+        }
+    };
     let right = format!(
         "{} │ ¥{:.2}/{:.0} │ {} ",
         app.provider_cfg.model, app.total_cost, app.max_cost, status_text,
@@ -509,6 +736,8 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
         sidebar_style("all", &app.course),
     ))));
 
+    let current_cid = app.current_course_id();
+    // 会话归属课程下：展开当前课程的学习活动，其他课程仅名称（Session 不再与 Course 平级）
     for (id, name) in &app.courses {
         let is_current = *name == app.course;
         let style = sidebar_style(name, &app.course);
@@ -518,47 +747,34 @@ fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
             style,
         ))));
         if let Some((notes, concepts)) = app.sidebar_course_stats.get(id) {
-            // 全拼可读（侧栏宽度足够；窄屏由外层裁切兜底）
             items.push(ListItem::new(Line::from(Span::styled(
                 format!("    {notes} notes · {concepts} concepts"),
                 Style::new().fg(DIM),
             ))));
         }
-    }
-
-    items.push(ListItem::new(Line::default())); // 空行
-    items.push(ListItem::new(Line::from(Span::styled(
-        " RECENT",
-        Style::new().fg(theme::MUTED).add_modifier(Modifier::BOLD),
-    ))));
-    let row_w = area.width as usize;
-    for s in app.sidebar_sessions.iter().take(6) {
-        let title = s.title.as_deref().unwrap_or("(未命名)");
-        // 行尾 dim 课程标注（会话发生时的分区）
-        let course = app.course_label(s.course_id);
-        let prefix = format!(" #{} ", s.id);
-        let suffix = format!(" · {course}");
-        let avail = row_w
-            .saturating_sub(display_width(&prefix) + display_width(&suffix))
-            .max(4);
-        let short = display_truncate(title, avail);
-        let ellipsis = if display_width(title) > avail {
-            "…"
-        } else {
-            ""
-        };
-        // 当前打开的会话高亮（与侧栏当前课程同风格）
-        let is_current = app.current_session_id() == Some(s.id);
-        let title_style = if is_current {
-            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
-        } else {
-            Style::new()
-        };
-        let mark = if is_current { "▸" } else { " " };
-        items.push(ListItem::new(Line::from(vec![
-            Span::styled(format!("{mark}{prefix}{short}{ellipsis}"), title_style),
-            Span::styled(suffix, Style::new().fg(DIM)),
-        ])));
+        // 当前课程下挂最近学习活动（Session 是 Course 的子内容）
+        if is_current && Some(*id) == current_cid {
+            let row_w = area.width as usize;
+            for s in app.sidebar_sessions.iter().take(8) {
+                if s.course_id != Some(*id) {
+                    continue;
+                }
+                let title = s.title.as_deref().unwrap_or("(未命名)");
+                let is_open = app.current_session_id() == Some(s.id);
+                let prefix = "    ▸ ";
+                let avail = row_w.saturating_sub(display_width(prefix)).max(4);
+                let short = display_truncate(title, avail);
+                let title_style = if is_open {
+                    Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::new().fg(theme::FG)
+                };
+                items.push(ListItem::new(Line::from(Span::styled(
+                    format!("{prefix}{short}"),
+                    title_style,
+                ))));
+            }
+        }
     }
 
     f.render_widget(List::new(items), area);
@@ -860,6 +1076,23 @@ fn wrap_input_with_cursor(input: &str, cursor: usize, width: usize) -> (Vec<Stri
 }
 
 fn draw_input(f: &mut Frame, area: Rect, app: &App) {
+    // Home / Course workspace：不渲染输入框，只给操作提示（Ask 输入框只在 Session 出现）
+    if app.workspace != crate::app::Workspace::Session {
+        let hint = match app.workspace {
+            crate::app::Workspace::Home => {
+                "↑↓ select · Enter open · Esc quit · `/` command palette"
+            }
+            crate::app::Workspace::Course => {
+                "↑↓ select · Enter open · Esc back to Home · `/` command palette"
+            }
+            _ => unreachable!(),
+        };
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(hint, Style::new().fg(DIM)))),
+            area,
+        );
+        return;
+    }
     // Review 模式：底部状态栏专属化；反馈停留态输入行即追问框（前缀"追问："）
     let in_feedback = app.review.as_ref().is_some_and(|rs| rs.awaiting_feedback());
     let (hint, show_input) = match &app.review {

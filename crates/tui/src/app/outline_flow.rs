@@ -81,6 +81,8 @@ impl App {
     /// `/outline [课程] [--export] [--regen]`：看地图。
     /// 概念驱动 + 持久缓存 + 签名自愈（详见 ensure_review_map）。
     pub(crate) fn handle_outline_command(&mut self, arg: &str) {
+        // 大纲/地图输出进聊天流：切到 Session workspace
+        self.enter_session_workspace();
         let force_regen = arg.contains("--regen");
         let export = arg.contains("--export");
         let name = arg
@@ -165,6 +167,7 @@ impl App {
     /// 数量 = 选择器普通行出题的 --n（默认 5；「优先巩固」批量项数量 = 待巩固概念数）。
     /// 参数支持 `3` 或 `--n 3` 两种写法。
     pub(crate) fn handle_review_map_command(&mut self, arg: &str) {
+        self.enter_session_workspace();
         let trimmed = arg.trim();
         let n = trimmed
             .strip_prefix("--n")

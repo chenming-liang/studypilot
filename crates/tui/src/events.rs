@@ -42,6 +42,8 @@ pub enum AppEvent {
         weak: usize,
         last_session: Option<String>,
     },
+    /// Course workspace 需巩固概念数刷新（D2 异步，写 weak_stats 缓存）
+    WeakStats(i64, usize),
     /// 新会话已创建（含首条待落库消息的会话）
     SessionReady(i64),
     /// 侧栏会话列表刷新完成

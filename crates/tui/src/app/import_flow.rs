@@ -10,6 +10,8 @@ use super::{App, AppEvent, Entry};
 impl App {
     /// `/import --dir <路径> [--course <名>]`：启动导入任务（逐文件串行，进度经事件通道上报）。
     pub(crate) fn handle_import_command(&mut self, arg: &str) {
+        // 导入输出进聊天流：从 Course/Home 发起时切到 Session workspace
+        self.enter_session_workspace();
         if self.import_cancel.is_some() {
             self.push_entry(Entry::Error("导入任务进行中，Ctrl+C 可中断".into()));
             return;

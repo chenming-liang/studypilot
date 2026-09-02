@@ -20,12 +20,76 @@ impl App {
         // 键盘操作清除文本选区（防止残留高亮）
         self.text_selection = None;
         self.selection_anchor = None;
+        // Home / Course workspace：导航键（↑↓ Enter Esc）由顶层路由消费；
+        // 其余键入打开命令面板（Home 没有输入框，命令入口 = 面板）
+        if self.workspace != super::Workspace::Session
+            && self.wizard.is_none()
+            && self.palette.is_none()
+            && self.model_picker.is_none()
+            && self.list_picker.is_none()
+        {
+            let routed = match key.code {
+                KeyCode::Up => {
+                    if self.workspace == super::Workspace::Home {
+                        self.home_cursor = self.home_cursor.saturating_sub(1);
+                    } else {
+                        self.course_cursor = self.course_cursor.saturating_sub(1);
+                    }
+                    true
+                }
+                KeyCode::Down => {
+                    let n = if self.workspace == super::Workspace::Home {
+                        self.home_cursor_count()
+                    } else {
+                        self.course_cursor_count()
+                    };
+                    if self.workspace == super::Workspace::Home {
+                        self.home_cursor = (self.home_cursor + 1).min(n.saturating_sub(1));
+                    } else {
+                        self.course_cursor = (self.course_cursor + 1).min(n.saturating_sub(1));
+                    }
+                    true
+                }
+                KeyCode::Enter => {
+                    if self.workspace == super::Workspace::Home {
+                        self.home_activate();
+                    } else {
+                        self.course_activate();
+                    }
+                    true
+                }
+                KeyCode::Esc => {
+                    if self.workspace == super::Workspace::Home {
+                        self.should_quit = true;
+                    } else {
+                        self.workspace = super::Workspace::Home;
+                        self.home_cursor = 0;
+                    }
+                    true
+                }
+                KeyCode::Char(c)
+                    if key.modifiers.contains(KeyModifiers::CONTROL) && (c == 'c' || c == 'q') =>
+                {
+                    self.should_quit = true;
+                    true
+                }
+                _ => false,
+            };
+            if routed {
+                return;
+            }
+            // 其余键（含 Ctrl+K / 键入字符）→ 打开命令面板作为 Home/Course 的命令入口
+            if self.palette.is_none() {
+                self.take_input_for_overlay();
+                self.palette = Some(CommandPalette::new());
+            }
+            return;
+        }
         // 复习模式优先处理
         if self.review.is_some() {
             self.handle_review_key(key);
             return;
-        }
-        // 参数向导（palette Enter 触发）：导航键拦截，编辑键落入普通路径
+        } // 参数向导（palette Enter 触发）：导航键拦截，编辑键落入普通路径
         // （向导/面板与聊天框共享同一输入缓冲，fzf 风格）
         if self.wizard.is_some() && self.handle_wizard_key(key) {
             return;
@@ -67,7 +131,7 @@ impl App {
             KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.quit_now();
             }
-            KeyCode::Esc => self.interrupt_or_quit(),
+            KeyCode::Esc => self.esc_or_back(),
             KeyCode::Enter => self.submit(),
             KeyCode::Left => {
                 self.cursor_pos = self.cursor_pos.saturating_sub(1);
@@ -136,7 +200,7 @@ impl App {
 
     /// 鼠标：滚轮滚动 + 左键拖选复制聊天内容。
     pub(crate) async fn handle_mouse(&mut self, event: MouseEvent) {
-        // 列表选择器打开时：滚轮 = 移动选择项（不滚聊天流）
+        // 列表选择器打开时：滚轮 = 移动选择项（不滚聊天流，任何 workspace 下都优先）
         if self.list_picker.is_some() {
             let vis = lp_visible_len(&self.list_picker, &self.input);
             match event.kind {
@@ -154,6 +218,10 @@ impl App {
                 }
                 _ => {}
             }
+            return;
+        }
+        // Home / Course workspace 无聊天流：滚轮/拖选不作用于聊天
+        if self.workspace != super::Workspace::Session {
             return;
         }
         match event.kind {
@@ -634,6 +702,7 @@ impl App {
 
     /// 打开复习参数向导（手输无参 /review 与面板共用；课程自动取当前分区）。
     pub(crate) fn open_review_wizard(&mut self) {
+        self.enter_session_workspace();
         if self.review.is_some() {
             self.set_toast("复习进行中，请先完成或 Esc 退出", true);
             return;
