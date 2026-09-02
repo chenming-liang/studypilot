@@ -127,6 +127,11 @@ impl App {
         if force_regen {
             self.push_entry(Entry::Info("强制重新组织章节…".into()));
         }
+        // Agent Trace：中性开始行（是否真跑 LLM 由缓存签名决定，不伪造）
+        self.push_entry(Entry::Tool {
+            text: "[整理] 正在准备复习地图…".into(),
+            ok: None,
+        });
 
         tokio::spawn(async move {
             let result = ensure_review_map(
@@ -228,6 +233,13 @@ impl App {
                     }
                 } else {
                     self.push_entry(Entry::Markdown(payload.map.markdown()));
+                    // Agent Trace：完成行（区分真生成 / 缓存命中——不伪造）
+                    if payload.regenerated {
+                        self.push_entry(Entry::Tool {
+                            text: "✓ [整理] 复习地图已生成".into(),
+                            ok: Some(true),
+                        });
+                    }
                     let source = if payload.regenerated {
                         "· 已按最新概念重新组织章节"
                     } else {

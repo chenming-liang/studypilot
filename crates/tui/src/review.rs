@@ -814,7 +814,8 @@ async fn live_regression_same_concept() {
     });
     let provider_cfg = ProviderConfig {
         name: "deepseek".into(),
-        endpoint: std::env::var("DEEPSEEK_ENDPOINT").unwrap_or_else(|_| "https://api.deepseek.com".into()),
+        endpoint: std::env::var("DEEPSEEK_ENDPOINT")
+            .unwrap_or_else(|_| "https://api.deepseek.com".into()),
         api_key: std::env::var("DEEPSEEK_API_KEY").ok(),
         api_key_env: Some("DEEPSEEK_API_KEY".into()),
         model: std::env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| "deepseek-reasoner".into()),
@@ -831,7 +832,11 @@ async fn live_regression_same_concept() {
     let mut same_round: Vec<QuestionContext> = Vec::new();
     let mut generated: Vec<ReviewQuestion> = Vec::new();
     for i in 0..3 {
-        let qtype = if i % 2 == 0 { QType::Choice } else { QType::ShortAnswer };
+        let qtype = if i % 2 == 0 {
+            QType::Choice
+        } else {
+            QType::ShortAnswer
+        };
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         generate_review_question(
             Arc::clone(&store),
@@ -854,7 +859,11 @@ async fn live_regression_same_concept() {
                     i + 1,
                     q.q_type,
                     q.aspect,
-                    q.question.replace('\n', " ").chars().take(80).collect::<String>()
+                    q.question
+                        .replace('\n', " ")
+                        .chars()
+                        .take(80)
+                        .collect::<String>()
                 );
                 same_round.push(QuestionContext {
                     qtype: "回归",
@@ -1381,7 +1390,8 @@ mod material_measure_tests {
                 aspect: None,
             })
             .collect();
-        let messages = build_question_messages(&ctx, 2, 5, &QType::Choice, &same_round, &cross, false);
+        let messages =
+            build_question_messages(&ctx, 2, 5, &QType::Choice, &same_round, &cross, false);
         let prompt = messages[1].content.as_ref().unwrap();
         let total = prompt.chars().count();
         let mat = material.chars().count();
@@ -1397,6 +1407,10 @@ mod material_measure_tests {
         // deepseek 中文 ≈ 0.6 token/字（1 token ≈ 1.6 中文字符）
         println!("  估算 tokens: {:.0}", total as f64 * 0.6);
         // 断言：素材占 prompt 的绝对大头（瘦身的靶子）
-        assert!(mat * 100 / total > 50, "素材应占 >50%（实测 {:.0}%）", mat * 100 / total);
+        assert!(
+            mat * 100 / total > 50,
+            "素材应占 >50%（实测 {:.0}%）",
+            mat * 100 / total
+        );
     }
 }

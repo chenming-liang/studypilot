@@ -295,6 +295,11 @@ impl App {
         ));
 
         // 异步 LLM 小结建议（Observe 整轮结果 → Decide 下一步；不阻塞已显示的静态卡）
+        // Agent Trace：START（完成/失败行由 on_review_advice / 失败路径追加）
+        self.push_entry(Entry::Tool {
+            text: "[整理] 正在生成本轮复习小结…".into(),
+            ok: None,
+        });
         self.spawn_review_advice(&rs);
     }
 
@@ -370,10 +375,18 @@ impl App {
                     .ok(),
                 Err(e) => {
                     tracing::warn!("复习小结生成失败: {e}");
+                    let _ = tx.send(AppEvent::ReviewAdvice(format!(
+                        "⚠ 小结生成失败（已跳过）: {e}"
+                    )));
                     None
                 }
             };
-            let Some(json) = content else { return };
+            let Some(json) = content else {
+                let _ = tx.send(AppEvent::ReviewAdvice(
+                    "⚠ 小结生成失败（已跳过）：模型无响应".into(),
+                ));
+                return;
+            };
             let advice = serde_json::from_str::<ReviewAdvice>(json.trim())
                 .ok()
                 .or_else(|| {
@@ -381,6 +394,9 @@ impl App {
                 });
             let Some(a) = advice else {
                 tracing::warn!("复习小结 JSON 解析失败");
+                let _ = tx.send(AppEvent::ReviewAdvice(
+                    "⚠ 小结生成失败（已跳过）：输出解析失败".into(),
+                ));
                 return;
             };
             let mut out = String::from("── 复习小结 ──");
@@ -400,6 +416,11 @@ impl App {
     }
 
     pub(crate) fn on_review_advice(&mut self, text: String) {
+        // Agent Trace：完成（START 行已在 finish_review_state）
+        self.push_entry(Entry::Tool {
+            text: "✓ [整理] 复习小结已生成".into(),
+            ok: Some(true),
+        });
         // 小结建议分组着色（✓绿/△黄/→蓝），解析失败静默降级为 Markdown 块
         let parse = |line: &str| line.trim_start_matches("- ").to_owned();
         let (mut mastered, mut consolidate, mut next) = (Vec::new(), Vec::new(), None);

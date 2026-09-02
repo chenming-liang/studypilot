@@ -177,9 +177,11 @@ impl App {
         let provider_cfg = self.provider_cfg.clone();
         let max_cost = self.max_cost;
         let tx = self.tx.clone();
-        self.push_entry(Entry::Info(
-            "开始刷新概念（逐篇重抽，全文输入，Ctrl+C 可中断）…".into(),
-        ));
+        // Agent Trace：START（完成行由 ConceptsRefreshed 汇总回投）
+        self.push_entry(Entry::Tool {
+            text: "[抽取] 逐篇重抽概念（全文输入，Ctrl+C 可中断）…".into(),
+            ok: None,
+        });
         tokio::spawn(async move {
             let result = importer::refresh_course_concepts(
                 store,
