@@ -767,9 +767,13 @@ impl App {
                     .filter(|c| !c.is_empty() && c != "all");
                 match dir {
                     Some(d) if !d.is_empty() => {
-                        self.run_import(std::path::PathBuf::from(d), course)
+                        // 统一路径解析（绝对/相对任意位置），失败给用户可读错误
+                        match crate::import_path::resolve_import_path(&d) {
+                            Ok(target) => self.run_import(target, course),
+                            Err(e) => self.push_entry(Entry::Error(e.to_string())),
+                        }
                     }
-                    _ => self.push_entry(Entry::Error("用法: /import --dir <路径>".into())),
+                    _ => self.push_entry(Entry::Error("用法: /import <路径>".into())),
                 }
             }
             WizardKind::RenameSession => {

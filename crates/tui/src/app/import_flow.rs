@@ -21,7 +21,9 @@ impl App {
         self.enter_wizard_step();
     }
 
-    /// `/import --dir <路径> [--course <名>]`：启动导入任务（逐文件串行，进度经事件通道上报）。
+    /// `/import <路径>` 或 `/import --dir <路径> [--course <名>]`：
+    /// 统一路径解析（绝对/相对任意位置，文档 import-path），无参 → 向导。
+    /// 单文件与目录都支持（核心 walkdir 兼容两者）。
     pub(crate) fn handle_import_command(&mut self, arg: &str) {
         // 导入输出进聊天流：从 Course/Home 发起时切到 Session workspace
         self.enter_session_workspace();
@@ -36,35 +38,50 @@ impl App {
             return;
         }
 
-        // 全旗标解析：--dir 与 --course 的值可含空格（到下一个 -- 或串尾）
+        // 全旗标解析：--dir 与 --course 的值可含空格（到下一个 -- 或串尾）；
+        // 兼容 `/import <裸路径>`（无旗标 = 首 token 起为路径）
         let mut dir: Option<String> = None;
         let mut course: Option<String> = None;
+        let mut saw_flag = false;
         crate::course_cmd::collect_flags(arg, &mut |flag, value| match flag {
-            "--dir" => dir = Some(value),
+            "--dir" => {
+                dir = Some(value);
+                saw_flag = true;
+            }
             "--course" => course = Some(value),
             _ => {}
         });
-        let Some(dir) = dir else {
-            self.push_entry(Entry::Error(
-                "用法: /import --dir <路径> [--course <课程名>]".into(),
-            ));
-            return;
+        // 裸路径：整段（含空格）作为路径；带 --dir 时取其值
+        let path_input = if saw_flag {
+            dir.clone().unwrap_or_default()
+        } else {
+            arg.trim().trim_matches('"').to_owned()
         };
 
-        self.run_import(std::path::PathBuf::from(dir), course);
+        // 统一解析（绝对/相对、存在性、类型、空目录）
+        let target = match crate::import_path::resolve_import_path(&path_input) {
+            Ok(t) => t,
+            Err(e) => {
+                self.push_entry(Entry::Error(e.to_string()));
+                return;
+            }
+        };
+        self.run_import(target, course);
     }
 
     /// 导入执行（结构化入口：手输解析与向导直连共用）。
-    pub(crate) fn run_import(&mut self, dir: std::path::PathBuf, course: Option<String>) {
+    /// `target` 已经过 `resolve_import_path` 校验（存在/类型/空目录）。
+    pub(crate) fn run_import(
+        &mut self,
+        target: crate::import_path::ImportTarget,
+        course: Option<String>,
+    ) {
         if self.import_cancel.is_some() {
             self.push_entry(Entry::Error("导入任务进行中，Ctrl+C 可中断".into()));
             return;
         }
-        if !dir.exists() {
-            self.push_entry(Entry::Error(format!("目录不存在: {}", dir.display())));
-            return;
-        }
-
+        let dir = target.path;
+        let kind = if target.is_file { "文件" } else { "目录" };
         let cancel = CancellationToken::new();
         self.import_cancel = Some(cancel.clone());
 
@@ -78,7 +95,8 @@ impl App {
         };
 
         self.push_entry(Entry::Info(format!(
-            "开始导入: {}{}",
+            "开始导入{}: {}{}",
+            kind,
             dir.display(),
             course
                 .as_deref()

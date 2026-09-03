@@ -5,6 +5,7 @@ mod clipboard;
 mod course_cmd;
 mod events;
 mod highlight;
+mod import_path;
 mod input_edit;
 mod markdown;
 mod note_browser;
