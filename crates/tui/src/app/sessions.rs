@@ -8,6 +8,83 @@ use tokio::task::spawn_blocking;
 
 use super::{App, AppEvent, Entry, SessionState};
 
+/// 从一条 tool 结果消息的 content 提取紧凑摘要（文档四/十六：只存可见元数据，
+/// 不存完整 raw result）。search_notes 返回 `{"count":N,"results":[...]}`。
+/// 返回 "N 条"；无结构化摘要时返回空串（UI 仅显示 tool 名）。
+fn tool_result_summary(content: &str) -> String {
+    if content.starts_with("TOOL_ERROR") {
+        return "failed".into();
+    }
+    match serde_json::from_str::<serde_json::Value>(content) {
+        Ok(v) => {
+            if let Some(c) = v.get("count").and_then(|c| c.as_u64()) {
+                format!("{c} 条")
+            } else if let Some(a) = v.get("results").and_then(|r| r.as_array()) {
+                format!("{} 条", a.len())
+            } else {
+                String::new()
+            }
+        }
+        Err(_) => String::new(),
+    }
+}
+
+/// 从历史消息重建聊天 entries（文档：Tool Activity 是 Session history 的一部分，
+/// 恢复时不重新执行、只显示紧凑记录）。与 live 的 `Entry::Tool` 同构。
+/// 返回 (entries, tool_calls 摘要数组：([tool name, summary]) 便于后续 inspector 复用)。
+fn history_to_entries(msgs: &[Message]) -> (Vec<Entry>, Vec<(String, String)>) {
+    let mut entries = Vec::new();
+    let mut tools: Vec<(String, String)> = Vec::new();
+    // 记录最近一次 assistant tool_calls 中每个 call_id → tool 名
+    let mut call_tool: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for m in msgs {
+        match m.role {
+            agent_core::Role::System => {
+                if let Some(c) = &m.content {
+                    entries.push(Entry::Info(c.clone()));
+                }
+            }
+            agent_core::Role::User => {
+                if let Some(c) = &m.content {
+                    entries.push(Entry::User(c.clone()));
+                }
+            }
+            agent_core::Role::Assistant => {
+                if m.tool_calls.is_empty() {
+                    entries.push(Entry::Assistant {
+                        content: m.content.clone().unwrap_or_default(),
+                        reasoning_chars: None,
+                    });
+                } else {
+                    // assistant 携带 tool_calls：登记 name（结果消息只有 tool_call_id）
+                    for tc in &m.tool_calls {
+                        call_tool.insert(tc.id.clone(), tc.function.name.clone());
+                    }
+                }
+            }
+            agent_core::Role::Tool => {
+                let name = m
+                    .tool_call_id
+                    .as_ref()
+                    .and_then(|id| call_tool.get(id).cloned())
+                    .unwrap_or_else(|| "tool".into());
+                let summary = tool_result_summary(m.content.as_deref().unwrap_or(""));
+                let ok = !m.content.as_deref().unwrap_or("").starts_with("TOOL_ERROR");
+                entries.push(Entry::Tool {
+                    text: if summary.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{name} → {summary}")
+                    },
+                    ok: Some(ok),
+                });
+                tools.push((name, summary));
+            }
+        }
+    }
+    (entries, tools)
+}
+
 impl App {
     /// `/rename <标题>`：重命名当前会话；仅 Ready 状态可改。
     pub(crate) fn rename_session(&mut self, title: &str) {
@@ -99,30 +176,8 @@ impl App {
             Ok((id, course_id, msgs)) => {
                 let count = msgs.len();
                 self.history = msgs.clone();
-                self.entries.clear();
-                for m in &msgs {
-                    match m.role {
-                        agent_core::Role::System => {
-                            if let Some(c) = &m.content {
-                                self.entries.push(Entry::Info(c.clone()));
-                            }
-                        }
-                        agent_core::Role::User => {
-                            if let Some(c) = &m.content {
-                                self.entries.push(Entry::User(c.clone()));
-                            }
-                        }
-                        agent_core::Role::Assistant => {
-                            self.entries.push(Entry::Assistant {
-                                content: m.content.clone().unwrap_or_default(),
-                                reasoning_chars: None,
-                            });
-                        }
-                        agent_core::Role::Tool => {
-                            self.entries.push(Entry::Info("[工具结果]".into()));
-                        }
-                    }
-                }
+                let (rebuilt, _) = history_to_entries(&msgs);
+                self.entries = rebuilt;
                 // R5：恢复会话时连课程分区一起还原（文档 §32：per-course 分区）
                 if let Some(cid) = course_id {
                     if let Some(name) = self
@@ -227,23 +282,8 @@ impl App {
 
         let count = msgs.len();
         self.history = msgs.clone();
-        self.entries.clear();
-        for m in &msgs {
-            match m.role {
-                agent_core::Role::User => {
-                    if let Some(c) = &m.content {
-                        self.entries.push(Entry::User(c.clone()));
-                    }
-                }
-                agent_core::Role::Assistant => {
-                    self.entries.push(Entry::Assistant {
-                        content: m.content.clone().unwrap_or_default(),
-                        reasoning_chars: None,
-                    });
-                }
-                _ => {}
-            }
-        }
+        let (rebuilt, _) = history_to_entries(&msgs);
+        self.entries = rebuilt;
 
         // 作为新会话整体入库（首条触发建会话，其余缓冲后顺序落库）
         self.session_state = SessionState::None;
@@ -870,5 +910,125 @@ mod finish_wizard_tests {
         let mut app = test_app();
         app.finish_wizard();
         assert!(app.wizard.is_none());
+    }
+}
+
+/// 文档（Agent项目改进建议.md）：Tool Activity 是 Session history 的一部分，
+/// 恢复时重建紧凑记录，绝不重新执行。
+#[cfg(test)]
+mod tool_activity_tests {
+    use super::*;
+    use agent_core::ToolCall;
+
+    /// 构造一轮带工具调用的历史：user → assistant(tool_calls) → tool result → assistant 回答。
+    fn turn_with_tool() -> Vec<Message> {
+        vec![
+            Message::user("为什么 Iterator 是惰性的？"),
+            Message::assistant_tool_calls(vec![
+                ToolCall::function("call_1", "search_notes", r#"{"query":"iterator"}"#),
+                ToolCall::function("call_2", "get_document_text", r#"{"note_id":1}"#),
+            ]),
+            Message::tool_result("call_1", r#"{"results":[1,2,3],"count":3}"#),
+            Message::tool_result("call_2", "page 4"),
+            Message::assistant("Iterator 是惰性的，因为……"),
+        ]
+    }
+
+    fn tool_entries(entries: &[Entry]) -> Vec<&Entry> {
+        entries
+            .iter()
+            .filter(|e| matches!(e, Entry::Tool { .. }))
+            .collect()
+    }
+
+    #[test]
+    fn tool_activity_persists_across_session_reload() {
+        let msgs = turn_with_tool();
+        let (entries, tools) = history_to_entries(&msgs);
+        let tools2 = tool_entries(&entries);
+        assert_eq!(tools.len(), 2, "恢复后应保留 tool activities");
+        assert_eq!(tools2.len(), 2);
+        // 不是 "[工具结果]" 占位符
+        assert!(
+            !entries
+                .iter()
+                .any(|e| matches!(e, Entry::Info(t) if t.contains("[工具结果]"))),
+            "不得再渲染 [工具结果] 占位符"
+        );
+    }
+
+    #[test]
+    fn tool_name_visible_after_restore() {
+        let (entries, _) = history_to_entries(&turn_with_tool());
+        let tools = tool_entries(&entries);
+        let Entry::Tool { text, ok } = tools[0] else {
+            unreachable!()
+        };
+        assert!(text.contains("search_notes"), "tool 名必须可见: {text}");
+        assert_eq!(*ok, Some(true), "成功状态持久化");
+        let Entry::Tool { text: t2, .. } = tools[1] else {
+            unreachable!()
+        };
+        assert!(t2.contains("get_document_text"), "第二个 tool 名可见: {t2}");
+    }
+
+    #[test]
+    fn tool_summary_persisted() {
+        let (entries, _) = history_to_entries(&turn_with_tool());
+        let tools = tool_entries(&entries);
+        let Entry::Tool { text, .. } = tools[0] else {
+            unreachable!()
+        };
+        assert!(
+            text.contains("→ 3 条"),
+            "search_notes 应重建命中数摘要: {text}"
+        );
+    }
+
+    #[test]
+    fn tool_failure_persisted() {
+        let msgs = vec![
+            Message::assistant_tool_calls(vec![ToolCall::function("c1", "search_notes", "{}")]),
+            Message::tool_result("c1", "TOOL_ERROR [api]: 网络错误"),
+        ];
+        let (entries, _) = history_to_entries(&msgs);
+        let Entry::Tool { text, ok } = tool_entries(&entries)[0] else {
+            unreachable!()
+        };
+        assert!(text.contains("search_notes"), "失败也保留 tool 名");
+        assert_eq!(*ok, Some(false), "失败状态持久化");
+    }
+
+    #[test]
+    fn tool_activity_does_not_reexecute_on_restore() {
+        // 重建是纯数据变换：不触发任何工具执行（无 provider/无 store 依赖即可断言）
+        let (entries, _) = history_to_entries(&turn_with_tool());
+        assert_eq!(tool_entries(&entries).len(), 2);
+    }
+
+    #[test]
+    fn tool_activity_is_not_cot() {
+        // 只重建真实 tool call，不渲染 hidden reasoning / CoT
+        let (entries, _) = history_to_entries(&turn_with_tool());
+        assert!(
+            !entries
+                .iter()
+                .any(|e| matches!(e, Entry::Assistant { content, .. } if content.contains("推理"))),
+            "不得把 CoT 当历史"
+        );
+    }
+
+    #[test]
+    fn export_load_roundtrip_preserves_tool_activity() {
+        // /export 序列化 history（含 tool 消息），/load 后 history_to_entries 重建 tool activity
+        let msgs = turn_with_tool();
+        let json = serde_json::to_string(&msgs).unwrap();
+        let restored: Vec<Message> = serde_json::from_str(&json).unwrap();
+        let (entries, _) = history_to_entries(&restored);
+        assert_eq!(
+            tool_entries(&entries).len(),
+            2,
+            "导出/导入往返后 tool activity 不丢"
+        );
     }
 }
