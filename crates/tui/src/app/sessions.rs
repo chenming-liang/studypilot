@@ -46,7 +46,15 @@ impl App {
     }
 
     /// `/new`：丢弃当前上下文，开启新会话。
+    /// Global 作用域下拒绝（Invariant 4：New Session 默认必须有真实 course_id，
+    /// 文档 §四-5 New Conversation 默认 Course 必须是真实 Course）。
     pub(crate) fn start_new_session(&mut self) {
+        if self.current_course_id().is_none() {
+            self.push_entry(Entry::Error(
+                "开新会话需要具体课程：先 /course <课程名> 进入一门课".into(),
+            ));
+            return;
+        }
         self.history.clear();
         self.entries.clear();
         self.session_state = SessionState::None;

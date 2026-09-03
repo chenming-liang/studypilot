@@ -119,8 +119,8 @@ pub struct ListChoice {
 /// UI → Action，不再"拼命令字符串→解析→handler"。
 #[derive(Clone)]
 pub enum ListChoiceAction {
-    /// 切换到课程（id；None = all 区）
-    SwitchCourse(Option<i64>),
+    /// 切换到课程（id）
+    SwitchCourse(i64),
     /// 删除课程
     DeleteCourse(i64),
 }

@@ -856,17 +856,19 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
     // 状态由覆盖层状态推导（复习/导入/思考中/就绪），符号+语义色（◌ 进行中 / ● 就绪）
     let (status_text, status_color) = app.status_label();
 
-    // 左侧 = 位置面包屑：Home / Course / Session 三级清晰可见
+    // 左侧 = 位置面包屑：Home / Course / Session 三级清晰可见。
+    // Global scope 显示 "Global"（文档：all 不是 Course）。
+    let scope_label = app.current_scope_label();
     let left = match app.workspace {
         crate::app::Workspace::Home => " StudyPilot".to_string(),
-        crate::app::Workspace::Course => format!(" StudyPilot │ {}", app.course),
+        crate::app::Workspace::Course => format!(" StudyPilot │ {scope_label}"),
         crate::app::Workspace::Session => {
             let session = app
                 .current_session_id()
                 .and_then(|id| app.sidebar_sessions.iter().find(|s| s.id == id))
                 .and_then(|s| s.title.as_deref())
                 .unwrap_or("New conversation");
-            format!(" StudyPilot │ {} │ {}", app.course, session)
+            format!(" StudyPilot │ {scope_label} │ {session}")
         }
     };
     let right = format!(
@@ -906,14 +908,11 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_sidebar(f: &mut Frame, area: Rect, app: &App) {
     let mut items: Vec<ListItem> = Vec::new();
-    // 分区标题：大写 + 暗色（导航语义，不抢正文注意力）
+    // 分区标题：大写 + 暗色（导航语义，不抢正文注意力）。
+    // 只列真实课程（文档：all 不是 Course entity，侧栏不出现）。
     items.push(ListItem::new(Line::from(Span::styled(
         " COURSES",
         Style::new().fg(theme::MUTED).add_modifier(Modifier::BOLD),
-    ))));
-    items.push(ListItem::new(Line::from(Span::styled(
-        "  all",
-        sidebar_style("all", &app.course),
     ))));
 
     let current_cid = app.current_course_id();
@@ -1324,7 +1323,7 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
             } else if app.is_inflight() {
                 String::new()
             } else {
-                format!("Ask {}...", app.course)
+                format!("Ask {}...", app.current_scope_label())
             };
             if !ph.is_empty() {
                 lines.push(Line::from(vec![

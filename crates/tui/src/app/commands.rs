@@ -1828,4 +1828,123 @@ mod course_context_tests {
             "已删课的 entries 不应残留（分区已切走）"
         );
     }
+
+    /// 文档 §十-1：Switch Course picker 只列真实课程，不出现 all。
+    #[test]
+    fn switch_course_picker_excludes_all() {
+        let mut app = super::course_delete_tests::test_app(); // rust, csapp
+        app.open_list_picker(crate::palette::PickKind::CourseSwitch);
+        let Some(lp) = &app.list_picker else {
+            panic!("应打开 CourseSwitch picker");
+        };
+        assert!(!lp.items.is_empty(), "应至少列出一门课");
+        assert!(
+            lp.items.iter().all(|c| c.label != "all"),
+            "picker 不应含 all：{:?}",
+            lp.items.iter().map(|c| &c.label).collect::<Vec<_>>()
+        );
+        assert_eq!(lp.items.len(), 2, "只列真实课程 rust/csapp");
+    }
+
+    /// 文档 §十-2：Home 的 Your courses 只来自 courses 表真实实体。
+    #[test]
+    fn home_course_list_excludes_all() {
+        let app = super::course_delete_tests::test_app();
+        assert!(
+            app.courses.iter().all(|(_, n)| n != "all"),
+            "courses 表不应含 all 伪课程"
+        );
+    }
+
+    /// 文档 §十：New Session 默认必须有真实 course_id——Global 下拒绝。
+    #[test]
+    fn new_session_requires_real_course() {
+        let mut app = super::course_delete_tests::test_app();
+        app.switch_course("all"); // 显式进入 Global scope
+        app.start_new_session();
+        assert!(
+            app.entries
+                .iter()
+                .any(|e| matches!(e, Entry::Error(m) if m.contains("需要具体课程"))),
+            "Global 下 New Session 应被拒绝并引导选课"
+        );
+    }
+
+    /// 文档 §十：current course 不因 UI 操作变为 Global；Global 只能显式 /course all。
+    #[tokio::test]
+    async fn global_scope_is_explicit_only() {
+        let mut app = super::course_delete_tests::test_app();
+        // 进入课程：current course 是真实课程
+        app.enter_course_workspace("csapp");
+        settle_full(&mut app).await;
+        assert_eq!(app.course, "csapp");
+        assert!(app.current_course_id().is_some(), "真实课程有 id");
+        // 显式 Global
+        app.switch_course("all");
+        settle_full(&mut app).await;
+        assert_eq!(app.course, "all", "/course all 显式进入 Global");
+        assert!(app.current_course_id().is_none(), "Global 无 course_id");
+        assert_eq!(
+            app.current_scope_label(),
+            "Global",
+            "UI 显示 Global 而非 all"
+        );
+    }
+
+    /// 文档 §五：Continue Learning 对 Global session 显示 Global 标签，不伪装成课程。
+    #[test]
+    fn continue_learning_labels_global_session() {
+        let mut app = super::course_delete_tests::test_app();
+        app.sidebar_sessions = vec![storage::SessionMeta {
+            id: 9,
+            title: Some("你是谁".into()),
+            course_id: None, // Global scope
+            created_at: "2026-09-02 10:00:00".into(),
+        }];
+        let Some((_, course, title)) = app.continue_session() else {
+            panic!("应有 Continue 目标");
+        };
+        assert_eq!(course, "Global", "Global session 标签应为 Global");
+        assert_eq!(title, "你是谁", "不过滤 Session title");
+    }
+
+    /// 文档 §五：Global session 不覆盖真实课程 Continue 目标（优先最近真实课程 session）。
+    #[test]
+    fn global_session_does_not_override_real_course_continue() {
+        let mut app = super::course_delete_tests::test_app();
+        app.sidebar_sessions = vec![
+            storage::SessionMeta {
+                id: 11,
+                title: Some("Global 最新会话".into()),
+                course_id: None,
+                created_at: "2026-09-03 10:00:00".into(),
+            },
+            storage::SessionMeta {
+                id: 10,
+                title: Some("Rust 学习".into()),
+                course_id: Some(1),
+                created_at: "2026-09-02 10:00:00".into(),
+            },
+        ];
+        let Some((_, course, title)) = app.continue_session() else {
+            panic!("应有 Continue 目标");
+        };
+        assert_eq!(course, "rust", "应优先真实课程 session");
+        assert_eq!(title, "Rust 学习");
+    }
+
+    /// 文档 §四-6：Review 默认必须真实课程——Global 下走向导应被拒。
+    #[test]
+    fn review_defaults_to_real_course() {
+        let mut app = super::course_delete_tests::test_app();
+        app.switch_course("all");
+        app.open_review_wizard();
+        assert!(
+            app.entries
+                .iter()
+                .any(|e| matches!(e, Entry::Error(m) if m.contains("需要具体课程"))),
+            "Global 下 /review 无参应引导选课"
+        );
+        assert!(app.wizard.is_none(), "Global 下不应打开复习向导");
+    }
 }

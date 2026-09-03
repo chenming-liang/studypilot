@@ -711,16 +711,23 @@ impl App {
     }
 
     /// 打开复习参数向导（手输无参 /review 与面板共用；课程自动取当前分区）。
+    /// Global 作用域下 Review 不能默认（文档 §四-6：Review 默认必须是真实课程）。
     pub(crate) fn open_review_wizard(&mut self) {
         self.enter_session_workspace();
         if self.review.is_some() {
             self.set_toast("复习进行中，请先完成或 Esc 退出", true);
             return;
         }
-        let course_id = self.current_course_id();
+        let Some(course_id) = self.current_course_id() else {
+            self.push_entry(Entry::Error(
+                "复习需要具体课程：先 /course <课程名> 进入一门课，或用 /review --course <名>"
+                    .into(),
+            ));
+            return;
+        };
         let course_name = self.course.clone();
         self.take_input_for_overlay();
-        self.wizard = Some(Wizard::new_review(course_id, course_name));
+        self.wizard = Some(Wizard::new_review(Some(course_id), course_name));
         self.enter_wizard_step();
     }
 
@@ -964,17 +971,18 @@ impl App {
         use crate::palette::{ListChoice, ListChoiceAction as A, ListPicker, PickKind as K};
         let (title, items) = match kind {
             K::CourseSwitch => {
-                let mut items = vec![ListChoice {
-                    label: "全部课程（跨课搜索范围）".into(),
-                    command: "/course all".into(),
-                    action: Some(A::SwitchCourse(None)),
-                }];
-                items.extend(self.courses.iter().map(|(id, name)| ListChoice {
-                    label: name.clone(),
-                    // id 定位：课程名含任何字符（空格/尖括号）都不影响
-                    command: format!("/course --id {id}"),
-                    action: Some(A::SwitchCourse(Some(*id))),
-                }));
+                // 只列真实课程（文档：all 不是 Course entity；Global 走 /course all 或
+                // palette 的 Search all courses，不进 Course picker）
+                let items: Vec<ListChoice> = self
+                    .courses
+                    .iter()
+                    .map(|(id, name)| ListChoice {
+                        label: name.clone(),
+                        // id 定位：课程名含任何字符（空格/尖括号）都不影响
+                        command: format!("/course --id {id}"),
+                        action: Some(A::SwitchCourse(*id)),
+                    })
+                    .collect();
                 ("切换课程分区".to_owned(), items)
             }
             K::ReviewMap => {
@@ -1104,8 +1112,7 @@ impl App {
     ) {
         use crate::palette::ListChoiceAction as A;
         match action {
-            A::SwitchCourse(Some(id)) => self.switch_course_by_id(id),
-            A::SwitchCourse(None) => self.switch_course("all"),
+            A::SwitchCourse(id) => self.switch_course_by_id(id),
             A::DeleteCourse(id) => self.delete_course_by_id(id),
         }
     }

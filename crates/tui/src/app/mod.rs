@@ -635,10 +635,15 @@ impl App {
         base + recent
     }
 
-    /// 可继续的 session：最近一次 session（sidebar_sessions 按 id 降序，首个即最新）。
+    /// 可继续的 session：优先最近的真实课程 session（文档 §五：Global session 不覆盖
+    /// 真实课程 Continue 目标）；仅当没有真实课程 session 时才回退到最近的 Global session。
     /// 返回 (session_id, course_name, title)。
     pub(crate) fn continue_session(&self) -> Option<(i64, String, String)> {
-        let s = self.sidebar_sessions.first()?;
+        let s = self
+            .sidebar_sessions
+            .iter()
+            .find(|s| s.course_id.is_some())
+            .or_else(|| self.sidebar_sessions.first())?;
         let course = self.course_label(s.course_id).to_string();
         let title = s.title.as_deref().unwrap_or("(未命名)").to_string();
         Some((s.id, course, title))

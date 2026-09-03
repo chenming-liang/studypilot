@@ -75,7 +75,9 @@ impl App {
         }
     }
 
-    /// 会话归属课程的显示名（course_id None = all 区）。
+    /// 会话归属课程的显示名。
+    /// - Some(id)：courses 表中的真实课程
+    /// - None：Global / cross-course scope（文档：all 不是 Course，UI 显示 Global）
     pub(crate) fn course_label(&self, course_id: Option<i64>) -> String {
         match course_id {
             Some(id) => self
@@ -83,8 +85,18 @@ impl App {
                 .iter()
                 .find(|(cid, _)| *cid == id)
                 .map(|(_, n)| n.clone())
-                .unwrap_or_else(|| "all".into()),
-            None => "all".into(),
+                .unwrap_or_else(|| "Global".into()),
+            None => "Global".into(),
+        }
+    }
+
+    /// 当前 scope 的 UI 标签：真实课程显示课名，"all"（Global scope）显示 "Global"。
+    /// 用于 header breadcrumb 等展示位——不让用户看到 "all" 当作课程。
+    pub(crate) fn current_scope_label(&self) -> String {
+        if self.course == "all" {
+            "Global".into()
+        } else {
+            self.course.clone()
         }
     }
 
