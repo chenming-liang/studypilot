@@ -76,7 +76,7 @@ cargo test --workspace
 
 ## 当前进度（每会话收工时更新；详细历史与决策见 docs/核心代码逻辑.md）
 
-**完成态**：M0-M8 里程碑 + 收口会话①~㉞ 全数合入 main + **收口会话㉟（Command 体系产品化 + all 剥离 + Import 路径语义 + 产品化 Phase 3-7，分支 refactor/command-integration 进行中）**。核心能力——导入流水线（md/pdf/pptx + 幂等去重）、FTS5+jieba 中文检索（噪声降权）、RAG 学习、Review 复习闭环（逐题生成/预取/evidence 多样性/Review Map/进度监控/素材瘦身）、Outline concept-driven 持久缓存、Agent Trace 可见化、预算熔断与持久化、三级 workspace（Home/Course/Session）、onboarding 卡片与 Home Launchpad 视觉；**产品化**（pricing 可选化、Runtime Config ~/.studypilot、Model Registry 内置预设、Home AI 待配置引导、/test 连接测试、binary=studypilot、GitHub Release workflow、README Installation 优先）。workspace 229 测试全绿。
+**完成态**：M0-M8 里程碑 + 收口会话①~㉞ 全数合入 main + **收口会话㉟（Command 体系产品化 + all 剥离 + Import 路径语义 + 产品化 Phase 3-7，分支 refactor/command-integration 进行中）**。核心能力——导入流水线（md/pdf/pptx + 幂等去重）、FTS5+jieba 中文检索（噪声降权）、RAG 学习、Review 复习闭环（逐题生成/预取/evidence 多样性/Review Map/进度监控/素材瘦身）、Outline concept-driven 持久缓存、Agent Trace 可见化、预算熔断与持久化、三级 workspace（Home/Course/Session）、onboarding 卡片与 Home Launchpad 视觉；**产品化**（pricing 可选化、Runtime Config ~/.studypilot、Model Registry 内置预设、Home AI 待配置引导、/test 连接测试、binary=studypilot、GitHub Release workflow、README Installation 优先）。workspace 233 测试全绿。
 
 **关键架构决策（后续开发必须遵守，细节见 docs）**：
 - Review 出题是**逐题生成 + 后台预取**；判重=同轮 too_similar(≥0.75)，Concept 是主题不是去重单位
@@ -84,6 +84,7 @@ cargo test --workspace
 - 课程上下文**单一事实源** = `app.course`，`home_cursor`/侧栏/session 全部从它派生（`sync_home_cursor_to_course`）；New Course 对话框直接叠 Home，建完直达 Course 页（`pending_course_enter`）
 - **per-course 分区（§32）**：`Partition{history,entries,session_state,session_cost,scroll_up}` 按课缓存，`swap_course_partition` 五处切换点换入换出——聊天/错误/花费不串课
 - **命令入口统一 Ctrl+K**（Home/Course 不再任意键入开面板，普通键入不弹窗）
+- **Provider incomplete ≠ config invalid**：`OpenAiClient::new` 容忍缺 key（请求时才报可操作错误），缺 key 的独立 binary 正常启动进 Home + AI 引导（E2E 复现）
 - **产品化（productization，Phase 3-6）**：pricing 可选化（`ProviderConfig.price_*` → `Option<f64>`、`known_pricing()`，未知模型 Cost tracking unavailable 可正常运行）；Runtime Config（`Config::save`/`runtime_path`，main 优先 ~/.studypilot/config.toml 回退 cwd、缺失/损坏不 crash 用 default，/model 切换落盘）；Model Registry（`providers::registry`：DeepSeek/GLM/OpenAI 预设 + custom_provider）；AI Setup（`App::ai_needs_setup()` Home 引导 + `/test` 连接测试）
 - **同一能力三入口一个实现**：Home/Course UI、Ctrl+K Palette、/slash CLI 都调 canonical action（`open_import_wizard`/`switch_course`/`rename_course`/`ListChoiceAction`），UI 不拼命令字符串
 - Home/Course/Session 是纯 UI state 不入 session history；启动一律进 Home

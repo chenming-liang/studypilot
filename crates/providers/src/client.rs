@@ -37,14 +37,21 @@ pub struct OpenAiClient {
 }
 
 impl OpenAiClient {
+    /// 构造客户端。**容忍缺 API key**（文档：provider incomplete ≠ config invalid）——
+    /// key 为空时仍可启动，请求时返回可操作的配置错误；startup 不 crash。
     pub fn new(cfg: ProviderConfig) -> Result<Self> {
-        let api_key = cfg.resolve_api_key()?;
+        let api_key = cfg.resolve_api_key().unwrap_or_default();
         let http = reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
             .build()
             .map_err(|e| Error::Transport(e.to_string()))?;
         Ok(Self { http, cfg, api_key })
+    }
+
+    /// 是否配置了 API key（明文或 env 均可）。
+    pub fn configured(&self) -> bool {
+        !self.api_key.is_empty()
     }
 
     pub fn config(&self) -> &ProviderConfig {
@@ -63,6 +70,11 @@ impl OpenAiClient {
         tools: &[Value],
         json_mode: bool,
     ) -> Result<Response> {
+        if !self.configured() {
+            return Err(Error::Config(
+                "AI 尚未配置 API key：Ctrl+K → Model 选择 provider 并设置 key".into(),
+            ));
+        }
         let url = format!(
             "{}/chat/completions",
             self.cfg.endpoint.trim_end_matches('/')

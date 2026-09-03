@@ -286,4 +286,48 @@ model = "my-model"
         assert_eq!(reloaded.providers.len(), cfg.providers.len());
         let _ = std::fs::remove_file(&path);
     }
+
+    // ── 文档 §十二：incomplete provider ≠ config invalid ──
+
+    #[test]
+    fn missing_config_does_not_crash() {
+        // runtime_path 目录不存在 → load 返回 Err（由 main 兜底为 default），不 panic
+        let none_path = std::path::PathBuf::from("/tmp/definitely-not-exists-sp/config.toml");
+        assert!(Config::load(&none_path).is_err());
+    }
+
+    #[test]
+    fn incomplete_custom_provider_is_valid_config() {
+        // custom 存在但无 key：Config 仍然 valid（validate 只查 default_provider 存在）
+        let cfg = r#"
+default_provider = "custom"
+[[providers]]
+name = "custom"
+endpoint = "http://localhost:8000/v1"
+model = "my-model"
+"#
+        .parse::<Config>()
+        .unwrap();
+        let p = cfg.default_provider().unwrap();
+        assert!(p.resolve_api_key().is_err(), "缺 key 但 resolve 报错");
+        assert!(!p.known_pricing());
+        assert!(!p.api_key.is_some());
+        assert!(!p.api_key_env.is_some());
+    }
+
+    #[test]
+    fn malformed_toml_still_returns_config_error() {
+        let bad = "default_provider = ".parse::<Config>().unwrap_err();
+        assert!(bad.to_string().contains("解析配置失败"), "{bad}");
+    }
+
+    #[test]
+    fn configured_provider_starts_normally() {
+        // 明文 key 存在 → resolve 成功
+        let cfg = SAMPLE.parse::<Config>().unwrap();
+        assert_eq!(
+            cfg.provider("plain").unwrap().resolve_api_key().unwrap(),
+            "sk-plain"
+        );
+    }
 }
