@@ -516,22 +516,22 @@ impl App {
         });
     }
 
-    /// `/model [名称]`：无参列出全部 provider（当前打标），带参运行时切换。
-    /// `/model`：无参弹窗选择；`<名>` 直接切换。
+    /// `/model [provider[/model]]`：无参弹窗选择（全量分组：provider 头 + 模型行）；带参直接切换。
     pub(crate) fn handle_model_command(&mut self, arg: &str) {
         if arg.is_empty() {
-            let selected = self
-                .all_providers
-                .iter()
-                .position(|p| p.name == self.provider_cfg.name)
-                .unwrap_or(0);
-            self.model_picker = Some(ModelPicker {
-                options: self.all_providers.clone(),
-                selected,
-            });
+            self.model_picker = Some(ModelPicker::from_providers(
+                &self.all_providers,
+                &self.provider_cfg.name,
+                &self.provider_cfg.model,
+            ));
             return;
         }
-        self.apply_provider_switch(arg);
+        // power-user：/model provider/model 或 /model model（默认当前 provider）
+        let (provider, model) = match arg.split_once('/') {
+            Some((p, m)) => (p.to_string(), m.to_string()),
+            None => (self.provider_cfg.name.clone(), arg.to_string()),
+        };
+        self.apply_model_switch(&provider, &model);
     }
 
     /// `/test`：连接测试（文档 §十二）——最小成本 chat 调用，
@@ -564,7 +564,7 @@ impl App {
         let cancel = CancellationToken::new();
         self.inflight = Some(cancel.clone());
         let tx = self.tx.clone();
-        let _ = tx.send(emit(format!("正在测试连接: {provider_name} · {model} …")));
+        let _ = tx.send(emit(format!("正在测试连接: {provider_name}/{model} …")));
         tokio::spawn(async move {
             let msgs = vec![Message::user("ping")];
             let result = agent_providers::with_cancel(client.chat_json(&msgs), &cancel).await;
@@ -591,34 +591,42 @@ impl App {
         });
     }
 
-    /// 执行 provider 切换：解析 key、构建客户端、替换当前 provider，并落盘 runtime config。
-    pub(crate) fn apply_provider_switch(&mut self, name: &str) {
-        let Some(cfg) = self.all_providers.iter().find(|p| p.name == name).cloned() else {
+    /// 执行模型切换：定位 provider → 用模型元数据重写 cfg（key/endpoint 原样）→
+    /// 重建 client → 持久化 default_model（provider/model），不要求重新输入 key。
+    pub(crate) fn apply_model_switch(&mut self, provider: &str, model: &str) {
+        let Some(cfg) = self
+            .all_providers
+            .iter()
+            .find(|p| p.name == provider)
+            .cloned()
+        else {
             let names: Vec<&str> = self.all_providers.iter().map(|p| p.name.as_str()).collect();
             self.push_entry(Entry::Error(format!(
-                "未知 provider `{name}`。可用: {}",
+                "未知 provider `{provider}`。可用: {}",
                 names.join(", ")
             )));
             return;
         };
-        match OpenAiClient::new(cfg.clone()) {
+        let mut new_cfg = cfg.with_model(model);
+        new_cfg.ensure_models();
+        match OpenAiClient::new(new_cfg.clone()) {
             Ok(client) => {
                 self.provider = Arc::new(client);
-                let old = self.provider_cfg.name.clone();
-                self.provider_cfg = cfg.clone();
-                // 持久化默认 provider（runtime config，重启保留；失败不阻断切换）
-                let mut persist = agent_providers::Config {
+                let old = format!("{}/{}", self.provider_cfg.name, self.provider_cfg.model);
+                self.provider_cfg = new_cfg.clone();
+                // 持久化默认 provider + 默认模型（重启保留；失败不阻断切换）
+                let persist = agent_providers::Config {
                     default_provider: cfg.name.clone(),
+                    default_model: format!("{provider}/{model}"),
                     max_cost: self.max_cost,
                     providers: self.all_providers.clone(),
                 };
-                persist.providers.retain(|p| p.name == cfg.name);
                 let path = self.config_file.clone();
                 if let Err(e) = persist.save(&path) {
                     tracing::warn!("保存 runtime config 失败: {e}");
                 }
                 self.push_entry(Entry::Info(format!(
-                    "已从 `{old}` 切换到 `{} │ {}`（思考模式: {}）",
+                    "已切换: `{old}` → `{}` │ {}（思考模式: {}）",
                     self.provider_cfg.name,
                     self.provider_cfg.model,
                     if self.provider_cfg.thinking {
@@ -934,6 +942,7 @@ pub(crate) mod course_delete_tests {
             price_prompt_cached: Some(0.0),
             context_length: 1000,
             thinking: false,
+            models: Vec::new(),
         };
         let store = Arc::new(Store::open_in_memory().unwrap());
         // 内存库与传入 App 的课程列表保持一致（真实启动时列表来自该库）
@@ -956,6 +965,131 @@ pub(crate) mod course_delete_tests {
                 app.on_course_managed(o);
             }
         }
+    }
+
+    /// 多模型切换：同一 provider 下 A/B 自由切换，key/endpoint 不动（文档 Case 1）。
+    #[test]
+    fn multi_model_switch_keeps_credentials() {
+        let mut app = test_app();
+        let base = agent_providers::ProviderConfig {
+            name: "deepseek".into(),
+            endpoint: "https://api.deepseek.com/v1".into(),
+            api_key: Some("sk-deepseek".into()),
+            api_key_env: None,
+            model: "deepseek-v4-flash".into(),
+            models: vec![
+                agent_providers::ModelConfig {
+                    id: "deepseek-v4-flash".into(),
+                    name: Some("DeepSeek V4 Flash".into()),
+                    price_prompt: Some(2.0),
+                    price_completion: Some(8.0),
+                    price_prompt_cached: None,
+                    context_length: 65536,
+                    thinking: false,
+                },
+                agent_providers::ModelConfig {
+                    id: "deepseek-v4-pro".into(),
+                    name: Some("DeepSeek V4 Pro".into()),
+                    price_prompt: Some(4.0),
+                    price_completion: Some(16.0),
+                    price_prompt_cached: None,
+                    context_length: 65536,
+                    thinking: true,
+                },
+            ],
+            price_prompt: Some(2.0),
+            price_completion: Some(8.0),
+            price_prompt_cached: None,
+            context_length: 65536,
+            thinking: false,
+        };
+        app.all_providers = vec![base];
+        app.provider_cfg = app.all_providers[0].clone();
+        // 切换到 V4 Pro
+        app.apply_model_switch("deepseek", "deepseek-v4-pro");
+        assert_eq!(app.provider_cfg.model, "deepseek-v4-pro");
+        assert_eq!(app.provider_cfg.price_prompt, Some(4.0));
+        assert!(app.provider_cfg.thinking, "切模型带元数据");
+        assert_eq!(
+            app.provider_cfg.api_key.as_deref(),
+            Some("sk-deepseek"),
+            "切换模型不得要求重新输入 key"
+        );
+        // 切回 Flash（A/B 往返）
+        app.apply_model_switch("deepseek", "deepseek-v4-flash");
+        assert_eq!(app.provider_cfg.model, "deepseek-v4-flash");
+        assert_eq!(app.provider_cfg.price_prompt, Some(2.0));
+        assert!(!app.provider_cfg.thinking);
+    }
+
+    /// 模型 picker 全量分组：多 provider × 多 model 展开成扁平行，当前模型定位。
+    #[test]
+    fn model_picker_flattens_providers_and_locates_current() {
+        use crate::palette::ModelPicker;
+        let cfg_a = agent_providers::ProviderConfig {
+            name: "deepseek".into(),
+            endpoint: "e".into(),
+            api_key: Some("k".into()),
+            api_key_env: None,
+            model: "deepseek-v4-flash".into(),
+            models: vec![
+                agent_providers::ModelConfig {
+                    id: "deepseek-v4-flash".into(),
+                    name: Some("V4 Flash".into()),
+                    price_prompt: Some(2.0),
+                    price_completion: Some(8.0),
+                    price_prompt_cached: None,
+                    context_length: 1000,
+                    thinking: false,
+                },
+                agent_providers::ModelConfig {
+                    id: "deepseek-v4-pro".into(),
+                    name: Some("V4 Pro".into()),
+                    price_prompt: Some(4.0),
+                    price_completion: Some(16.0),
+                    price_prompt_cached: None,
+                    context_length: 1000,
+                    thinking: true,
+                },
+            ],
+            price_prompt: Some(2.0),
+            price_completion: Some(8.0),
+            price_prompt_cached: None,
+            context_length: 1000,
+            thinking: false,
+        };
+        let cfg_b = agent_providers::ProviderConfig {
+            name: "glm".into(),
+            endpoint: "e2".into(),
+            api_key: Some("k2".into()),
+            api_key_env: None,
+            model: "glm-5".into(),
+            models: vec![agent_providers::ModelConfig {
+                id: "glm-5".into(),
+                name: None,
+                price_prompt: None,
+                price_completion: None,
+                price_prompt_cached: None,
+                context_length: 1000,
+                thinking: false,
+            }],
+            price_prompt: None,
+            price_completion: None,
+            price_prompt_cached: None,
+            context_length: 1000,
+            thinking: false,
+        };
+        let picker = ModelPicker::from_providers(&[cfg_a, cfg_b], "glm", "glm-5");
+        assert_eq!(picker.options.len(), 3, "deepseek 2 模型 + glm 1 模型");
+        assert_eq!(picker.options[2].provider, "glm");
+        assert_eq!(picker.options[2].model, "glm-5");
+        assert_eq!(picker.selected, 2, "当前 glm/glm-5 行定位");
+        assert!(
+            picker.options[0].known_pricing,
+            "deepseek 模型 known_pricing"
+        );
+        assert!(!picker.options[2].known_pricing, "glm 无定价");
+        assert!(picker.options[1].thinking, "V4 Pro thinking 元数据");
     }
 
     #[tokio::test]
@@ -1002,6 +1136,7 @@ mod selection_mapping_tests {
             price_prompt_cached: Some(0.0),
             context_length: 1000,
             thinking: false,
+            models: Vec::new(),
         };
         let store = Arc::new(Store::open_in_memory().unwrap());
         let client = Arc::new(OpenAiClient::new(cfg.clone()).unwrap());
@@ -1084,6 +1219,7 @@ mod onboarding_tests {
             price_prompt_cached: Some(0.0),
             context_length: 1000,
             thinking: false,
+            models: Vec::new(),
         };
         let store = Arc::new(Store::open_in_memory().unwrap());
         let client = Arc::new(OpenAiClient::new(cfg.clone()).unwrap());
@@ -1552,6 +1688,7 @@ mod course_context_tests {
             price_prompt_cached: Some(0.0),
             context_length: 1000,
             thinking: false,
+            models: Vec::new(),
         };
         let store = Arc::new(Store::open_in_memory().unwrap());
         store.get_or_create_course("rust").unwrap();
@@ -1622,6 +1759,7 @@ mod course_context_tests {
             price_prompt_cached: Some(0.0),
             context_length: 1000,
             thinking: false,
+            models: Vec::new(),
         };
         let store = Arc::new(Store::open_in_memory().unwrap());
         store.get_or_create_course("rust").unwrap();
@@ -1672,6 +1810,7 @@ mod course_context_tests {
             price_prompt_cached: Some(0.0),
             context_length: 1000,
             thinking: false,
+            models: Vec::new(),
         };
         let store = Arc::new(Store::open_in_memory().unwrap());
         store.get_or_create_course("rust").unwrap();
@@ -1732,6 +1871,7 @@ mod course_context_tests {
             price_prompt_cached: Some(0.0),
             context_length: 1000,
             thinking: false,
+            models: Vec::new(),
         };
         let store = Arc::new(Store::open_in_memory().unwrap());
         store.get_or_create_course("rust").unwrap();
@@ -1772,6 +1912,7 @@ mod course_context_tests {
             price_prompt_cached: Some(0.0),
             context_length: 1000,
             thinking: false,
+            models: Vec::new(),
         };
         let store = Arc::new(Store::open_in_memory().unwrap());
         store.get_or_create_course("rust").unwrap();

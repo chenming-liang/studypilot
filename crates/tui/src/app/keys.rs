@@ -1186,18 +1186,23 @@ impl App {
                 self.model_picker = None;
             }
             KeyCode::Enter => {
-                let name = picker.options.get(picker.selected).map(|p| p.name.clone());
+                let sel = picker.selected;
+                let chosen = picker
+                    .options
+                    .get(sel)
+                    .map(|o| (o.provider.clone(), o.model.clone()));
                 self.model_picker = None;
-                if let Some(name) = name {
-                    self.apply_provider_switch(&name);
+                if let Some((p, m)) = chosen {
+                    self.apply_model_switch(&p, &m);
                 }
             }
             KeyCode::Char(c @ '1'..='9') => {
                 let idx = (c as u8 - b'1') as usize;
                 if idx < len {
-                    let name = picker.options[idx].name.clone();
+                    let o = picker.options[idx].provider.clone();
+                    let m = picker.options[idx].model.clone();
                     self.model_picker = None;
-                    self.apply_provider_switch(&name);
+                    self.apply_model_switch(&o, &m);
                 }
             }
             _ => {}

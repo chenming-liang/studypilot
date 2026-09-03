@@ -27,7 +27,9 @@ pub(crate) struct SetupState {
     pub(crate) cursor: usize,
     /// 选中的 provider（registry preset id 或 "custom"）
     pub(crate) provider: Option<String>,
-    /// 选中的 model id
+    /// 选中的模型（多选：一次配置多个 models，文档 §9）
+    pub(crate) selected_models: Vec<String>,
+    /// 当前列表光标处模型（保留旧语义，切换/Test 用首个）
     pub(crate) model: Option<String>,
     /// 自定义 provider 输入（name/base_url/model）
     pub(crate) custom_name: String,
@@ -50,6 +52,7 @@ impl Default for SetupState {
             cursor: 0,
             provider: None,
             model: None,
+            selected_models: Vec::new(),
             custom_name: String::new(),
             custom_base_url: String::new(),
             custom_model: String::new(),
@@ -141,7 +144,7 @@ impl App {
             return false;
         };
         match step {
-            SetupStep::Provider | SetupStep::Model => {
+            SetupStep::Provider => {
                 // ↑↓ 选择 / Enter 确认 / Esc 返回
                 match key.code {
                     KeyCode::Up => {
@@ -159,6 +162,41 @@ impl App {
                                 s.cursor = (s.cursor + 1).min(n - 1);
                             }
                         }
+                        true
+                    }
+                    KeyCode::Enter => {
+                        self.setup_select();
+                        true
+                    }
+                    KeyCode::Esc => {
+                        self.setup_back();
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            SetupStep::Model => {
+                // ↑↓ 移动 / 空格 多选 / Enter 确认 / Esc 返回（一次可加多个 models）
+                match key.code {
+                    KeyCode::Up => {
+                        if let Some(s) = &mut self.setup {
+                            s.cursor = s.cursor.saturating_sub(1);
+                        }
+                        true
+                    }
+                    KeyCode::Down => {
+                        {
+                            let n = self.setup_options().len();
+                            if let Some(s) = &mut self.setup
+                                && n > 0
+                            {
+                                s.cursor = (s.cursor + 1).min(n - 1);
+                            }
+                        }
+                        true
+                    }
+                    KeyCode::Char(' ') => {
+                        self.setup_toggle_model();
                         true
                     }
                     KeyCode::Enter => {
@@ -265,6 +303,24 @@ impl App {
         }
     }
 
+    /// 空格：切换当前光标模型的选中状态（Model 多选）。
+    pub(crate) fn setup_toggle_model(&mut self) {
+        let Some(s) = &mut self.setup else { return };
+        if s.step != SetupStep::Model {
+            return;
+        }
+        let models = s.model_options();
+        let Some(m) = models.get(s.cursor).cloned() else {
+            return;
+        };
+        match s.selected_models.iter().position(|x| *x == m) {
+            Some(i) => {
+                s.selected_models.remove(i);
+            }
+            None => s.selected_models.push(m),
+        }
+    }
+
     /// Setup 选择当前光标项（Provider/Model 列表）。
     pub(crate) fn setup_select(&mut self) {
         let Some(s) = &mut self.setup else { return };
@@ -274,6 +330,7 @@ impl App {
                 let id = opts.get(s.cursor).map(|(id, _)| id.to_string());
                 if let Some(id) = id {
                     s.provider = Some(id.clone());
+                    s.selected_models.clear();
                     if id != "custom" {
                         s.model = s.model_options().first().cloned();
                     }
@@ -282,12 +339,11 @@ impl App {
             }
             SetupStep::Model => {
                 let models = s.model_options();
-                let m = if models.is_empty() {
-                    None // custom：交给 Credentials/Test 处理
-                } else {
-                    models.get(s.cursor).cloned()
-                };
-                s.model = m;
+                if !models.is_empty() && s.selected_models.is_empty() {
+                    // 没主动空格选：默认选中光标处模型（单模型快捷流不变）
+                    s.selected_models.push(models[s.cursor].clone());
+                }
+                s.model = s.selected_models.first().cloned();
                 s.step = SetupStep::Credentials;
             }
             _ => {}
@@ -313,6 +369,7 @@ impl App {
         let Some(s) = &self.setup else {
             return self.provider_cfg.clone();
         };
+        let selected_models = s.selected_models.clone();
         match s.provider.as_deref() {
             Some("custom") => {
                 let mut cfg = agent_providers::custom_provider(
@@ -336,9 +393,15 @@ impl App {
                 cfg
             }
             Some(id) => {
-                let model = s.model.as_deref().unwrap_or("");
-                let mut cfg = agent_providers::provider_from_preset(id, model);
+                let model = selected_models
+                    .first()
+                    .cloned()
+                    .or_else(|| s.model.clone())
+                    .unwrap_or_default();
+                let mut cfg = agent_providers::provider_from_preset(id, &model);
                 cfg.api_key = Some(s.api_key.clone());
+                // models 只保留用户选中的（一次配置可加多个，文档 §9）
+                cfg.models.retain(|m| selected_models.contains(&m.id));
                 cfg
             }
             None => self.provider_cfg.clone(),
@@ -358,6 +421,8 @@ impl App {
         // Apply 到当前 provider + 持久化 runtime config
         let cfg = self.build_pending_config();
         let name = cfg.name.clone();
+        let mut cfg_saved = cfg.clone();
+        cfg_saved.ensure_models();
         if let Ok(client) = agent_providers::OpenAiClient::new(cfg.clone()) {
             self.provider = Arc::new(client);
         }
@@ -372,8 +437,9 @@ impl App {
         // 持久化
         let persist = agent_providers::Config {
             default_provider: name.clone(),
+            default_model: format!("{}/{}", name, cfg.model),
             max_cost: self.max_cost,
-            providers: vec![cfg],
+            providers: vec![cfg_saved],
         };
         let path = self.config_file.clone();
         if let Err(e) = persist.save(&path) {

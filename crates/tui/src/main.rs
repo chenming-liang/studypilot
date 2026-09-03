@@ -47,14 +47,13 @@ async fn main() -> anyhow::Result<()> {
         }
         Err(_) => agent_providers::Config::default(),
     };
-    // 无有效 provider 时，用 Model Registry 内置预设填充（用户可立即选 DeepSeek/GLM/OpenAI）
+    // 无有效 provider 时，用 Model Registry 内置预设填充（每 provider 一个条目，含全部 models）
     if cfg.providers.is_empty() {
         cfg.providers = agent_providers::PRESETS
             .iter()
-            .flat_map(|p| {
-                p.models
-                    .iter()
-                    .map(|m| agent_providers::provider_from_preset(p.id, m.id))
+            .map(|p| {
+                let first = p.models.first().map(|m| m.id).unwrap_or("");
+                agent_providers::provider_from_preset(p.id, first)
             })
             .collect();
     }

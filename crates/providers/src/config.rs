@@ -9,10 +9,55 @@ use agent_core::{Error, Result};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub default_provider: String,
+    /// 当前模型（canonical `provider_id/model_id`）；空 = 回退旧 `provider.model`。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub default_model: String,
     #[serde(default = "default_max_cost")]
     pub max_cost: f64,
     #[serde(default)]
     pub providers: Vec<ProviderConfig>,
+}
+
+/// 一个 Provider 下的模型：只描述模型本身，不绑定 key/endpoint。
+/// pricing 可选（未知模型 Cost tracking unavailable 但可运行）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelConfig {
+    /// 发给 API 的模型 id
+    pub id: String,
+    /// 展示名（可选；缺省用 id）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_prompt: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_completion: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_prompt_cached: Option<f64>,
+    #[serde(default)]
+    pub context_length: u64,
+    #[serde(default)]
+    pub thinking: bool,
+}
+
+impl ModelConfig {
+    pub fn display_name(&self) -> &str {
+        self.name.as_deref().unwrap_or(&self.id)
+    }
+}
+
+impl From<&ProviderConfig> for ModelConfig {
+    /// 从旧式单 model 字段构造模型条目（迁移用）。
+    fn from(p: &ProviderConfig) -> Self {
+        Self {
+            id: p.model.clone(),
+            name: None,
+            price_prompt: p.price_prompt,
+            price_completion: p.price_completion,
+            price_prompt_cached: p.price_prompt_cached,
+            context_length: p.context_length,
+            thinking: p.thinking,
+        }
+    }
 }
 
 fn default_max_cost() -> f64 {
@@ -28,6 +73,7 @@ impl Default for ProviderConfig {
             api_key: None,
             api_key_env: None,
             model: "".into(),
+            models: Vec::new(),
             price_prompt: None,
             price_completion: None,
             price_prompt_cached: None,
@@ -41,6 +87,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             default_provider: "custom".into(),
+            default_model: String::new(),
             max_cost: default_max_cost(),
             providers: vec![ProviderConfig::default()],
         }
@@ -58,6 +105,9 @@ pub struct ProviderConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key_env: Option<String>,
     pub model: String,
+    /// 该 provider 下的全部模型（多个；pricing/元数据在此）。空 = 旧式单 model（自动迁移）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<ModelConfig>,
     /// 元 / 百万 token（可选：未知模型可运行，Cost tracking unavailable）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub price_prompt: Option<f64>,
@@ -73,6 +123,57 @@ pub struct ProviderConfig {
 }
 
 impl ProviderConfig {
+    /// 该 provider 的模型列表（旧式单 model 配置自动构造单元素列表）。
+    pub fn models_or_legacy(&self) -> Vec<ModelConfig> {
+        if !self.models.is_empty() {
+            return self.models.clone();
+        }
+        if self.model.is_empty() {
+            Vec::new()
+        } else {
+            vec![ModelConfig::from(self)]
+        }
+    }
+
+    /// 选择某个模型：返回克隆后的 ProviderConfig（model/pricing/thinking 换成该模型）。
+    /// `provider_cfg` 的 key/endpoint 原样保留；未知模型保留当前元数据（宽容）。
+    pub fn with_model(&self, model_id: &str) -> ProviderConfig {
+        let mut cfg = self.clone();
+        let legacy = (self.model == model_id && !self.model.is_empty()).then(|| ModelConfig {
+            id: self.model.clone(),
+            name: None,
+            price_prompt: self.price_prompt,
+            price_completion: self.price_completion,
+            price_prompt_cached: self.price_prompt_cached,
+            context_length: self.context_length,
+            thinking: self.thinking,
+        });
+        let m = self
+            .models
+            .iter()
+            .find(|m| m.id == model_id)
+            .cloned()
+            .or(legacy);
+        if let Some(m) = m {
+            cfg.model = m.id.clone();
+            cfg.price_prompt = m.price_prompt;
+            cfg.price_completion = m.price_completion;
+            cfg.price_prompt_cached = m.price_prompt_cached;
+            cfg.context_length = m.context_length;
+            cfg.thinking = m.thinking;
+        } else {
+            cfg.model = model_id.to_string();
+        }
+        cfg
+    }
+
+    /// 确保 models 非空（保存前调用）：旧式配置自动补单元素列表。
+    pub fn ensure_models(&mut self) {
+        if self.models.is_empty() && !self.model.is_empty() {
+            self.models.push(ModelConfig::from(&*self));
+        }
+    }
+
     /// 是否具备已知 pricing（未知模型显示 Cost tracking unavailable，但可正常使用）。
     pub fn known_pricing(&self) -> bool {
         self.price_prompt.is_some() && self.price_completion.is_some()
@@ -135,7 +236,18 @@ impl Config {
                 "default_provider `{}` 不在 providers 列表中",
                 self.default_provider
             ))),
+        }?;
+        if !self.default_model.is_empty() {
+            let (p, m) = self.resolve_default_model_pair()?;
+            let pc = self.provider(&p)?;
+            let known = pc.models_or_legacy();
+            if !known.is_empty() && !known.iter().any(|x| x.id == m) {
+                return Err(Error::Config(format!(
+                    "default_model 的模型 `{m}` 不在 provider `{p}` 的模型列表中"
+                )));
+            }
         }
+        Ok(())
     }
 
     pub fn provider(&self, name: &str) -> Result<&ProviderConfig> {
@@ -148,6 +260,33 @@ impl Config {
     /// 当前默认 provider 的克隆（客户端持有所有权）。
     pub fn default_provider(&self) -> Result<&ProviderConfig> {
         self.provider(&self.default_provider)
+    }
+
+    /// 当前模型 canonical 标识 `provider/model`。
+    /// `default_model` 优先；缺省回退旧式 `default_provider` + 该 provider 的 `model`（自动迁移）。
+    pub fn resolve_default_model(&self) -> Result<String> {
+        if !self.default_model.is_empty() {
+            return Ok(self.default_model.clone());
+        }
+        let p = self.default_provider()?;
+        if p.model.is_empty() {
+            return Err(Error::Config(format!(
+                "provider `{}` 未指定默认模型",
+                self.default_provider
+            )));
+        }
+        Ok(format!("{}/{}", self.default_provider, p.model))
+    }
+
+    /// 解析 `default_model` 为 (provider, model) 对（旧式迁移时 provider = default_provider）。
+    pub fn resolve_default_model_pair(&self) -> Result<(String, String)> {
+        let full = self.resolve_default_model()?;
+        match full.split_once('/') {
+            Some((p, m)) if !p.is_empty() && !m.is_empty() => Ok((p.to_string(), m.to_string())),
+            _ => Err(Error::Config(format!(
+                "default_model `{full}` 格式应为 provider/model"
+            ))),
+        }
     }
 }
 
@@ -329,5 +468,111 @@ model = "my-model"
             cfg.provider("plain").unwrap().resolve_api_key().unwrap(),
             "sk-plain"
         );
+    }
+
+    // ── Provider 多模型（文档）：一 Provider 多 Model，旧配置自动迁移 ──
+
+    /// 新式配置：provider 带多个 models + default_model。
+    const MULTI: &str = r#"
+default_provider = "deepseek"
+default_model = "deepseek/deepseek-v4-flash"
+
+[[providers]]
+name = "deepseek"
+endpoint = "https://api.deepseek.com/v1"
+api_key_env = "TEST_M1_KEY"
+model = "deepseek-v4-flash"
+
+[[providers.models]]
+id = "deepseek-v4-flash"
+name = "DeepSeek V4 Flash"
+price_prompt = 2.0
+price_completion = 8.0
+
+[[providers.models]]
+id = "deepseek-v4-pro"
+name = "DeepSeek V4 Pro"
+price_prompt = 4.0
+price_completion = 16.0
+thinking = true
+"#;
+
+    #[test]
+    fn multi_model_config_parses() {
+        let cfg = MULTI.parse::<Config>().unwrap();
+        let ds = cfg.default_provider().unwrap();
+        assert_eq!(ds.models.len(), 2, "一个 provider 两个模型");
+        assert_eq!(ds.models[1].id, "deepseek-v4-pro");
+        assert_eq!(ds.models[1].display_name(), "DeepSeek V4 Pro");
+        // default_model 解析
+        assert_eq!(
+            cfg.resolve_default_model().unwrap(),
+            "deepseek/deepseek-v4-flash"
+        );
+        let (p, m) = cfg.resolve_default_model_pair().unwrap();
+        assert_eq!((p.as_str(), m.as_str()), ("deepseek", "deepseek-v4-flash"));
+    }
+
+    #[test]
+    fn legacy_single_model_auto_migrates() {
+        // 旧式配置无 models/default_model → resolve_default_model 回退 provider/model
+        let cfg = SAMPLE.parse::<Config>().unwrap();
+        assert!(cfg.default_model.is_empty(), "旧配置无 default_model");
+        assert_eq!(
+            cfg.resolve_default_model().unwrap(),
+            "deepseek/deepseek-reasoner",
+            "旧式回退 default_provider + provider.model"
+        );
+        let ds = cfg.default_provider().unwrap();
+        assert_eq!(
+            ds.models_or_legacy().len(),
+            1,
+            "models 空时由 legacy model 构造"
+        );
+        assert_eq!(ds.models_or_legacy()[0].id, "deepseek-reasoner");
+        assert!(
+            !ds.models_or_legacy()[0].name.is_some(),
+            "legacy 无 display name"
+        );
+    }
+
+    #[test]
+    fn with_model_switches_metadata_without_touching_key() {
+        let cfg = MULTI.parse::<Config>().unwrap();
+        let ds = cfg.default_provider().unwrap();
+        let flash = ds.with_model("deepseek-v4-flash");
+        assert_eq!(flash.model, "deepseek-v4-flash");
+        assert_eq!(flash.price_prompt, Some(2.0));
+        assert!(!flash.thinking);
+        let pro = ds.with_model("deepseek-v4-pro");
+        assert_eq!(pro.model, "deepseek-v4-pro");
+        assert_eq!(pro.price_prompt, Some(4.0));
+        assert!(pro.thinking, "模型元数据含 thinking");
+        assert_eq!(pro.endpoint, ds.endpoint, "切换模型不碰 endpoint/key");
+    }
+
+    #[test]
+    fn validate_rejects_unknown_default_model() {
+        let err = MULTI
+            .replace(
+                "default_model = \"deepseek/deepseek-v4-flash\"",
+                "default_model = \"deepseek/deepseek-nope\"",
+            )
+            .parse::<Config>()
+            .unwrap_err();
+        assert!(err.to_string().contains("不在 provider"), "{err}");
+    }
+
+    #[test]
+    fn ensure_models_fills_legacy_list() {
+        let cfg = SAMPLE.parse::<Config>().unwrap();
+        let mut pc = cfg.default_provider().unwrap().clone();
+        pc.ensure_models();
+        assert_eq!(pc.models.len(), 1);
+        assert_eq!(pc.models[0].id, "deepseek-reasoner");
+        assert_eq!(pc.models[0].price_prompt, pc.price_prompt);
+        // 幂等
+        pc.ensure_models();
+        assert_eq!(pc.models.len(), 1);
     }
 }

@@ -72,7 +72,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_input(f, input_area, app);
 
     if let Some(picker) = &app.model_picker {
-        draw_model_picker(f, picker, &app.provider_cfg.name);
+        draw_model_picker(f, picker, &app.provider_cfg.name, &app.provider_cfg.model);
     }
     if app.palette.is_some() {
         draw_command_palette(f, app);
@@ -1463,7 +1463,14 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
             } else {
                 for (i, m) in opts.iter().enumerate() {
                     let sel = i == s.cursor;
-                    let mark = if sel { "▸ " } else { "  " };
+                    let checked = s.selected_models.contains(m);
+                    let mark = if checked {
+                        if sel { "☑ " } else { "✓ " }
+                    } else if sel {
+                        "▸ "
+                    } else {
+                        "  "
+                    };
                     items.push(ListItem::new(Line::from(Span::styled(
                         format!("{mark}{m}"),
                         if sel {
@@ -1476,7 +1483,7 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
             }
             (
                 "AI Setup · Model".to_owned(),
-                "↑↓ select · Enter continue · Esc back".into(),
+                "↑↓ move · Space toggle · Enter done · Esc back".into(),
             )
         }
         SetupStep::Credentials => {
@@ -2248,10 +2255,15 @@ fn cursor_window(chars: &[char], cursor_idx: usize, w: usize) -> Vec<char> {
     chars[start..end].to_vec()
 }
 
-fn draw_model_picker(f: &mut Frame, picker: &ModelPicker, current: &str) {
+fn draw_model_picker(
+    f: &mut Frame,
+    picker: &ModelPicker,
+    current_provider: &str,
+    current_model: &str,
+) {
     let area = f.area();
     let height = (picker.options.len() + 4).min(area.height as usize) as u16;
-    let width = 52u16.min(area.width);
+    let width = 60u16.min(area.width);
     let x = area.x + (area.width - width) / 2;
     let y = area.y + (area.height - height) / 2;
     let pop = Rect::new(x, y, width, height);
@@ -2259,35 +2271,60 @@ fn draw_model_picker(f: &mut Frame, picker: &ModelPicker, current: &str) {
     // 清除背景
     f.render_widget(ratatui::widgets::Clear, pop);
 
-    let items: Vec<ListItem> = picker
-        .options
-        .iter()
-        .enumerate()
-        .map(|(i, pc)| {
-            let mark = if pc.name == current {
-                "→"
-            } else if i == picker.selected {
-                "▸"
-            } else {
-                " "
-            };
-            let label = format!(
-                " {} {:<14} {:<18} {}",
-                mark,
-                pc.name,
-                pc.model,
-                if pc.thinking { "思考" } else { "" }
-            );
-            let style = if i == picker.selected {
-                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
-            } else {
-                Style::new()
-            };
-            ListItem::new(Span::styled(label, style))
-        })
+    let mut items: Vec<ListItem> = Vec::new();
+    let mut last_provider: Option<&str> = None;
+    for (i, o) in picker.options.iter().enumerate() {
+        // provider 分组头（仅在切换 provider 时插入分隔行）
+        if last_provider != Some(o.provider.as_str()) {
+            if last_provider.is_some() {
+                items.push(ListItem::new(Line::from(Span::styled(
+                    "".to_string(),
+                    Style::new().fg(DIM),
+                ))));
+            }
+            last_provider = Some(o.provider.as_str());
+            items.push(ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!(" {} ", o.provider_display),
+                    Style::new().fg(theme::MUTED).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("──────────────", Style::new().fg(DIM)),
+            ])));
+        }
+        let is_current = o.provider == current_provider && o.model == current_model;
+        let mark = if is_current {
+            "→"
+        } else if i == picker.selected {
+            "▸"
+        } else {
+            " "
+        };
+        let tags: Vec<&str> = vec![
+            if o.thinking { "思考" } else { "" },
+            if o.known_pricing { "" } else { "无定价" },
+        ]
+        .into_iter()
+        .filter(|s| !s.is_empty())
         .collect();
+        let label = format!(
+            " {} {:<24} {}",
+            mark,
+            o.model_display,
+            if tags.is_empty() {
+                String::new()
+            } else {
+                format!("({})", tags.join(" · "))
+            }
+        );
+        let style = if i == picker.selected {
+            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+        } else {
+            Style::new()
+        };
+        items.push(ListItem::new(Span::styled(label, style)));
+    }
 
-    let title = " 选择模型 (↑↓ 移动 · 数字直选 · Enter 确认 · Esc 取消) ";
+    let title = " AI Models (↑↓ 移动 · Enter 切换 · Esc 取消) ";
     f.render_widget(
         List::new(items).block(
             Block::new()
@@ -2378,6 +2415,7 @@ mod home_lines_tests {
             price_prompt_cached: Some(0.0),
             context_length: 1000,
             thinking: false,
+            models: Vec::new(),
         };
         let store = std::sync::Arc::new(storage::Store::open_in_memory().unwrap());
         store.get_or_create_course("rust").unwrap();
@@ -2474,6 +2512,7 @@ mod home_lines_tests {
                     price_prompt_cached: Some(0.0),
                     context_length: 1000,
                     thinking: false,
+                    models: Vec::new(),
                 })
                 .unwrap(),
             ),
@@ -2489,6 +2528,7 @@ mod home_lines_tests {
                 price_prompt_cached: Some(0.0),
                 context_length: 1000,
                 thinking: false,
+                models: Vec::new(),
             },
             vec![],
             5.0,
@@ -2516,6 +2556,7 @@ mod home_lines_tests {
                     price_prompt_cached: Some(0.0),
                     context_length: 1000,
                     thinking: false,
+                    models: Vec::new(),
                 })
                 .unwrap(),
             ),
@@ -2531,6 +2572,7 @@ mod home_lines_tests {
                 price_prompt_cached: Some(0.0),
                 context_length: 1000,
                 thinking: false,
+                models: Vec::new(),
             },
             vec![],
             5.0,
@@ -2601,6 +2643,7 @@ mod home_lines_tests {
                     price_prompt_cached: Some(0.0),
                     context_length: 1000,
                     thinking: false,
+                    models: Vec::new(),
                 })
                 .unwrap(),
             ),
@@ -2616,6 +2659,7 @@ mod home_lines_tests {
                 price_prompt_cached: Some(0.0),
                 context_length: 1000,
                 thinking: false,
+                models: Vec::new(),
             },
             vec![],
             5.0,

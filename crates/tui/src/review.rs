@@ -824,6 +824,7 @@ async fn live_regression_same_concept() {
         price_completion: Some(16.0),
         context_length: 65536,
         thinking: false,
+        models: Vec::new(),
     };
     let provider = Arc::new(OpenAiClient::new(provider_cfg.clone()).unwrap());
     let quiz_id = store.create_quiz(None, "live-regression").unwrap();

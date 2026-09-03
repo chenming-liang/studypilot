@@ -2,10 +2,59 @@
 
 use agent_providers::ProviderConfig;
 
-/// 模型选择弹窗状态。
+/// 模型选择弹窗中的一行：一个 (provider, model) 可选项。
+pub struct ModelOption {
+    /// provider 名（切换目标）
+    pub provider: String,
+    /// provider 展示名（分组头）
+    pub provider_display: String,
+    /// 模型 id
+    pub model: String,
+    /// 模型展示名
+    pub model_display: String,
+    /// 是否 known pricing（Cost tracking available）
+    pub known_pricing: bool,
+    /// 思考模式
+    pub thinking: bool,
+}
+
+/// 模型选择弹窗状态（全量分组：provider 分组头 + 模型行）。
 pub struct ModelPicker {
-    pub options: Vec<ProviderConfig>,
+    pub options: Vec<ModelOption>,
     pub selected: usize,
+}
+
+impl ModelPicker {
+    /// 从 providers 展开成「provider 分组 + 模型行」扁平行。
+    /// 展示当前选中模型（provider/model 匹配的行）。
+    pub fn from_providers(
+        providers: &[ProviderConfig],
+        current_provider: &str,
+        current_model: &str,
+    ) -> Self {
+        let mut options = Vec::new();
+        let mut selected = 0usize;
+        for pc in providers {
+            for m in pc.models_or_legacy() {
+                let is_current = pc.name == current_provider && m.id == current_model;
+                if is_current {
+                    selected = options.len();
+                }
+                options.push(ModelOption {
+                    provider: pc.name.clone(),
+                    provider_display: pc.name.clone(),
+                    model: m.id.clone(),
+                    model_display: m.display_name().to_string(),
+                    known_pricing: pc.known_pricing(),
+                    thinking: m.thinking,
+                });
+            }
+        }
+        if options.is_empty() {
+            selected = 0;
+        }
+        Self { options, selected }
+    }
 }
 
 /// 面板分组（渲染为组头分隔行；过滤时隐藏）。顺序即显示顺序。
