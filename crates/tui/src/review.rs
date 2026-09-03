@@ -819,9 +819,9 @@ async fn live_regression_same_concept() {
         api_key: std::env::var("DEEPSEEK_API_KEY").ok(),
         api_key_env: Some("DEEPSEEK_API_KEY".into()),
         model: std::env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| "deepseek-reasoner".into()),
-        price_prompt: 4.0,
-        price_prompt_cached: 1.0,
-        price_completion: 16.0,
+        price_prompt: Some(4.0),
+        price_prompt_cached: Some(1.0),
+        price_completion: Some(16.0),
         context_length: 65536,
         thinking: false,
     };

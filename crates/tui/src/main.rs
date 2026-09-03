@@ -23,10 +23,26 @@ use std::sync::{Arc, Mutex};
 async fn main() -> anyhow::Result<()> {
     init_logging()?;
 
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let config_path = args.first().map(String::as_str).unwrap_or("config.toml");
-    let cfg = agent_providers::Config::load(config_path)?;
-    let pc = cfg.default_provider()?.clone();
+    // 运行时配置（产品形态）：优先 ~/.studypilot/config.toml，回退 cwd config.toml。
+    // 缺失/损坏 → 不 crash，进入 App 后由 Settings/Setup 引导配置（文档 §十七）。
+    let config_path = agent_providers::Config::runtime_path()?;
+    let mut config_file = config_path.clone();
+    let cfg = match agent_providers::Config::load(&config_path) {
+        Ok(c) => c,
+        Err(_) if config_path.file_name() == Some("config.toml".as_ref()) && config_path.parent().map(|p| p.ends_with(".studypilot")).unwrap_or(false) => {
+            // ~/.studypilot 不存在 → 回退 cwd（开发者兼容）
+            match agent_providers::Config::load("config.toml") {
+                Ok(c) => {
+                    config_file = std::path::PathBuf::from("config.toml");
+                    c
+                }
+                Err(_) => agent_providers::Config::default(),
+            }
+        }
+        Err(_) => agent_providers::Config::default(),
+    };
+    // 无有效 provider 时，用空占位（Setup/Model 面板可配）；不 crash
+    let pc = cfg.default_provider().cloned().unwrap_or_default();
 
     // D2：DB 操作走 spawn_blocking；这里启动时同步读一次课程列表+统计与累计成本
     let store = Arc::new(storage::Store::open("data/mynotes.db")?);
@@ -61,6 +77,7 @@ async fn main() -> anyhow::Result<()> {
     )?;
     let result = {
         let mut app = app::App::new(client, store, pc, cfg.providers.clone(), max_cost, courses);
+        app.config_file = config_file;
         app.sidebar_course_stats = course_stats;
         // R6：状态栏显示含历史的累计成本，预算熔断按累计值判断
         app.total_cost = recorded_cost;

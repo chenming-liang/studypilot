@@ -113,6 +113,8 @@ pub struct App {
     pub provider_cfg: ProviderConfig,
     /// 全部 provider 配置（/model 切换的候选）
     all_providers: Vec<ProviderConfig>,
+    /// 运行时配置文件路径（main 解析；/model 落盘用）
+    pub config_file: std::path::PathBuf,
     pub courses: Vec<(i64, String)>,
     /// 侧栏课程统计 {course_id: (笔记数, 概念数)}
     pub sidebar_course_stats: std::collections::HashMap<i64, (usize, usize)>,
@@ -427,6 +429,7 @@ impl App {
             store,
             provider_cfg,
             all_providers,
+            config_file: std::path::PathBuf::from("config.toml"),
             max_cost,
             courses,
             sidebar_course_stats: std::collections::HashMap::new(),

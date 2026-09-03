@@ -2,11 +2,11 @@
 
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use agent_core::{Error, Result};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub default_provider: String,
     #[serde(default = "default_max_cost")]
@@ -19,27 +19,64 @@ fn default_max_cost() -> f64 {
     5.0
 }
 
-#[derive(Debug, Clone, Deserialize)]
+impl Default for ProviderConfig {
+    /// 空占位 provider（无有效配置时启动用；Setup/Settings 引导填写）。
+    fn default() -> Self {
+        Self {
+            name: "custom".into(),
+            endpoint: "https://api.openai.com/v1".into(),
+            api_key: None,
+            api_key_env: None,
+            model: "".into(),
+            price_prompt: None,
+            price_completion: None,
+            price_prompt_cached: None,
+            context_length: 8192,
+            thinking: false,
+        }
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            default_provider: "custom".into(),
+            max_cost: default_max_cost(),
+            providers: vec![ProviderConfig::default()],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
     pub name: String,
     pub endpoint: String,
     /// 明文 key（本地 config 文件允许；该文件已被 .gitignore 忽略）。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
     /// 环境变量名引用——优先级低于明文 api_key，避免明文入库的推荐方式。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key_env: Option<String>,
     pub model: String,
-    /// 元 / 百万 token
-    pub price_prompt: f64,
-    pub price_completion: f64,
+    /// 元 / 百万 token（可选：未知模型可运行，Cost tracking unavailable）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_prompt: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_completion: Option<f64>,
     /// 元 / 百万 token（上下文缓存命中部分）；未配置 = 与 price_prompt 同价（保守）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_prompt_cached: Option<f64>,
     #[serde(default)]
-    pub price_prompt_cached: f64,
     pub context_length: u64,
     #[serde(default)]
     pub thinking: bool,
 }
 
 impl ProviderConfig {
+    /// 是否具备已知 pricing（未知模型显示 Cost tracking unavailable，但可正常使用）。
+    pub fn known_pricing(&self) -> bool {
+        self.price_prompt.is_some() && self.price_completion.is_some()
+    }
     /// 解析真实 API key：非空明文 `api_key` 优先，否则读 `api_key_env` 指向的环境变量。
     pub fn resolve_api_key(&self) -> Result<String> {
         if let Some(key) = self.api_key.as_deref().filter(|k| !k.is_empty()) {
@@ -67,6 +104,24 @@ impl Config {
         let text = std::fs::read_to_string(path)
             .map_err(|e| Error::Config(format!("读取 {}: {e}", path.display())))?;
         text.parse()
+    }
+
+    /// 序列化回 TOML（供 /model 写盘 runtime config）。
+    pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
+        let toml = toml::to_string(self).map_err(|e| Error::Config(format!("序列化失败: {e}")))?;
+        std::fs::write(path, toml).map_err(|e| Error::Config(format!("写入 {}: {e}", path.display())))
+    }
+
+    /// 解析运行时配置路径：优先 `~/.studypilot/config.toml`（产品形态），
+    /// 不存在则回退 cwd `config.toml`（开发者兼容）。确保目录存在。
+    pub fn runtime_path() -> Result<std::path::PathBuf> {
+        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            let dir = std::path::PathBuf::from(home).join(".studypilot");
+            let _ = std::fs::create_dir_all(&dir);
+            return Ok(dir.join("config.toml"));
+        }
+        Ok(std::path::PathBuf::from("config.toml"))
     }
 
     fn validate(&self) -> Result<()> {

@@ -533,7 +533,7 @@ impl App {
         self.apply_provider_switch(arg);
     }
 
-    /// 执行 provider 切换：解析 key、构建客户端、替换当前 provider。
+    /// 执行 provider 切换：解析 key、构建客户端、替换当前 provider，并落盘 runtime config。
     pub(crate) fn apply_provider_switch(&mut self, name: &str) {
         let Some(cfg) = self.all_providers.iter().find(|p| p.name == name).cloned() else {
             let names: Vec<&str> = self.all_providers.iter().map(|p| p.name.as_str()).collect();
@@ -547,7 +547,18 @@ impl App {
             Ok(client) => {
                 self.provider = Arc::new(client);
                 let old = self.provider_cfg.name.clone();
-                self.provider_cfg = cfg;
+                self.provider_cfg = cfg.clone();
+                // 持久化默认 provider（runtime config，重启保留；失败不阻断切换）
+                let mut persist = agent_providers::Config {
+                    default_provider: cfg.name.clone(),
+                    max_cost: self.max_cost,
+                    providers: self.all_providers.clone(),
+                };
+                persist.providers.retain(|p| p.name == cfg.name);
+                let path = self.config_file.clone();
+                if let Err(e) = persist.save(&path) {
+                    tracing::warn!("保存 runtime config 失败: {e}");
+                }
                 self.push_entry(Entry::Info(format!(
                     "已从 `{old}` 切换到 `{} │ {}`（思考模式: {}）",
                     self.provider_cfg.name,
@@ -860,9 +871,9 @@ pub(crate) mod course_delete_tests {
             api_key: Some("k".into()),
             api_key_env: None,
             model: "m".into(),
-            price_prompt: 0.0,
-            price_completion: 0.0,
-            price_prompt_cached: 0.0,
+            price_prompt: Some(0.0),
+            price_completion: Some(0.0),
+            price_prompt_cached: Some(0.0),
             context_length: 1000,
             thinking: false,
         };
@@ -928,9 +939,9 @@ mod selection_mapping_tests {
             api_key: Some("k".into()),
             api_key_env: None,
             model: "m".into(),
-            price_prompt: 0.0,
-            price_completion: 0.0,
-            price_prompt_cached: 0.0,
+            price_prompt: Some(0.0),
+            price_completion: Some(0.0),
+            price_prompt_cached: Some(0.0),
             context_length: 1000,
             thinking: false,
         };
@@ -1010,9 +1021,9 @@ mod onboarding_tests {
             api_key: Some("k".into()),
             api_key_env: None,
             model: "m".into(),
-            price_prompt: 0.0,
-            price_completion: 0.0,
-            price_prompt_cached: 0.0,
+            price_prompt: Some(0.0),
+            price_completion: Some(0.0),
+            price_prompt_cached: Some(0.0),
             context_length: 1000,
             thinking: false,
         };
@@ -1478,9 +1489,9 @@ mod course_context_tests {
             api_key: Some("k".into()),
             api_key_env: None,
             model: "m".into(),
-            price_prompt: 0.0,
-            price_completion: 0.0,
-            price_prompt_cached: 0.0,
+            price_prompt: Some(0.0),
+            price_completion: Some(0.0),
+            price_prompt_cached: Some(0.0),
             context_length: 1000,
             thinking: false,
         };
@@ -1548,9 +1559,9 @@ mod course_context_tests {
             api_key: Some("k".into()),
             api_key_env: None,
             model: "m".into(),
-            price_prompt: 0.0,
-            price_completion: 0.0,
-            price_prompt_cached: 0.0,
+            price_prompt: Some(0.0),
+            price_completion: Some(0.0),
+            price_prompt_cached: Some(0.0),
             context_length: 1000,
             thinking: false,
         };
@@ -1598,9 +1609,9 @@ mod course_context_tests {
             api_key: Some("k".into()),
             api_key_env: None,
             model: "m".into(),
-            price_prompt: 0.0,
-            price_completion: 0.0,
-            price_prompt_cached: 0.0,
+            price_prompt: Some(0.0),
+            price_completion: Some(0.0),
+            price_prompt_cached: Some(0.0),
             context_length: 1000,
             thinking: false,
         };
@@ -1658,9 +1669,9 @@ mod course_context_tests {
             api_key: Some("k".into()),
             api_key_env: None,
             model: "m".into(),
-            price_prompt: 0.0,
-            price_completion: 0.0,
-            price_prompt_cached: 0.0,
+            price_prompt: Some(0.0),
+            price_completion: Some(0.0),
+            price_prompt_cached: Some(0.0),
             context_length: 1000,
             thinking: false,
         };
@@ -1698,9 +1709,9 @@ mod course_context_tests {
             api_key: Some("k".into()),
             api_key_env: None,
             model: "m".into(),
-            price_prompt: 0.0,
-            price_completion: 0.0,
-            price_prompt_cached: 0.0,
+            price_prompt: Some(0.0),
+            price_completion: Some(0.0),
+            price_prompt_cached: Some(0.0),
             context_length: 1000,
             thinking: false,
         };
