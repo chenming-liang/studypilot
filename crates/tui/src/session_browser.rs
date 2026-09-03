@@ -29,13 +29,15 @@ pub struct SessionBrowser {
     /// 异步搜索序号
     pub search_seq: u64,
     pub loading: bool,
+    /// 当前课程范围（文档 §9：默认只显示当前课程的会话；None = 全部）
+    pub scope_course: Option<i64>,
 }
 
 /// 弹窗内列表可视行数（height 20 - 边框 2 - 余量）
 pub const SESSION_LIST_VISIBLE: usize = 15;
 
 impl SessionBrowser {
-    pub fn new() -> Self {
+    pub fn new(scope_course: Option<i64>) -> Self {
         Self {
             mode: SessionBrowserMode::Search,
             results: Vec::new(),
@@ -45,6 +47,7 @@ impl SessionBrowser {
             rename_old: String::new(),
             search_seq: 0,
             loading: true,
+            scope_course,
         }
     }
 
@@ -105,7 +108,7 @@ mod tests {
 
     #[test]
     fn cursor_visibility_alignment() {
-        let mut b = SessionBrowser::new();
+        let mut b = SessionBrowser::new(None);
         b.results = (0..30).map(|i| meta(i, "s")).collect();
         b.cursor = 25;
         b.ensure_cursor_visible(SESSION_LIST_VISIBLE);

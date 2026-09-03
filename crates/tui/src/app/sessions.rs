@@ -452,12 +452,13 @@ impl App {
         let seq = b.next_search_seq();
         b.loading = true;
         let query = self.input.clone();
+        let scope_course = b.scope_course;
         let store = Arc::clone(&self.store);
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = spawn_blocking(move || {
                 store
-                    .search_sessions(&query, 200)
+                    .search_sessions(&query, scope_course, 200)
                     .map_err(|e| e.to_string())
             })
             .await

@@ -1085,23 +1085,33 @@ impl Store {
 }
 
 impl Store {
-    /// 会话浏览器：按标题搜索（空串=全部），按 id 倒序（新会话在前）。
-    pub fn search_sessions(&self, query: &str, limit: usize) -> Result<Vec<SessionMeta>> {
+    /// 会话浏览器：按标题搜索（空串=全部）+ 可选课程范围（None=全部课程），
+    /// 按 id 倒序（新会话在前）。默认按当前课程过滤（文档 §9：不跨课混在一起）。
+    pub fn search_sessions(
+        &self,
+        query: &str,
+        course_id: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<SessionMeta>> {
         let conn = self.conn.lock().unwrap();
         let pattern = format!("%{}%", query);
         let mut stmt = conn.prepare(
             "SELECT id, title, course_id, created_at FROM sessions
              WHERE COALESCE(title, '') LIKE ?1
-             ORDER BY id DESC LIMIT ?2",
+               AND (?2 IS NULL OR course_id = ?2)
+             ORDER BY id DESC LIMIT ?3",
         )?;
-        let rows = stmt.query_map(rusqlite::params![pattern, limit as i64], |r| {
-            Ok(SessionMeta {
-                id: r.get(0)?,
-                title: r.get(1)?,
-                course_id: r.get(2)?,
-                created_at: r.get(3)?,
-            })
-        })?;
+        let rows = stmt.query_map(
+            rusqlite::params![pattern, course_id, limit as i64],
+            |r| {
+                Ok(SessionMeta {
+                    id: r.get(0)?,
+                    title: r.get(1)?,
+                    course_id: r.get(2)?,
+                    created_at: r.get(3)?,
+                })
+            },
+        )?;
         Ok(rows.flatten().collect())
     }
 

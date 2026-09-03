@@ -106,9 +106,10 @@ impl App {
             "/model" => self.handle_model_command(arg.trim()),
             "/new" => self.start_new_session(),
             "/sessions" => {
-                // 打开会话浏览器（搜索/恢复/重命名/删除）
+                // 打开会话浏览器（搜索/恢复/重命名/删除）；默认只显示当前课程（文档 §9）
                 self.take_input_for_overlay();
-                self.session_browser = Some(crate::session_browser::SessionBrowser::new());
+                self.session_browser =
+                    Some(crate::session_browser::SessionBrowser::new(self.current_course_id()));
                 self.session_browser_search();
             }
             "/open" => match arg.trim().parse::<i64>() {
@@ -116,7 +117,8 @@ impl App {
                 Err(_) if arg.trim().is_empty() => {
                     // 无参 = 打开会话浏览器（与 /sessions 同一入口）
                     self.take_input_for_overlay();
-                    self.session_browser = Some(crate::session_browser::SessionBrowser::new());
+                    self.session_browser =
+                        Some(crate::session_browser::SessionBrowser::new(self.current_course_id()));
                     self.session_browser_search();
                 }
                 Err(_) => self.push_entry(Entry::Error(
