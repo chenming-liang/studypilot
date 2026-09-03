@@ -30,9 +30,9 @@ pub use crate::wizard::Wizard;
 /// 上次所在课程持久化（仿 data/budget.json 模式，无 schema 变更）。
 pub(crate) const LAST_COURSE_PATH: &str = "data/last_course.json";
 
-/// 测试可覆盖持久化路径（并行单测隔离 data/last_course.json，防写竞争）。
-/// 单个共享 thread_local：setter 与 resolver 必须引用同一 static（写在不同函数体
-/// 里会各生成一份，override 永不生效）。
+// 测试可覆盖持久化路径（并行单测隔离 data/last_course.json，防写竞争）。
+// 单个共享 thread_local：setter 与 resolver 必须引用同一 static（写在不同函数体
+// 里会各生成一份，override 永不生效）。
 #[cfg(test)]
 thread_local! {
     static LAST_COURSE_OVERRIDE: std::cell::RefCell<Option<String>> =
@@ -116,6 +116,9 @@ pub struct App {
     pub course_cursor: usize,
     /// Course 视图需巩固概念数缓存 {course_id: weak}（进入 Course 时异步刷新）
     pub weak_stats: std::collections::HashMap<i64, usize>,
+    /// Home 发起创建课程：向导完成且创建成功 → 直达新课程 Course workspace。
+    /// （Session 内 /course -new 不置位，避免把聊天中的用户拽走）
+    pub pending_course_enter: bool,
 
     pub total_usage: Usage,
     pub total_cost: f64,
@@ -410,6 +413,7 @@ impl App {
             home_cursor: 0,
             course_cursor: 0,
             weak_stats: std::collections::HashMap::new(),
+            pending_course_enter: false,
             total_usage: Usage::default(),
             total_cost: 0.0,
             session_cost: 0.0,
@@ -717,9 +721,11 @@ impl App {
         }
     }
 
-    /// 打开 `/course -new` 创建向导（Home「+ New Course」入口）。
+    /// 打开 `/course -new` 创建向导（Home「+ New Course」与命令面板共用入口）。
+    /// 对话框是模态覆盖层，直接叠在当前 workspace 上弹出——不再先切到 Session。
+    /// 若从 Home 发起（workspace==Home），记 pending_course_enter：创建成功直达新课程 Course 页。
     pub(crate) fn open_course_creation_wizard(&mut self) {
-        self.enter_session_workspace();
+        self.pending_course_enter = self.workspace == Workspace::Home;
         self.wizard = Some(crate::wizard::Wizard::new_for(
             crate::wizard::WizardKind::CreateCourse,
             "新建课程",

@@ -792,6 +792,9 @@ impl App {
                     .filter(|s| !s.is_empty())
                 {
                     self.create_course_flow(name);
+                } else {
+                    // 空名不发起流程：清掉 Home 创建标志，避免残留
+                    self.pending_course_enter = false;
                 }
             }
             WizardKind::BudgetLimit => {

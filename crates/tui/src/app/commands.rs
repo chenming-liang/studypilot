@@ -656,6 +656,18 @@ impl App {
                 }
                 // 课程创建/切换/删除后，Home 光标必须跟随当前课程（否则 Enter 进旧课）
                 self.sync_home_cursor_to_course();
+                // 从 Home 发起创建课程：创建成功 → 直达新课程 Course workspace
+                // （见 Course 动作菜单：New conversation / Outline / Review Map / Import）
+                if self.pending_course_enter {
+                    self.pending_course_enter = false;
+                    if let Some(c) = entered.as_deref()
+                        && c != "all"
+                    {
+                        self.request_courses_refresh();
+                        self.enter_course_workspace(c);
+                        return;
+                    }
+                }
                 self.request_courses_refresh();
                 self.push_entry(Entry::Info(msg));
                 self.sync_session_course();
@@ -1330,11 +1342,11 @@ mod onboarding_tests {
 
     #[tokio::test]
     async fn home_new_course_opens_creation_wizard() {
-        // 光标到 [+ New Course]（末尾）→ 打开创建向导（Session workspace）
+        // 光标到 [+ New Course]（末尾）→ 打开创建向导（对话框直接叠在 Home 上）
         let mut app = app_with_courses();
         app.home_cursor = app.home_cursor_count() - 1;
         app.home_activate();
-        assert_eq!(app.workspace, crate::app::Workspace::Session);
+        assert_eq!(app.workspace, crate::app::Workspace::Home);
         assert!(app.wizard.is_some(), "应打开课程创建向导");
     }
 }
@@ -1494,7 +1506,7 @@ mod course_context_tests {
         assert_eq!(app.course, "pytorch", "Session 上下文应为 pytorch");
     }
 
-    /// Home 光标在「+ New Course」创建，向导完成后的 workspace/course 状态。
+    /// Home 光标在「+ New Course」创建：向导直接叠在 Home 上，创建成功直达新课程 Course 页。
     #[tokio::test]
     async fn create_via_home_wizard_then_enter_keeps_context() {
         let cfg = agent_providers::ProviderConfig {
@@ -1523,13 +1535,13 @@ mod course_context_tests {
         app.course = "rust".into();
         assert_eq!(app.workspace, Workspace::Home);
 
-        // Home 光标到末尾 [+ New Course] → Enter 打开创建向导
+        // Home 光标到末尾 [+ New Course] → Enter：对话框直接叠在 Home 上（不进 Session）
         app.home_cursor = app.home_cursor_count() - 1;
         app.home_activate();
         assert_eq!(
             app.workspace,
-            Workspace::Session,
-            "向导在 Session workspace"
+            Workspace::Home,
+            "创建向导不应切到 Session，直接叠在 Home"
         );
         assert!(app.wizard.is_some());
         // 填向导课程名并完成
@@ -1540,22 +1552,57 @@ mod course_context_tests {
         assert_eq!(app.course, "pytorch", "创建后当前课程应为 pytorch");
         assert_eq!(
             app.workspace,
-            Workspace::Session,
-            "创建后仍在 Session（向导启动时切入）"
+            Workspace::Course,
+            "从 Home 创建成功 → 直达新课程 Course 页（New conversation/Outline 等立即可用）"
         );
 
-        // Esc 回退 → Course(pytorch)；再 Esc → Home；Home 光标应指向 pytorch 再进入
+        // Course 页里 New conversation → Session；Esc 回退回 Course
+        app.course_cursor = 0;
+        app.course_activate();
+        assert_eq!(app.workspace, Workspace::Session);
+        assert_eq!(app.course, "pytorch");
         app.go_back();
         assert_eq!(app.workspace, Workspace::Course, "Session→Course");
         assert_eq!(app.course, "pytorch", "Course 应为 pytorch");
-        app.go_back();
-        assert_eq!(app.workspace, Workspace::Home, "Course→Home");
-        // Home 光标应落在 pytorch（新课程），Enter 直接进 Course(pytorch)
-        app.home_cursor = 1;
-        app.home_activate();
+    }
+
+    /// Session 内用命令面板建课程：不被拽走，留在 Session。
+    #[tokio::test]
+    async fn create_from_session_stays_in_session() {
+        let cfg = agent_providers::ProviderConfig {
+            name: "test".into(),
+            endpoint: "http://localhost".into(),
+            api_key: Some("k".into()),
+            api_key_env: None,
+            model: "m".into(),
+            price_prompt: 0.0,
+            price_completion: 0.0,
+            price_prompt_cached: 0.0,
+            context_length: 1000,
+            thinking: false,
+        };
+        let store = Arc::new(Store::open_in_memory().unwrap());
+        store.get_or_create_course("rust").unwrap();
+        let client = Arc::new(OpenAiClient::new(cfg.clone()).unwrap());
+        let mut app = App::new(
+            client,
+            store,
+            cfg.clone(),
+            vec![cfg],
+            5.0,
+            vec![(1, "rust".into())],
+        );
+        app.course = "rust".into();
+        app.enter_session_workspace();
+        app.input = "/course -new pytorch".into();
+        app.submit();
         settle_full(&mut app).await;
-        assert_eq!(app.workspace, Workspace::Course);
-        assert_eq!(app.course, "pytorch", "再次进入仍为 pytorch");
+        assert_eq!(app.course, "pytorch", "创建后当前课程应为 pytorch");
+        assert_eq!(
+            app.workspace,
+            Workspace::Session,
+            "Session 内建课不切换 workspace"
+        );
     }
 
     /// 回归：Home 创建 csapp 后光标停在原位直接 Enter，必须进入 csapp 而非 rust。

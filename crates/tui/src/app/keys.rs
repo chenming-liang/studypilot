@@ -929,6 +929,11 @@ impl App {
                         ));
                         return;
                     }
+                    if kind == crate::wizard::WizardKind::CreateCourse {
+                        // 与 Home「+ New Course」共用入口：记录是否从 Home 发起
+                        self.open_course_creation_wizard();
+                        return;
+                    }
                     self.wizard = Some(Wizard::new_for(kind, title, prompt));
                     self.enter_wizard_step();
                     return;
@@ -1084,6 +1089,7 @@ impl App {
                     }
                     None => {
                         self.wizard = None;
+                        self.pending_course_enter = false;
                         self.restore_input_backup();
                     }
                 }
