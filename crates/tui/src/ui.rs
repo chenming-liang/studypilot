@@ -184,18 +184,7 @@ fn home_lines(app: &App) -> Vec<Line<'static>> {
         )));
         lines.push(Line::default());
         lines.push(Line::default());
-        let selected = app.home_cursor == 0;
-        lines.push(Line::from(vec![
-            Span::styled(if selected { "● " } else { "  " }, Style::new().fg(ACCENT)),
-            Span::styled(
-                "+ New Course",
-                if selected {
-                    Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::new().fg(theme::FG)
-                },
-            ),
-        ]));
+        lines.push(button_line("[ + New Course ]", app.home_cursor == 0));
         return lines;
     }
 
@@ -204,16 +193,17 @@ fn home_lines(app: &App) -> Vec<Line<'static>> {
     if let Some((_, course, title)) = app.continue_session() {
         let title = session_display_title(Some(&title));
         let selected = app.home_cursor == idx;
-        let mark = if selected { "● " } else { "  " };
         lines.push(Line::from(Span::styled(
             "Continue learning",
             Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
         )));
+        lines.push(home_divider());
         lines.push(Line::default());
+        // 课程名 + 会话标题分行（mockup：Rust / Ownership & Borrowing）
         lines.push(Line::from(vec![
-            Span::styled(mark, Style::new().fg(ACCENT)),
+            Span::styled(if selected { "● " } else { "  " }, Style::new().fg(ACCENT)),
             Span::styled(
-                format!("{course} · {title}"),
+                course,
                 if selected {
                     Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
                 } else {
@@ -222,15 +212,17 @@ fn home_lines(app: &App) -> Vec<Line<'static>> {
             ),
         ]));
         lines.push(Line::from(Span::styled(
+            format!("  {title}"),
+            Style::new().fg(theme::FG),
+        )));
+        lines.push(Line::from(Span::styled(
             format!("  {}", last_studied(app)),
             Style::new().fg(DIM),
         )));
         lines.push(Line::default());
-        lines.push(Line::from(Span::styled(
-            "  Continue →",
-            Style::new().fg(if selected { ACCENT } else { theme::MUTED }),
-        )));
+        lines.push(button_line("[ Continue ]", selected));
         lines.push(Line::default());
+        lines.push(home_divider());
         lines.push(Line::default());
         idx += 1;
     } else {
@@ -239,12 +231,14 @@ fn home_lines(app: &App) -> Vec<Line<'static>> {
             "Start learning",
             Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
         )));
+        lines.push(home_divider());
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(
             "Choose a course to begin.",
             Style::new().fg(theme::FG),
         )));
         lines.push(Line::default());
+        lines.push(home_divider());
         lines.push(Line::default());
     }
 
@@ -270,7 +264,7 @@ fn home_lines(app: &App) -> Vec<Line<'static>> {
         ]));
         if let Some((n, c)) = app.sidebar_course_stats.get(cid) {
             lines.push(Line::from(Span::styled(
-                format!("    {n} notes · {c} concepts"),
+                format!("   {n} notes · {c} concepts"),
                 Style::new().fg(DIM),
             )));
         }
@@ -279,23 +273,32 @@ fn home_lines(app: &App) -> Vec<Line<'static>> {
     }
 
     // ── TERTIARY：New Course ──
-    let new_selected = app.home_cursor == idx;
-    lines.push(Line::from(vec![
-        Span::styled(
-            if new_selected { "● " } else { "  " },
-            Style::new().fg(ACCENT),
-        ),
-        Span::styled(
-            "+ New Course",
-            if new_selected {
-                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
-            } else {
-                Style::new().fg(theme::FG)
-            },
-        ),
-    ]));
+    lines.push(button_line("[ + New Course ]", app.home_cursor == idx));
 
     lines
+}
+
+/// Home 区块分隔线（mockup 的 `──────`）。
+fn home_divider() -> Line<'static> {
+    Line::from(Span::styled(
+        "────────────────────────────",
+        Style::new().fg(DIM),
+    ))
+}
+
+/// 括弧按钮行（mockup 的 `[ Continue ]` / `[ + New Course ]`）。
+fn button_line(label: &'static str, selected: bool) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("  ", Style::new().fg(DIM)),
+        Span::styled(
+            label,
+            if selected {
+                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+            } else {
+                Style::new().fg(theme::MUTED)
+            },
+        ),
+    ])
 }
 
 /// "Last studied …" 相对时间（sessions.created_at，SQLite UTC datetime）。
@@ -2243,7 +2246,7 @@ mod home_lines_tests {
         let text = flatten(&home_lines(&app)).join("\n");
         assert!(text.contains("Ownership & Borrowing"), "显示人类可读标题");
         assert!(!text.contains("#26"), "不显示 session ID");
-        assert!(text.contains("Continue →"));
+        assert!(text.contains("[ Continue ]"), "显示 Continue 按钮");
         assert!(text.contains("Last studied"), "显示相对时间");
     }
 
