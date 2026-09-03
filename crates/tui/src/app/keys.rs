@@ -965,7 +965,7 @@ impl App {
         let (title, items) = match kind {
             K::CourseSwitch => {
                 let mut items = vec![ListChoice {
-                    label: "all（全部）".into(),
+                    label: "全部课程（跨课搜索范围）".into(),
                     command: "/course all".into(),
                     action: Some(A::SwitchCourse(None)),
                 }];

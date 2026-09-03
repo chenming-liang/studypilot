@@ -1101,17 +1101,14 @@ impl Store {
                AND (?2 IS NULL OR course_id = ?2)
              ORDER BY id DESC LIMIT ?3",
         )?;
-        let rows = stmt.query_map(
-            rusqlite::params![pattern, course_id, limit as i64],
-            |r| {
-                Ok(SessionMeta {
-                    id: r.get(0)?,
-                    title: r.get(1)?,
-                    course_id: r.get(2)?,
-                    created_at: r.get(3)?,
-                })
-            },
-        )?;
+        let rows = stmt.query_map(rusqlite::params![pattern, course_id, limit as i64], |r| {
+            Ok(SessionMeta {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                course_id: r.get(2)?,
+                created_at: r.get(3)?,
+            })
+        })?;
         Ok(rows.flatten().collect())
     }
 

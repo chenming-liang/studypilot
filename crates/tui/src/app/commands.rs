@@ -70,34 +70,35 @@ impl App {
         match cmd.as_str() {
             "/help" => {
                 for l in [
-                    "我能做什么？",
+                    "StudyPilot — Quick Guide",
                     "",
-                    "【学习】直接打字提问即可，无需命令",
-                    "  例: \"解释一下虚拟内存\"  \"这里为什么必须用 mutex\"",
-                    "  回答策略: 笔记优先并标注 [n] 引用；笔记没写的会用",
-                    "  自身知识补充并明示「（笔记外补充）」",
+                    "Home",
+                    "  Choose a course → Enter",
+                    "  Continue learning → Enter",
+                    "  New course → + New Course",
                     "",
-                    "【知识库】",
-                    "  /import --dir <路径> [--course 名]  批量导入 md/pdf/pptx",
-                    "  /notes                        浏览与管理笔记（搜索·多选·移动·删除）",
-                    "  /delete --id <id> | /delete --course <名>  删除笔记",
-                    "  /move --id <id> --course <名>  移动笔记",
-                    "  /course <课程|all>            切换分区；-new/-delete 管理",
+                    "Course",
+                    "  New Conversation    /new",
+                    "  Review             /review",
+                    "  Review Map         /review-map",
+                    "  Outline            /outline",
+                    "  Materials          /notes",
+                    "  Import             /import",
                     "",
-                    "【复习】",
-                    "  /review --course <名> [--concept <概念>] [--n 数量]",
-                    "    出题（选择+简答，掌握度低优先）；无参 /review 走向导",
-                    "  /review-map                   复习地图：选知识点开复习",
+                    "Session",
+                    "  Ask questions (type directly)",
+                    "  Rename session     /rename",
+                    "  Export             /export",
                     "",
-                    "【大纲】",
-                    "  /outline [课程] [--export]    生成课程知识大纲（复习地图）",
+                    "Shortcuts",
+                    "  Ctrl+K  Command Palette (search all actions)",
+                    "  ↑↓      Navigate",
+                    "  Enter   Open / activate",
+                    "  Esc     Back / quit (Home)",
+                    "  d       Delete (Home course)",
+                    "  Ctrl+C  Interrupt / quit",
                     "",
-                    "【系统】",
-                    "  /model 切换模型 · /budget 预算 · /new /sessions /open /rename 会话",
-                    "  /export /load 会话导出导入 · /course -new/-delete 分区管理",
-                    "",
-                    "快捷键: Ctrl+K 查看全部命令（支持过滤与参数向导）",
-                    "        鼠标拖选复制 · Ctrl+C 中断/退出 · Ctrl+Q 强退",
+                    "Type / to open the command palette.",
                 ] {
                     self.push_entry(Entry::Info(l.into()));
                 }
@@ -108,8 +109,9 @@ impl App {
             "/sessions" => {
                 // 打开会话浏览器（搜索/恢复/重命名/删除）；默认只显示当前课程（文档 §9）
                 self.take_input_for_overlay();
-                self.session_browser =
-                    Some(crate::session_browser::SessionBrowser::new(self.current_course_id()));
+                self.session_browser = Some(crate::session_browser::SessionBrowser::new(
+                    self.current_course_id(),
+                ));
                 self.session_browser_search();
             }
             "/open" => match arg.trim().parse::<i64>() {
@@ -117,8 +119,9 @@ impl App {
                 Err(_) if arg.trim().is_empty() => {
                     // 无参 = 打开会话浏览器（与 /sessions 同一入口）
                     self.take_input_for_overlay();
-                    self.session_browser =
-                        Some(crate::session_browser::SessionBrowser::new(self.current_course_id()));
+                    self.session_browser = Some(crate::session_browser::SessionBrowser::new(
+                        self.current_course_id(),
+                    ));
                     self.session_browser_search();
                 }
                 Err(_) => self.push_entry(Entry::Error(
@@ -126,7 +129,37 @@ impl App {
                 )),
             },
             "/export" => self.export_session(),
-            "/rename" => self.rename_session(arg.trim()),
+            "/rename" => match self.workspace {
+                crate::app::Workspace::Course => {
+                    if arg.trim().is_empty() {
+                        self.take_input_for_overlay();
+                        self.wizard = Some(crate::wizard::Wizard::new_for(
+                            crate::wizard::WizardKind::RenameCourse,
+                            "重命名课程",
+                            "新课程名",
+                        ));
+                        self.enter_wizard_step();
+                    } else {
+                        self.rename_course(arg.trim());
+                    }
+                }
+                crate::app::Workspace::Session => {
+                    if arg.trim().is_empty() {
+                        self.take_input_for_overlay();
+                        self.wizard = Some(crate::wizard::Wizard::new_for(
+                            crate::wizard::WizardKind::RenameSession,
+                            "重命名会话",
+                            "新标题",
+                        ));
+                        self.enter_wizard_step();
+                    } else {
+                        self.rename_session(arg.trim());
+                    }
+                }
+                crate::app::Workspace::Home => {
+                    self.push_entry(Entry::Error("请先进入课程或会话再重命名".into()));
+                }
+            },
             "/load" => {
                 if arg.trim().is_empty() {
                     self.push_entry(Entry::Error("用法: /load <导出的 JSON 文件路径>".into()));
