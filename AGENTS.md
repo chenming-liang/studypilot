@@ -84,7 +84,7 @@ cargo test --workspace
 - 课程上下文**单一事实源** = `app.course`，`home_cursor`/侧栏/session 全部从它派生（`sync_home_cursor_to_course`）；New Course 对话框直接叠 Home，建完直达 Course 页（`pending_course_enter`）
 - **per-course 分区（§32）**：`Partition{history,entries,session_state,session_cost,scroll_up}` 按课缓存，`swap_course_partition` 五处切换点换入换出——聊天/错误/花费不串课
 - **命令入口统一 Ctrl+K**（Home/Course 不再任意键入开面板，普通键入不弹窗）
-- **First-run AI Setup Wizard（文档）**：`App::setup` 覆盖层状态机（Provider→Model→Credentials→Test→Done），Home 无 AI 配置时首个可聚焦项「Set up AI」Enter 进入；API key 遮罩输入、Test 成功才保存 runtime config（pending 不覆盖有效配置）、Esc 逐级回退；连接测试复用 `/test` 的 canonical `run_connection_test`（SetupTestDone 事件）
+- **First-run AI Setup Wizard（文档）**：`App::setup` 覆盖层状态机（Provider→Model→Credentials→Test→Done），Home 无 AI 配置时首个可聚焦项「Set up AI」Enter 进入；API key 遮罩输入、Test 成功才保存 runtime config（pending 不覆盖有效配置）、Esc 逐级回退；连接测试复用 `/test` 的 canonical `run_connection_test`（SetupTestDone 事件）；`home_lines` 索引含 `setup_offset`（Setup 恒占 0，与 home_cursor_count/home_activate/home_cursor_course 一致），Set up AI 与 + New Course 高亮互斥
 - **Provider incomplete ≠ config invalid**：`OpenAiClient::new` 容忍缺 key（请求时才报可操作错误），缺 key 的独立 binary 正常启动进 Home + AI 引导（E2E 复现）
 - **产品化（productization，Phase 3-6）**：pricing 可选化（`ProviderConfig.price_*` → `Option<f64>`、`known_pricing()`，未知模型 Cost tracking unavailable 可正常运行）；Runtime Config（`Config::save`/`runtime_path`，main 优先 ~/.studypilot/config.toml 回退 cwd、缺失/损坏不 crash 用 default，/model 切换落盘）；Model Registry（`providers::registry`：DeepSeek/GLM/OpenAI 预设 + custom_provider）；AI Setup（`App::ai_needs_setup()` Home 引导 + `/test` 连接测试）
 - **同一能力三入口一个实现**：Home/Course UI、Ctrl+K Palette、/slash CLI 都调 canonical action（`open_import_wizard`/`switch_course`/`rename_course`/`ListChoiceAction`），UI 不拼命令字符串

@@ -153,7 +153,9 @@ fn home_lines(app: &App) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = vec![Line::default(), Line::default(), Line::default()];
     // 顶部留白（垂直重心偏上，不用真居中）
 
-    // AI 待配置引导（文档 §二/§九：无有效配置时 Set up AI 为首个可聚焦项）
+    // AI 待配置引导（文档 §二/§九：无有效配置时 Set up AI 为首个可聚焦项）。
+    // 索引语义与 home_cursor_count/home_activate 一致：Setup 恒占位 0，其余内容顺延。
+    let setup_offset = if app.ai_needs_setup() { 1 } else { 0 };
     if app.ai_needs_setup() {
         let selected = app.home_cursor == 0;
         lines.push(Line::from(vec![
@@ -209,12 +211,15 @@ fn home_lines(app: &App) -> Vec<Line<'static>> {
         )));
         lines.push(Line::default());
         lines.push(Line::default());
-        lines.push(button_line("[ + New Course ]", app.home_cursor == 0));
+        lines.push(button_line(
+            "[ + New Course ]",
+            app.home_cursor == setup_offset,
+        ));
         return lines;
     }
 
     // ── PRIMARY：Continue learning（首页第一视觉焦点）──
-    let mut idx = 0usize;
+    let mut idx = setup_offset;
     if let Some((_, course, title)) = app.continue_session() {
         let title = session_display_title(Some(&title));
         let selected = app.home_cursor == idx;
@@ -2483,6 +2488,88 @@ mod home_lines_tests {
         assert!(text.contains("Create a course to get started."));
         assert!(text.contains("+ New Course"));
         assert!(!text.contains("Your courses"), "空库不显示课程区");
+    }
+
+    /// 回归：AI 待配置（首启）时，「Set up AI」与「+ New Course」索引互斥——光标只高亮一项。
+    fn app_needs_setup() -> App {
+        App::new(
+            std::sync::Arc::new(
+                agent_providers::OpenAiClient::new(agent_providers::ProviderConfig {
+                    name: "t".into(),
+                    endpoint: "http://localhost".into(),
+                    api_key: None,
+                    api_key_env: None,
+                    model: "m".into(),
+                    price_prompt: Some(0.0),
+                    price_completion: Some(0.0),
+                    price_prompt_cached: Some(0.0),
+                    context_length: 1000,
+                    thinking: false,
+                })
+                .unwrap(),
+            ),
+            std::sync::Arc::new(storage::Store::open_in_memory().unwrap()),
+            agent_providers::ProviderConfig {
+                name: "t".into(),
+                endpoint: "http://localhost".into(),
+                api_key: None,
+                api_key_env: None,
+                model: "m".into(),
+                price_prompt: Some(0.0),
+                price_completion: Some(0.0),
+                price_prompt_cached: Some(0.0),
+                context_length: 1000,
+                thinking: false,
+            },
+            vec![],
+            5.0,
+            vec![],
+        )
+    }
+
+    fn line_text(l: &Line<'static>) -> String {
+        l.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    fn selected_lines(lines: &[Line<'static>]) -> Vec<String> {
+        lines
+            .iter()
+            .filter(|l| {
+                l.spans.iter().any(|s| {
+                    s.style.fg == Some(ACCENT) && s.style.add_modifier.contains(Modifier::BOLD)
+                })
+            })
+            .map(line_text)
+            .collect()
+    }
+
+    #[test]
+    fn home_setup_and_new_course_highlight_are_exclusive() {
+        let app = app_needs_setup();
+        assert!(app.ai_needs_setup(), "前置：无 key 需要 Setup");
+        // 光标在 Set up AI（0）→ 只有 Setup 高亮，New Course 不亮
+        let sel0 = selected_lines(&home_lines(&app));
+        assert!(
+            sel0.iter().any(|t| t.contains("Set up AI")),
+            "光标 0 高亮 Setup"
+        );
+        assert!(
+            sel0.iter().all(|t| !t.contains("New Course")),
+            "光标 0 时 New Course 不得同时高亮，实际: {sel0:?}"
+        );
+        // 光标在 New Course（setup_offset=1）→ 只有 New Course 高亮
+        let mut app1 = app_needs_setup();
+        app1.home_cursor = 1;
+        assert_eq!(app1.home_cursor_count(), 2, "Setup + New Course 共 2 项");
+        let sel1 = selected_lines(&home_lines(&app1));
+        assert!(
+            sel1.iter().any(|t| t.contains("New Course")),
+            "光标 1 高亮 New Course"
+        );
+        assert!(
+            sel1.iter().all(|t| !t.contains("Set up AI")),
+            "光标 1 时 Set up AI 不得同时高亮，实际: {sel1:?}"
+        );
     }
 
     /// 人工检查：三态 Home 的实际渲染文本（headless 无法截图，用纯函数输出核对）。
