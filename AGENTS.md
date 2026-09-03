@@ -90,3 +90,4 @@ cargo test --workspace
 **待办**：
 - [ ] M9 网页导入（已排期）：`/add-url <url> [--course x]`——reqwest 抓取 → readability/htmd 正文提取（保留标题层级与代码块）→ 转 RawDoc 复用现有管线；notes 表加 `source_url` 列，schema.sql 先改 DDL 再写迁移（SCHEMA_VERSION 3→4，迁移需兼容曾被 Web 版升到 5 的库）；内容 hash 幂等去重；本地快照优先（存提取正文，防链接失效）；只抓单页不爬站；抓取失败明确报错不静默丢；SPA 页面提取差为已知局限，文档如实标注。schema 变更，走分支。
 - [ ] 收口会话㉟ 收尾待办：`refactor/command-integration` 分支跑真实 TUI 回归（headless 无法截图）→ 合回 main；palette fuzzy search（当前 substring）可后续增强；Home/Course 鼠标点击仍未支持
+- [x] 收口会话㉟ 附：Home 首屏对齐 Agent项目改进建议.md mockup——区块分隔线（`──────`）、Continue learning 内课程名/会话标题分行、`[ Continue ]` 按钮化、`[ + New Course ]` 括弧样式（纯 home_lines 渲染，光标/导航/分区逻辑不变）
