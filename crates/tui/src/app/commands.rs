@@ -546,6 +546,7 @@ impl App {
             }
             CourseAction::Switch(name) => {
                 self.course = name.clone();
+                self.sync_home_cursor_to_course();
                 self.sync_session_course();
                 self.push_entry(Entry::Info(format!("已切换到课程: {name}")));
                 persist_last_course(&name);
@@ -575,6 +576,7 @@ impl App {
                 match found {
                     Some(name) => {
                         self.course = name.clone();
+                        self.sync_home_cursor_to_course();
                         self.sync_session_course();
                         self.push_entry(Entry::Info(format!("已切换到课程: {name}")));
                         persist_last_course(&name);
@@ -652,6 +654,8 @@ impl App {
                 if let Some(c) = switch_to {
                     self.course = c;
                 }
+                // 课程创建/切换/删除后，Home 光标必须跟随当前课程（否则 Enter 进旧课）
+                self.sync_home_cursor_to_course();
                 self.request_courses_refresh();
                 self.push_entry(Entry::Info(msg));
                 self.sync_session_course();
@@ -1332,5 +1336,275 @@ mod onboarding_tests {
         app.home_activate();
         assert_eq!(app.workspace, crate::app::Workspace::Session);
         assert!(app.wizard.is_some(), "应打开课程创建向导");
+    }
+}
+
+#[cfg(test)]
+mod course_context_tests {
+    use super::*;
+    use crate::app::AppEvent;
+    use crate::app::Workspace;
+
+    fn drain_full(app: &mut App) {
+        while let Ok(ev) = app.rx.try_recv() {
+            match ev {
+                AppEvent::CourseManaged(o) => app.on_course_managed(o),
+                AppEvent::CoursesRefreshed(list, stats) => {
+                    app.courses = list;
+                    app.sidebar_course_stats = stats;
+                }
+                AppEvent::SessionsLoaded(list) => app.on_sessions_loaded(list),
+                AppEvent::CourseSummary {
+                    course_name,
+                    notes,
+                    concepts,
+                    weak,
+                    last_session,
+                } => app.on_course_summary(course_name, notes, concepts, weak, last_session),
+                _ => {}
+            }
+        }
+    }
+
+    async fn settle_full(app: &mut App) {
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+            std::thread::sleep(std::time::Duration::from_millis(15));
+            drain_full(app);
+        }
+    }
+
+    #[tokio::test]
+    async fn create_brand_new_course_keeps_context() {
+        // fresh 库：只有 rust，真实创建新课程 pytorch
+        let cfg = agent_providers::ProviderConfig {
+            name: "test".into(),
+            endpoint: "http://localhost".into(),
+            api_key: Some("k".into()),
+            api_key_env: None,
+            model: "m".into(),
+            price_prompt: 0.0,
+            price_completion: 0.0,
+            price_prompt_cached: 0.0,
+            context_length: 1000,
+            thinking: false,
+        };
+        let store = Arc::new(Store::open_in_memory().unwrap());
+        store.get_or_create_course("rust").unwrap();
+        let client = Arc::new(OpenAiClient::new(cfg.clone()).unwrap());
+        let mut app = App::new(
+            client,
+            store,
+            cfg.clone(),
+            vec![cfg],
+            5.0,
+            vec![(1, "rust".into())],
+        );
+        app.course = "rust".into();
+        assert_eq!(app.workspace, Workspace::Home);
+
+        app.input = "/course -new pytorch".into();
+        app.submit();
+        settle_full(&mut app).await;
+        assert_eq!(app.course, "pytorch", "创建后当前课程应为 pytorch");
+
+        // Home 光标移到 pytorch（第 2 项），Enter 进 Course
+        app.home_cursor = 1;
+        app.home_activate();
+        settle_full(&mut app).await;
+        assert_eq!(app.workspace, Workspace::Course);
+        assert_eq!(app.course, "pytorch", "Course workspace 应为 pytorch");
+
+        // New conversation → Session
+        app.course_cursor = 0;
+        app.course_activate();
+        assert_eq!(app.workspace, Workspace::Session);
+        assert_eq!(
+            app.course, "pytorch",
+            "Session 上下文应为 pytorch —— 复现根因"
+        );
+        // 发消息自动建会话 → 会话应归属 pytorch
+        app.input = "hello".into();
+        app.submit();
+        settle_full(&mut app).await;
+        let store = app.store.clone();
+        let sessions = store.list_sessions().unwrap();
+        eprintln!(
+            "INFO: sessions={:?}",
+            sessions
+                .iter()
+                .map(|s| (s.id, s.title.clone(), s.course_id))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            sessions.iter().any(|s| s.course_id == Some(2)),
+            "新会话应归属 pytorch(course_id=2)"
+        );
+    }
+
+    /// 复现用户报告：创建 csapp 后 Home 显示 csapp，但从 Home 进入 Session 仍显示 rust。
+    /// 关键前提：已存在 rust 的最近 session（continue_session 有值）。
+    #[tokio::test]
+    async fn create_course_with_prior_session_keeps_context() {
+        // 构造：rust(course=1) 已有最近 session；Home 光标在 rust session 上（cursor 0）
+        let cfg = agent_providers::ProviderConfig {
+            name: "test".into(),
+            endpoint: "http://localhost".into(),
+            api_key: Some("k".into()),
+            api_key_env: None,
+            model: "m".into(),
+            price_prompt: 0.0,
+            price_completion: 0.0,
+            price_prompt_cached: 0.0,
+            context_length: 1000,
+            thinking: false,
+        };
+        let store = Arc::new(Store::open_in_memory().unwrap());
+        store.get_or_create_course("rust").unwrap();
+        store.create_session(Some("旧对话"), Some(1)).unwrap();
+        let client = Arc::new(OpenAiClient::new(cfg.clone()).unwrap());
+        let mut app = App::new(
+            client,
+            store,
+            cfg.clone(),
+            vec![cfg],
+            5.0,
+            vec![(1, "rust".into())],
+        );
+        app.course = "rust".into();
+        app.request_sessions_refresh();
+        settle_full(&mut app).await;
+        assert!(app.continue_session().is_some(), "应有可继续的旧 session");
+
+        // 在 Home 创建新课程 pytorch
+        app.input = "/course -new pytorch".into();
+        app.submit();
+        settle_full(&mut app).await;
+        assert_eq!(app.course, "pytorch", "创建后当前课程应为 pytorch");
+
+        // 进入新课程 Course → New conversation → Session，全程 context 应为 pytorch
+        app.home_cursor = 2; // Continue(0) + rust(1) + pytorch(2)
+        app.home_activate();
+        settle_full(&mut app).await;
+        assert_eq!(app.workspace, Workspace::Course);
+        assert_eq!(app.course, "pytorch", "Course workspace 应为 pytorch");
+        app.course_cursor = 0;
+        app.course_activate();
+        assert_eq!(app.workspace, Workspace::Session);
+        assert_eq!(app.course, "pytorch", "Session 上下文应为 pytorch");
+    }
+
+    /// Home 光标在「+ New Course」创建，向导完成后的 workspace/course 状态。
+    #[tokio::test]
+    async fn create_via_home_wizard_then_enter_keeps_context() {
+        let cfg = agent_providers::ProviderConfig {
+            name: "test".into(),
+            endpoint: "http://localhost".into(),
+            api_key: Some("k".into()),
+            api_key_env: None,
+            model: "m".into(),
+            price_prompt: 0.0,
+            price_completion: 0.0,
+            price_prompt_cached: 0.0,
+            context_length: 1000,
+            thinking: false,
+        };
+        let store = Arc::new(Store::open_in_memory().unwrap());
+        store.get_or_create_course("rust").unwrap();
+        let client = Arc::new(OpenAiClient::new(cfg.clone()).unwrap());
+        let mut app = App::new(
+            client,
+            store,
+            cfg.clone(),
+            vec![cfg],
+            5.0,
+            vec![(1, "rust".into())],
+        );
+        app.course = "rust".into();
+        assert_eq!(app.workspace, Workspace::Home);
+
+        // Home 光标到末尾 [+ New Course] → Enter 打开创建向导
+        app.home_cursor = app.home_cursor_count() - 1;
+        app.home_activate();
+        assert_eq!(
+            app.workspace,
+            Workspace::Session,
+            "向导在 Session workspace"
+        );
+        assert!(app.wizard.is_some());
+        // 填向导课程名并完成
+        let w = app.wizard.as_mut().unwrap();
+        assert!(w.confirm("pytorch".into()), "最后一步");
+        app.finish_wizard();
+        settle_full(&mut app).await;
+        assert_eq!(app.course, "pytorch", "创建后当前课程应为 pytorch");
+        assert_eq!(
+            app.workspace,
+            Workspace::Session,
+            "创建后仍在 Session（向导启动时切入）"
+        );
+
+        // Esc 回退 → Course(pytorch)；再 Esc → Home；Home 光标应指向 pytorch 再进入
+        app.go_back();
+        assert_eq!(app.workspace, Workspace::Course, "Session→Course");
+        assert_eq!(app.course, "pytorch", "Course 应为 pytorch");
+        app.go_back();
+        assert_eq!(app.workspace, Workspace::Home, "Course→Home");
+        // Home 光标应落在 pytorch（新课程），Enter 直接进 Course(pytorch)
+        app.home_cursor = 1;
+        app.home_activate();
+        settle_full(&mut app).await;
+        assert_eq!(app.workspace, Workspace::Course);
+        assert_eq!(app.course, "pytorch", "再次进入仍为 pytorch");
+    }
+
+    /// 回归：Home 创建 csapp 后光标停在原位直接 Enter，必须进入 csapp 而非 rust。
+    /// 旧 bug：app.course 已切但 home_cursor 未同步 → Enter 进旧课。
+    #[tokio::test]
+    async fn create_course_then_enter_without_cursor_move() {
+        let cfg = agent_providers::ProviderConfig {
+            name: "test".into(),
+            endpoint: "http://localhost".into(),
+            api_key: Some("k".into()),
+            api_key_env: None,
+            model: "m".into(),
+            price_prompt: 0.0,
+            price_completion: 0.0,
+            price_prompt_cached: 0.0,
+            context_length: 1000,
+            thinking: false,
+        };
+        let store = Arc::new(Store::open_in_memory().unwrap());
+        store.get_or_create_course("rust").unwrap();
+        let client = Arc::new(OpenAiClient::new(cfg.clone()).unwrap());
+        let mut app = App::new(
+            client,
+            store,
+            cfg.clone(),
+            vec![cfg],
+            5.0,
+            vec![(1, "rust".into())],
+        );
+        app.course = "rust".into();
+        app.home_cursor = 0; // 光标停在 Home 第一项
+        assert_eq!(app.workspace, Workspace::Home);
+
+        // 创建新课程 csapp
+        app.input = "/course -new csapp".into();
+        app.submit();
+        settle_full(&mut app).await;
+        assert_eq!(
+            app.course, "csapp",
+            "app.course 已切到 csapp（Home 视觉如此）"
+        );
+
+        // 用户不做任何额外操作，直接 Enter（以为自己在新课程）
+        app.home_activate();
+        settle_full(&mut app).await;
+        assert_eq!(
+            app.course, "csapp",
+            "用户以为进入 csapp，实际进入 {} —— 根因：home_cursor 未随 app.course 迁移",
+            app.course
+        );
     }
 }

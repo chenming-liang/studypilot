@@ -506,6 +506,8 @@ impl App {
         {
             self.course = first.clone();
         }
+        // 启动恢复后 Home 光标要指向当前课程（否则首帧 Enter 进旧课/错课）
+        self.sync_home_cursor_to_course();
     }
 
     /// 启动时恢复上次所在课程（data/last_course.json，仿 budget.json）。
@@ -625,13 +627,34 @@ impl App {
         self.workspace = Workspace::Session;
     }
 
+    /// 让 Home 光标跟随权威的当前课程（单一事实源：`app.course` → `home_cursor` 派生）。
+    /// Home 列表布局 = [Continue?] + courses + [+ New Course]；Continue 存在时课程从索引 1 起。
+    /// 课程创建/切换/删除/回退到 Home 后都必须调用，否则 Enter 会进旧课程（state 脱节）。
+    pub(crate) fn sync_home_cursor_to_course(&mut self) {
+        if self.courses.is_empty() {
+            self.home_cursor = 0;
+            return;
+        }
+        let idx = self.courses.iter().position(|(_, n)| *n == self.course);
+        let offset = if self.continue_session_id().is_some() {
+            1
+        } else {
+            0
+        };
+        self.home_cursor = match idx {
+            Some(i) => offset + i,
+            None => 0,
+        };
+    }
+
     /// 返回上一级：Session→Course→Home。
     pub(crate) fn go_back(&mut self) {
         match self.workspace {
             Workspace::Session => self.enter_course_workspace(&self.course.clone()),
             Workspace::Course => {
                 self.workspace = Workspace::Home;
-                self.home_cursor = 0;
+                // 回 Home 后光标要指向当前课程，而不是回到 0（否则 Enter 又进旧课）
+                self.sync_home_cursor_to_course();
             }
             Workspace::Home => {}
         }
@@ -825,6 +848,8 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
             AppEvent::CoursesRefreshed(list, stats) => {
                 app.courses = list;
                 app.sidebar_course_stats = stats;
+                // 导入可能新建课程/删除后列表变化：Home 光标跟随当前课程
+                app.sync_home_cursor_to_course();
             }
             AppEvent::BrowserActionDone {
                 scope_label,
