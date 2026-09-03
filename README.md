@@ -27,7 +27,29 @@
 
 ## 安装
 
-### 前置依赖
+### 下载（推荐）
+
+下载最新 release 即可使用，无需安装 Rust / Cargo。
+
+- **Windows x64**：`StudyPilot-windows-x64.zip`
+- **Linux x64**：`StudyPilot-linux-x64.tar.gz`
+
+Windows：解压后双击 `studypilot.exe`。
+Linux：解压后运行 `./studypilot`。
+
+### 首次启动（AI 配置）
+
+第一次启动会自动进入 AI Setup（无需编辑任何配置文件）：
+
+1. 选择 AI Provider（DeepSeek / GLM / OpenAI / Custom OpenAI-compatible）
+2. 选择 Model
+3. 输入 API Key
+4. Test Connection
+5. Ready → Home
+
+之后随时可用 `Ctrl+K → Model` 重新配置，或 `/test` 测试连接。
+
+### 开发环境
 
 ```bash
 # Rust 工具链
@@ -43,48 +65,21 @@ sudo apt install xclip   # X11
 # 或 wl-clipboard         # Wayland
 ```
 
-### 构建
+### 构建（开发者）
 
 ```bash
 git clone <repo-url> && cd agent
 cargo build --release
 ```
 
-### 配置
+### 运行时配置
 
-创建 `config.toml`（已被 .gitignore 忽略，不会提交）：
-
-```toml
-default_provider = "deepseek"
-max_cost = 5.0
-
-[[providers]]
-name = "deepseek"
-endpoint = "https://api.deepseek.com/v1"
-api_key = "sk-..."              # 或用 api_key_env = "DEEPSEEK_API_KEY"
-model = "deepseek-reasoner"     # 思考模式
-price_prompt = 4.0              # 元/百万 token
-price_completion = 16.0
-context_length = 65536
-thinking = true
-
-[[providers]]
-name = "deepseek-chat"
-endpoint = "https://api.deepseek.com/v1"
-api_key = "sk-..."
-model = "deepseek-chat"         # 非思考模式，更快更便宜
-price_prompt = 0.27
-price_completion = 1.1
-context_length = 65536
-thinking = false
-```
+配置保存在 `~/.studypilot/config.toml`（自动创建）。开发者可回退使用仓库根 `config.toml`（已被 .gitignore 忽略，不会提交）。
 
 ## 使用
 
 ```bash
-cargo run --release -- -p tui
-# 或指定配置文件
-cargo run --release -- -p tui -- /path/to/config.toml
+cargo run --release -p tui
 ```
 
 ### 命令一览

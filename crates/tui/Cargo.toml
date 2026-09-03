@@ -3,6 +3,11 @@ name = "tui"
 version.workspace = true
 edition.workspace = true
 
+# 产品二进制名：studyplot（开发仍可 `cargo run -p tui`）
+[[bin]]
+name = "studypilot"
+path = "src/main.rs"
+
 [dependencies]
 agent-core = { path = "../core" }
 agent-providers = { path = "../providers", package = "providers" }
