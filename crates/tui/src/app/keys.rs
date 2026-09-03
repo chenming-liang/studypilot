@@ -67,6 +67,10 @@ impl App {
                     }
                     true
                 }
+                KeyCode::Char('d') if self.workspace == super::Workspace::Home => {
+                    self.home_delete_course();
+                    true
+                }
                 KeyCode::Char(c)
                     if key.modifiers.contains(KeyModifiers::CONTROL) && (c == 'c' || c == 'q') =>
                 {
@@ -80,8 +84,7 @@ impl App {
             }
             // 其余键（含 Ctrl+K / 键入字符）→ 打开命令面板作为 Home/Course 的命令入口
             if self.palette.is_none() {
-                self.take_input_for_overlay();
-                self.palette = Some(CommandPalette::new());
+                self.open_palette();
             }
             return;
         }
@@ -120,8 +123,7 @@ impl App {
         if let KeyCode::Char('k') = key.code
             && key.modifiers.contains(KeyModifiers::CONTROL)
         {
-            self.take_input_for_overlay();
-            self.palette = Some(CommandPalette::new());
+            self.open_palette();
             return;
         }
         match key.code {
@@ -700,6 +702,14 @@ impl App {
         }
     }
 
+    /// 打开命令面板（context-aware，文档 §5）：按当前 workspace 与是否有课程过滤条目。
+    pub(crate) fn open_palette(&mut self) {
+        self.take_input_for_overlay();
+        let mut palette = CommandPalette::new();
+        palette.apply_context(self.workspace, !self.courses.is_empty());
+        self.palette = Some(palette);
+    }
+
     /// 打开复习参数向导（手输无参 /review 与面板共用；课程自动取当前分区）。
     pub(crate) fn open_review_wizard(&mut self) {
         self.enter_session_workspace();
@@ -912,8 +922,7 @@ impl App {
                     return;
                 }
                 A::WizardImport => {
-                    self.wizard = Some(Wizard::new_import(self.course.clone()));
-                    self.enter_wizard_step();
+                    self.open_import_wizard();
                     return;
                 }
                 A::Prompt {
@@ -952,17 +961,19 @@ impl App {
 
     /// 打开列表选择器：数据源全部来自内存缓存（courses / sidebar_sessions）。
     pub(crate) fn open_list_picker(&mut self, kind: crate::palette::PickKind) {
-        use crate::palette::{ListChoice, ListPicker, PickKind as K};
+        use crate::palette::{ListChoice, ListChoiceAction as A, ListPicker, PickKind as K};
         let (title, items) = match kind {
             K::CourseSwitch => {
                 let mut items = vec![ListChoice {
                     label: "all（全部）".into(),
                     command: "/course all".into(),
+                    action: Some(A::SwitchCourse(None)),
                 }];
                 items.extend(self.courses.iter().map(|(id, name)| ListChoice {
                     label: name.clone(),
                     // id 定位：课程名含任何字符（空格/尖括号）都不影响
                     command: format!("/course --id {id}"),
+                    action: Some(A::SwitchCourse(Some(*id))),
                 }));
                 ("切换课程分区".to_owned(), items)
             }
@@ -979,7 +990,11 @@ impl App {
                     format!("选择知识点开始复习（出题数 {n}，/review-map 数量 可调）"),
                     map.picker_items(self.review_map_n)
                         .into_iter()
-                        .map(|(label, command)| ListChoice { label, command })
+                        .map(|(label, command)| ListChoice {
+                            label,
+                            command,
+                            action: None,
+                        })
                         .collect(),
                 )
             }
@@ -990,6 +1005,7 @@ impl App {
                     .map(|(id, name)| ListChoice {
                         label: name.clone(),
                         command: format!("/course -delete --id {id}"),
+                        action: Some(A::DeleteCourse(*id)),
                     })
                     .collect(),
             ),
@@ -1060,16 +1076,37 @@ impl App {
                 let Some(choice) = lp.items.get(item_idx) else {
                     return true;
                 };
+                let label = choice.label.clone();
                 let cmd = choice.command.clone();
+                let action = choice.action.clone();
                 self.list_picker = None;
                 self.drop_input_backup();
-                self.input = cmd;
-                self.cursor_pos = self.input.chars().count();
-                self.submit();
+                // canonical action 优先（UI 不拼命令字符串→解析→handler，文档 §23）
+                if let Some(action) = action {
+                    self.run_list_choice_action(action, &label);
+                } else {
+                    self.input = cmd;
+                    self.cursor_pos = self.input.chars().count();
+                    self.submit();
+                }
                 true
             }
             // 编辑键透传：落普通路径编辑 App.input（搜索串），sync 后过滤实时生效
             _ => false,
+        }
+    }
+
+    /// 执行列表选择器的 canonical action（文档 §22/23：UI 不拼命令字符串）。
+    pub(crate) fn run_list_choice_action(
+        &mut self,
+        action: crate::palette::ListChoiceAction,
+        _label: &str,
+    ) {
+        use crate::palette::ListChoiceAction as A;
+        match action {
+            A::SwitchCourse(Some(id)) => self.switch_course_by_id(id),
+            A::SwitchCourse(None) => self.switch_course("all"),
+            A::DeleteCourse(id) => self.delete_course_by_id(id),
         }
     }
 

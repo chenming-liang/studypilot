@@ -251,6 +251,16 @@ impl Store {
         Ok(affected > 0)
     }
 
+    /// 重命名课程（name 有 UNIQUE 约束，重名冲突会返回错误）。
+    pub fn rename_course(&self, id: i64, new_name: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn.execute(
+            "UPDATE courses SET name = ?1 WHERE id = ?2",
+            rusqlite::params![new_name, id],
+        )?;
+        Ok(affected > 0)
+    }
+
     // ---- notes + FTS ----
 
     pub fn insert_note(&self, note: NewNote<'_>) -> Result<InsertOutcome> {

@@ -52,6 +52,8 @@ pub enum AppEvent {
     SessionOpened(Result<(i64, Option<i64>, Vec<Message>), String>),
     /// /rename 完成：(是否成功, 新标题)
     TitleRenamed(bool, String),
+    /// 课程重命名完成：(是否成功, 课程 id, 新名称)——成功后刷新列表并同步当前课程
+    CourseRenamed(bool, i64, String),
     /// 导入进度事件
     ImportProgress(importer::ImportEvent),
     /// 笔记浏览器异步搜索结果（seq 丢弃过期响应）

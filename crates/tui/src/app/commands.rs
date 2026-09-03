@@ -544,72 +544,116 @@ impl App {
                     names.join(", ")
                 )));
             }
-            CourseAction::Switch(name) => {
-                self.course = name.clone();
-                self.sync_home_cursor_to_course();
-                self.sync_session_course();
-                self.push_entry(Entry::Info(format!("已切换到课程: {name}")));
-                persist_last_course(&name);
-                self.spawn_course_summary(name);
-            }
+            CourseAction::Switch(name) => self.switch_course(&name),
             CourseAction::Create(name) => self.create_course_flow(name),
-            CourseAction::Delete(name) => {
-                let is_current = self.course == name;
-                self.run_course_op(move |store| {
-                    let deleted = store.delete_course(&name).map_err(|e| e.to_string())?;
-                    if !deleted {
-                        return Err(format!("课程 `{name}` 不存在"));
-                    }
-                    let list = store.list_courses().map_err(|e| e.to_string())?;
-                    // 笔记/概念的 course_id 由外键 ON DELETE SET NULL 回落 all 区，数据不丢
-                    let msg = format!("已删除课程: {name}（其笔记已回落 all 区）");
-                    let switch_to = is_current.then(|| "all".to_owned());
-                    Ok((msg, list, switch_to))
-                });
-            }
-            CourseAction::SwitchById(id) => {
-                let found = self
-                    .courses
-                    .iter()
-                    .find(|(i, _)| *i == id)
-                    .map(|(_, n)| n.clone());
-                match found {
-                    Some(name) => {
-                        self.course = name.clone();
-                        self.sync_home_cursor_to_course();
-                        self.sync_session_course();
-                        self.push_entry(Entry::Info(format!("已切换到课程: {name}")));
-                        persist_last_course(&name);
-                        self.spawn_course_summary(name);
-                    }
-                    None => {
-                        self.push_entry(Entry::Error(format!("课程 #{id} 不存在（可能已删除）")))
-                    }
-                }
-            }
-            CourseAction::DeleteById(id) => {
-                let Some((_, name)) = self.courses.iter().find(|(i, _)| *i == id).cloned() else {
-                    self.push_entry(Entry::Error(format!("课程 #{id} 不存在（可能已删除）")));
-                    return;
-                };
-                let is_current = self.course == name;
-                let name2 = name.clone();
-                self.run_course_op(move |store| {
-                    let deleted = store.delete_course_by_id(id).map_err(|e| e.to_string())?;
-                    if !deleted {
-                        return Err(format!("课程 #{id} 不存在"));
-                    }
-                    let list = store.list_courses().map_err(|e| e.to_string())?;
-                    let switch_to = is_current.then(|| "all".to_owned());
-                    Ok((
-                        format!("已删除课程: {name2}（其笔记已回落 all 区）"),
-                        list,
-                        switch_to,
-                    ))
-                });
-            }
+            CourseAction::Delete(name) => self.delete_course(&name),
+            CourseAction::SwitchById(id) => self.switch_course_by_id(id),
+            CourseAction::DeleteById(id) => self.delete_course_by_id(id),
             CourseAction::Invalid(msg) => self.push_entry(Entry::Error(msg)),
         }
+    }
+
+    /// canonical：切换到课程（by 名称；"all" = 全库检索范围）。
+    /// CLI / palette CourseSwitch / Home 选课共用同一入口。
+    pub(crate) fn switch_course(&mut self, name: &str) {
+        self.course = name.to_owned();
+        self.sync_home_cursor_to_course();
+        self.sync_session_course();
+        self.push_entry(Entry::Info(format!("已切换到课程: {name}")));
+        persist_last_course(name);
+        self.spawn_course_summary(name.to_owned());
+    }
+
+    /// canonical：按 id 切换（对课程名任何字符免疫）。
+    pub(crate) fn switch_course_by_id(&mut self, id: i64) {
+        let Some(name) = self
+            .courses
+            .iter()
+            .find(|(i, _)| *i == id)
+            .map(|(_, n)| n.clone())
+        else {
+            self.push_entry(Entry::Error(format!("课程 #{id} 不存在（可能已删除）")));
+            return;
+        };
+        self.switch_course(&name);
+    }
+
+    /// canonical：删除课程（by 名称）。当前课删除后回落 all 区；数据（笔记/概念）
+    /// 由外键 ON DELETE SET NULL 保留，不丢。
+    pub(crate) fn delete_course(&mut self, name: &str) {
+        let is_current = self.course == name;
+        let name2 = name.to_owned();
+        self.run_course_op(move |store| {
+            let deleted = store.delete_course(&name2).map_err(|e| e.to_string())?;
+            if !deleted {
+                return Err(format!("课程 `{name2}` 不存在"));
+            }
+            let list = store.list_courses().map_err(|e| e.to_string())?;
+            let msg = format!("已删除课程: {name2}（其笔记已回落 all 区）");
+            let switch_to = is_current.then(|| "all".to_owned());
+            Ok((msg, list, switch_to))
+        });
+    }
+
+    /// canonical：按 id 删除课程。
+    pub(crate) fn delete_course_by_id(&mut self, id: i64) {
+        let Some((_, name)) = self.courses.iter().find(|(i, _)| *i == id).cloned() else {
+            self.push_entry(Entry::Error(format!("课程 #{id} 不存在（可能已删除）")));
+            return;
+        };
+        self.delete_course(&name);
+    }
+
+    /// canonical：重命名当前课程（区分于 rename_session，文档 §15）。
+    /// D2 异步写库 → CourseRenamed 事件回填列表 + 同步当前课程。
+    pub(crate) fn rename_course(&mut self, new_name: &str) {
+        if new_name.is_empty() {
+            self.push_entry(Entry::Error("课程名不能为空".into()));
+            return;
+        }
+        let Some(course_id) = self.current_course_id() else {
+            self.push_entry(Entry::Error(
+                "当前没有可重命名的课程（all 区不可重命名）".into(),
+            ));
+            return;
+        };
+        let new_name = new_name.to_owned();
+        let name_for_db = new_name.clone();
+        let store = Arc::clone(&self.store);
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let ok = spawn_blocking({
+                let store = Arc::clone(&store);
+                move || {
+                    store
+                        .rename_course(course_id, &name_for_db)
+                        .unwrap_or(false)
+                }
+            })
+            .await
+            .unwrap_or(false);
+            let _ = tx.send(AppEvent::CourseRenamed(ok, course_id, new_name));
+        });
+    }
+
+    /// 课程重命名回填：更新内存列表 + 同步当前课程 + Home 光标。
+    pub(crate) fn on_course_renamed(&mut self, ok: bool, id: i64, new_name: String) {
+        if !ok {
+            self.push_entry(Entry::Error("重命名失败：课程不存在或名称重复".into()));
+            return;
+        }
+        let was_current = self.course == self.course_label(Some(id));
+        for (cid, name) in self.courses.iter_mut() {
+            if *cid == id {
+                *name = new_name.clone();
+            }
+        }
+        if was_current {
+            self.course = new_name.clone();
+        }
+        self.sync_home_cursor_to_course();
+        self.push_entry(Entry::Info(format!("课程已重命名为: {new_name}")));
+        self.request_courses_refresh();
     }
 
     /// 新建课程（结构化入口：手输解析与向导直连共用）。

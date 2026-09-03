@@ -1256,7 +1256,7 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     // Home / Course workspace：不渲染输入框，只给操作提示（Ask 输入框只在 Session 出现）
     if app.workspace != crate::app::Workspace::Session {
         let hint = match app.workspace {
-            crate::app::Workspace::Home => "↑↓ navigate    Enter open    / commands",
+            crate::app::Workspace::Home => "↑↓ navigate    Enter open    d delete    / commands",
             crate::app::Workspace::Course => "↑↓ navigate    Enter open    Esc back    / commands",
             _ => unreachable!(),
         };
@@ -1360,9 +1360,23 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
 }
 
 /// /model 弹窗：居中覆盖层，当前 provider 打 →，选中项高亮。
+/// scope 标签（文档 §24）：Global → " · Global"；CurrentCourse → " · Rust"；
+/// CurrentSession → " · 当前会话"。全部 dim。
+fn palette_scope_suffix(scope: crate::palette::PaletteScope, current_course: &str) -> String {
+    use crate::palette::PaletteScope as S;
+    let tag = match scope {
+        S::Global => "Global".to_owned(),
+        S::CurrentCourse => current_course.to_owned(),
+        S::CurrentSession => "当前会话".to_owned(),
+    };
+    format!(" · {tag}")
+}
+
 /// 命令面板弹窗：动态宽度、显示宽度对齐，选中项完整信息在底行展示。
 fn draw_command_palette(f: &mut Frame, app: &mut App) {
     use crate::palette::{PaletteGroup, PaletteItem};
+    // 先取当前课程（避免与 palette 可变借用冲突；scope 标签只需课程名）
+    let current_course = app.course.clone();
     let Some(palette) = app.palette.as_mut() else {
         return;
     };
@@ -1412,11 +1426,11 @@ fn draw_command_palette(f: &mut Frame, app: &mut App) {
     }
     palette.scroll = palette.scroll.min(max_scroll);
 
-    // 动态宽度：列表行宽 = 标记 2 + command 显示宽 + 3 + desc 显示宽
+    // 动态宽度：列表行宽 = 标记 2 + label 显示宽 + 3 + desc 显示宽
     let cmd_w = palette
         .items
         .iter()
-        .map(|i| display_width(i.command))
+        .map(|i| display_width(i.label))
         .max()
         .unwrap_or(10);
     let desc_w = palette
@@ -1457,8 +1471,15 @@ fn draw_command_palette(f: &mut Frame, app: &mut App) {
                 let item: &PaletteItem = &palette.items[*idx];
                 let is_sel = Some(*idx) == selected_idx;
                 let mark = if is_sel { "▸ " } else { "  " };
+                // scope 标签（文档 §24）：Global / Current course · Rust / Session
+                let scope_suffix = palette_scope_suffix(item.scope, &current_course);
                 let desc = display_truncate(item.desc, desc_avail);
-                let label = format!("{mark}{}  {}", display_pad(item.command, cmd_w), desc);
+                let label = format!(
+                    "{mark}{}  {}{}",
+                    display_pad(item.label, cmd_w),
+                    desc,
+                    scope_suffix
+                );
                 let style = if is_sel {
                     Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
                 } else {
@@ -1472,7 +1493,15 @@ fn draw_command_palette(f: &mut Frame, app: &mut App) {
     let detail = selected_idx
         .map(|i| {
             let it = &palette.items[i];
-            display_truncate(&format!("{} — {}", it.command, it.desc), width as usize - 4)
+            display_truncate(
+                &format!(
+                    "{} — {}{}",
+                    it.label,
+                    it.desc,
+                    palette_scope_suffix(it.scope, &current_course)
+                ),
+                width as usize - 4,
+            )
         })
         .unwrap_or_else(|| "（无匹配命令）".into());
     let title = format!(

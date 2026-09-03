@@ -119,6 +119,10 @@ pub struct App {
     /// Home 发起创建课程：向导完成且创建成功 → 直达新课程 Course workspace。
     /// （Session 内 /course -new 不置位，避免把聊天中的用户拽走）
     pub pending_course_enter: bool,
+    /// Home `d` 键删除课程的确认臂：true = 已提示，再按 `d` 真正删除。
+    pub home_delete_armed: bool,
+    /// Home `d` 键确认臂对应的目标课程名（防止光标移动后误删他课）。
+    pub home_delete_target: Option<String>,
 
     pub total_usage: Usage,
     pub total_cost: f64,
@@ -414,6 +418,8 @@ impl App {
             course_cursor: 0,
             weak_stats: std::collections::HashMap::new(),
             pending_course_enter: false,
+            home_delete_armed: false,
+            home_delete_target: None,
             total_usage: Usage::default(),
             total_cost: 0.0,
             session_cost: 0.0,
@@ -721,6 +727,40 @@ impl App {
         }
     }
 
+    /// Home 光标当前指向的课程名（None = 指向 Continue / + New Course）。
+    fn home_cursor_course(&self) -> Option<String> {
+        let offset = if self.continue_session_id().is_some() {
+            1
+        } else {
+            0
+        };
+        if self.home_cursor < offset {
+            return None; // Continue 行
+        }
+        let i = self.home_cursor - offset;
+        self.courses.get(i).map(|(_, n)| n.clone())
+    }
+
+    /// Home `d` 键删除课程：首次提示确认，再按一次真正删除（文档 §33）。
+    pub(crate) fn home_delete_course(&mut self) {
+        let Some(course) = self.home_cursor_course() else {
+            return; // 光标不在课程行
+        };
+        if self.home_delete_armed && self.home_delete_target.as_deref() == Some(course.as_str()) {
+            // 第二次：真正删除
+            self.home_delete_armed = false;
+            self.home_delete_target = None;
+            self.delete_course(&course);
+        } else {
+            self.home_delete_armed = true;
+            self.home_delete_target = Some(course.clone());
+            self.set_toast(
+                format!("按 d 确认删除课程「{course}」（笔记回落 all 区）"),
+                true,
+            );
+        }
+    }
+
     /// 打开 `/course -new` 创建向导（Home「+ New Course」与命令面板共用入口）。
     /// 对话框是模态覆盖层，直接叠在当前 workspace 上弹出——不再先切到 Session。
     /// 若从 Home 发起（workspace==Home），记 pending_course_enter：创建成功直达新课程 Course 页。
@@ -765,7 +805,7 @@ impl App {
                 self.handle_review_map_command(""); // /review-map：打开知识点选择器
             }
             2 => self.handle_outline_command(""),
-            3 => self.handle_import_command(""),
+            3 => self.open_import_wizard(),
             _ => {
                 // recent sessions（has_continue 时 offset 已扣）
                 let idx = i - 4;
@@ -846,6 +886,7 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
             AppEvent::SessionsLoaded(list) => app.on_sessions_loaded(list),
             AppEvent::SessionOpened(opened) => app.on_session_opened(opened),
             AppEvent::TitleRenamed(ok, title) => app.on_title_renamed(ok, title),
+            AppEvent::CourseRenamed(ok, id, name) => app.on_course_renamed(ok, id, name),
             AppEvent::SessionCreateFailed(e) => app.on_session_create_failed(e),
             AppEvent::DatabaseFailed(msg) => {
                 app.push_entry(Entry::Error(format!("数据写入失败: {msg}")))

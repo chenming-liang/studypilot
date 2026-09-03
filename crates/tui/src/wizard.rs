@@ -18,6 +18,8 @@ pub(crate) enum WizardKind {
     Import,
     /// 重命名当前会话
     RenameSession,
+    /// 重命名当前课程
+    RenameCourse,
     /// 加载会话 JSON
     LoadFile,
     /// 新建课程

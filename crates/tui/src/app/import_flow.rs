@@ -8,12 +8,31 @@ use tokio_util::sync::CancellationToken;
 use super::{App, AppEvent, Entry};
 
 impl App {
+    /// canonical：打开导入向导（palette / Course 页 / Home 共用）。
+    /// 课程预填当前分区；向导完成后经 `finish_wizard` 调 `run_import`。
+    pub(crate) fn open_import_wizard(&mut self) {
+        self.enter_session_workspace();
+        if self.import_cancel.is_some() {
+            self.push_entry(Entry::Error("导入任务进行中，Ctrl+C 可中断".into()));
+            return;
+        }
+        self.take_input_for_overlay();
+        self.wizard = Some(crate::wizard::Wizard::new_import(self.course.clone()));
+        self.enter_wizard_step();
+    }
+
     /// `/import --dir <路径> [--course <名>]`：启动导入任务（逐文件串行，进度经事件通道上报）。
     pub(crate) fn handle_import_command(&mut self, arg: &str) {
         // 导入输出进聊天流：从 Course/Home 发起时切到 Session workspace
         self.enter_session_workspace();
         if self.import_cancel.is_some() {
             self.push_entry(Entry::Error("导入任务进行中，Ctrl+C 可中断".into()));
+            return;
+        }
+
+        // 无参 → canonical 向导（UI/CLI 同一入口，消除"拼命令→解析→handler"路径）
+        if arg.trim().is_empty() {
+            self.open_import_wizard();
             return;
         }
 

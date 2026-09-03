@@ -776,6 +776,16 @@ impl App {
                     self.rename_session_id(id, &title);
                 }
             }
+            WizardKind::RenameCourse => {
+                let name = values
+                    .first()
+                    .map(|s| s.trim().to_owned())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_default();
+                if !name.is_empty() {
+                    self.rename_course(&name);
+                }
+            }
             WizardKind::LoadFile => {
                 if let Some(path) = values
                     .first()
