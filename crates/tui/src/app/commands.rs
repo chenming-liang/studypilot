@@ -1947,4 +1947,45 @@ mod course_context_tests {
         );
         assert!(app.wizard.is_none(), "Global 下不应打开复习向导");
     }
+
+    /// 统一命令入口为 Ctrl+K：Home/Course 中 Ctrl+K 打开命令面板，
+    /// 普通键入字符不再打开面板（此前任意键都触发）。
+    #[tokio::test]
+    async fn ctrl_k_opens_palette_in_home_course() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+        fn key(code: KeyCode, ctrl: bool) -> KeyEvent {
+            KeyEvent {
+                code,
+                modifiers: if ctrl {
+                    KeyModifiers::CONTROL
+                } else {
+                    KeyModifiers::NONE
+                },
+                kind: KeyEventKind::Press,
+                state: crossterm::event::KeyEventState::NONE,
+            }
+        }
+
+        // Home：Ctrl+K 开面板
+        let mut app = super::course_delete_tests::test_app();
+        assert_eq!(app.workspace, crate::app::Workspace::Home);
+        app.handle_key(key(KeyCode::Char('k'), true));
+        assert!(app.palette.is_some(), "Home 中 Ctrl+K 应打开命令面板");
+
+        // Home：普通键入不再开面板
+        let mut app = super::course_delete_tests::test_app();
+        app.handle_key(key(KeyCode::Char('r'), false));
+        assert!(
+            app.palette.is_none(),
+            "Home 中普通键入不应再打开命令面板（命令入口统一 Ctrl+K）"
+        );
+
+        // Course：Ctrl+K 开面板
+        let mut app = super::course_delete_tests::test_app();
+        app.enter_course_workspace("rust");
+        settle_full(&mut app).await;
+        app.handle_key(key(KeyCode::Char('k'), true));
+        assert!(app.palette.is_some(), "Course 中 Ctrl+K 应打开命令面板");
+    }
 }

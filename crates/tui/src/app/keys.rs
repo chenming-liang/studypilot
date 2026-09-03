@@ -77,14 +77,15 @@ impl App {
                     self.should_quit = true;
                     true
                 }
+                // 统一命令入口：Ctrl+K（与 Session 一致；Home/Course 普通键入不再开面板）
+                KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.open_palette();
+                    true
+                }
                 _ => false,
             };
             if routed {
                 return;
-            }
-            // 其余键（含 Ctrl+K / 键入字符）→ 打开命令面板作为 Home/Course 的命令入口
-            if self.palette.is_none() {
-                self.open_palette();
             }
             return;
         }

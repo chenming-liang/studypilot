@@ -1258,8 +1258,12 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     // Home / Course workspace：不渲染输入框，只给操作提示（Ask 输入框只在 Session 出现）
     if app.workspace != crate::app::Workspace::Session {
         let hint = match app.workspace {
-            crate::app::Workspace::Home => "↑↓ navigate    Enter open    d delete    / commands",
-            crate::app::Workspace::Course => "↑↓ navigate    Enter open    Esc back    / commands",
+            crate::app::Workspace::Home => {
+                "↑↓ navigate    Enter open    d delete    Ctrl+K commands"
+            }
+            crate::app::Workspace::Course => {
+                "↑↓ navigate    Enter open    Esc back    Ctrl+K commands"
+            }
             _ => unreachable!(),
         };
         f.render_widget(
