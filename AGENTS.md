@@ -76,7 +76,7 @@ cargo test --workspace
 
 ## 当前进度（每会话收工时更新；详细历史与决策见 docs/核心代码逻辑.md）
 
-**完成态**：M0-M8 里程碑 + 收口会话①~㉞ 全数合入 main + **收口会话㉟（Command 体系产品化，分支 refactor/command-integration 进行中）**。核心能力——导入流水线（md/pdf/pptx + 幂等去重）、FTS5+jieba 中文检索（噪声降权）、RAG 学习、Review 复习闭环（逐题生成/预取/evidence 多样性/Review Map/进度监控/素材瘦身）、Outline concept-driven 持久缓存、Agent Trace 可见化、预算熔断与持久化、三级 workspace（Home/Course/Session）、onboarding 卡片与 Home Launchpad 视觉。workspace 195 测试全绿。
+**完成态**：M0-M8 里程碑 + 收口会话①~㉞ 全数合入 main + **收口会话㉟（Command 体系产品化 + all 剥离为 Global scope，分支 refactor/command-integration 进行中）**。核心能力——导入流水线（md/pdf/pptx + 幂等去重）、FTS5+jieba 中文检索（噪声降权）、RAG 学习、Review 复习闭环（逐题生成/预取/evidence 多样性/Review Map/进度监控/素材瘦身）、Outline concept-driven 持久缓存、Agent Trace 可见化、预算熔断与持久化、三级 workspace（Home/Course/Session）、onboarding 卡片与 Home Launchpad 视觉。workspace 202 测试全绿。
 
 **关键架构决策（后续开发必须遵守，细节见 docs）**：
 - Review 出题是**逐题生成 + 后台预取**；判重=同轮 too_similar(≥0.75)，Concept 是主题不是去重单位
@@ -85,6 +85,7 @@ cargo test --workspace
 - **per-course 分区（§32）**：`Partition{history,entries,session_state,session_cost,scroll_up}` 按课缓存，`swap_course_partition` 五处切换点换入换出——聊天/错误/花费不串课
 - **同一能力三入口一个实现**：Home/Course UI、Ctrl+K Palette、/slash CLI 都调 canonical action（`open_import_wizard`/`switch_course`/`rename_course`/`ListChoiceAction`），UI 不拼命令字符串
 - Home/Course/Session 是纯 UI state 不入 session history；启动一律进 Home
+- **all 不是 Course，是 Global scope**：Switch Course picker/侧栏只列真实课程、header/Ask/Continue 显示 `Global` 而非 `all`、`/review` `/new` 在 Global 下拒绝引导选课；backend（`/course all` CLI、course_id=NULL、Global 分区）保留
 - 会话标题无意义时 fallback `Recent conversation`；`SessionMeta.created_at` 供 Last studied；/sessions 默认当前课；/rename context-aware（Course→课、Session→会话）；all 降格为跨课检索范围
 
 **待办**：
