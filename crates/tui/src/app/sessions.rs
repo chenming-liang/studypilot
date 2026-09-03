@@ -115,7 +115,7 @@ impl App {
                         }
                     }
                 }
-                // R5：恢复会话时连课程分区一起还原
+                // R5：恢复会话时连课程分区一起还原（文档 §32：per-course 分区）
                 if let Some(cid) = course_id {
                     if let Some(name) = self
                         .courses
@@ -123,12 +123,12 @@ impl App {
                         .find(|(id, _)| *id == cid)
                         .map(|(_, n)| n.clone())
                     {
-                        self.course = name;
+                        self.swap_course_partition(&name);
                     } else {
-                        self.course = "all".into();
+                        self.swap_course_partition("all");
                     }
                 } else {
-                    self.course = "all".into();
+                    self.swap_course_partition("all");
                 }
                 self.enter_ready_session(id, Vec::new());
                 self.session_cost = 0.0;

@@ -555,8 +555,11 @@ impl App {
 
     /// canonical：切换到课程（by 名称；"all" = 全库检索范围）。
     /// CLI / palette CourseSwitch / Home 选课共用同一入口。
+    /// 切换时换出/换入 per-course 分区（文档 §32）。
     pub(crate) fn switch_course(&mut self, name: &str) {
-        self.course = name.to_owned();
+        if name != self.course {
+            self.swap_course_partition(name);
+        }
         self.sync_home_cursor_to_course();
         self.sync_session_course();
         self.push_entry(Entry::Info(format!("已切换到课程: {name}")));
@@ -695,10 +698,11 @@ impl App {
             Ok((msg, list, switch_to)) => {
                 self.courses = list;
                 let entered = switch_to.clone();
-                if let Some(c) = switch_to {
-                    self.course = c;
-                }
                 // 课程创建/切换/删除后，Home 光标必须跟随当前课程（否则 Enter 进旧课）
+                // 并换出/换入 per-course 分区（文档 §32）
+                if let Some(c) = &switch_to {
+                    self.swap_course_partition(c);
+                }
                 self.sync_home_cursor_to_course();
                 // 从 Home 发起创建课程：创建成功 → 直达新课程 Course workspace
                 // （见 Course 动作菜单：New conversation / Outline / Review Map / Import）
@@ -1697,5 +1701,41 @@ mod course_context_tests {
             "用户以为进入 csapp，实际进入 {} —— 根因：home_cursor 未随 app.course 迁移",
             app.course
         );
+    }
+
+    /// 回归（文档 §32/§38）：per-course 分区隔离——entries/session_cost 不跨课串，
+    /// 切回恢复。
+    #[tokio::test]
+    async fn partition_isolates_entries_between_courses() {
+        let mut app = super::course_delete_tests::test_app(); // rust, csapp
+        app.course = "rust".into();
+        // rust 分区写点内容
+        app.push_entry(Entry::User("rust 的聊天".into()));
+        app.session_cost = 3.5;
+        // 切到 csapp：分区隔离，不应看到 rust 内容
+        app.switch_course("csapp");
+        assert!(
+            app.entries
+                .iter()
+                .all(|e| !matches!(e, Entry::User(m) if m.contains("rust"))),
+            "csapp 分区不应出现 rust 的聊天"
+        );
+        assert_eq!(app.session_cost, 0.0, "csapp 分区花费独立");
+        app.entries.push(Entry::User("csapp 的聊天".into()));
+        app.session_cost = 1.0;
+        // 切回 rust：恢复 rust 分区
+        app.switch_course("rust");
+        let has_rust = app
+            .entries
+            .iter()
+            .any(|e| matches!(e, Entry::User(m) if m.contains("rust")));
+        assert!(has_rust, "切回 rust 应恢复其聊天");
+        assert!(
+            app.entries
+                .iter()
+                .all(|e| !matches!(e, Entry::User(m) if m.contains("csapp"))),
+            "rust 分区不应混入 csapp 内容"
+        );
+        assert_eq!(app.session_cost, 3.5, "rust 分区花费恢复");
     }
 }

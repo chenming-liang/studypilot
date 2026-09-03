@@ -84,6 +84,29 @@ enum SessionState {
     },
 }
 
+/// per-course 分区（文档 §32 Context isolation）：每个课程独立持有聊天瞬态——
+/// entries / history / session 状态机 / 会话花费 / 滚动位置。
+/// `App` 上的同名字段是"当前活跃分区"；课程切换时经 `swap_course_partition` 换入换出。
+struct Partition {
+    history: Vec<Message>,
+    entries: Vec<Entry>,
+    session_state: SessionState,
+    session_cost: f64,
+    scroll_up: u16,
+}
+
+impl Default for Partition {
+    fn default() -> Self {
+        Self {
+            history: Vec::new(),
+            entries: Vec::new(),
+            session_state: SessionState::None,
+            session_cost: 0.0,
+            scroll_up: 0,
+        }
+    }
+}
+
 pub struct App {
     provider: Arc<OpenAiClient>,
     store: Arc<Store>,
@@ -123,6 +146,8 @@ pub struct App {
     pub home_delete_armed: bool,
     /// Home `d` 键确认臂对应的目标课程名（防止光标移动后误删他课）。
     pub home_delete_target: Option<String>,
+    /// per-course 分区：非活跃课程的聊天瞬态缓存（活跃的在 App 顶层字段上）
+    partitions: std::collections::HashMap<String, Partition>,
 
     pub total_usage: Usage,
     pub total_cost: f64,
@@ -420,6 +445,7 @@ impl App {
             pending_course_enter: false,
             home_delete_armed: false,
             home_delete_target: None,
+            partitions: std::collections::HashMap::new(),
             total_usage: Usage::default(),
             total_cost: 0.0,
             session_cost: 0.0,
@@ -623,9 +649,34 @@ impl App {
         self.continue_session().map(|(id, _, _)| id)
     }
 
+    /// per-course 分区切换（文档 §32 Context isolation）：把当前活跃分区的瞬态状态
+    /// 存回旧课程的槽位，再从新课程槽位载入（无槽位 = 全新空分区）。
+    /// 由课程上下文变更点调用（switch_course / enter_course_workspace / on_course_managed /
+    /// on_session_opened）。活跃分区字段保留在 App 顶层，其余代码零改动。
+    pub(crate) fn swap_course_partition(&mut self, new_course: &str) {
+        let old = std::mem::take(&mut self.course);
+        let saved = Partition {
+            history: std::mem::take(&mut self.history),
+            entries: std::mem::take(&mut self.entries),
+            session_state: std::mem::replace(&mut self.session_state, SessionState::None),
+            session_cost: std::mem::take(&mut self.session_cost),
+            scroll_up: std::mem::take(&mut self.scroll_up),
+        };
+        self.partitions.insert(old, saved);
+        let p = self.partitions.remove(new_course).unwrap_or_default();
+        self.history = p.history;
+        self.entries = p.entries;
+        self.session_state = p.session_state;
+        self.session_cost = p.session_cost;
+        self.scroll_up = p.scroll_up;
+        self.course = new_course.to_owned();
+    }
+
     /// 进入 Course workspace：设置课程上下文 + 进入 Course 视图 + 异步刷新 weak 数。
     pub(crate) fn enter_course_workspace(&mut self, course: &str) {
-        self.course = course.to_string();
+        if course != self.course {
+            self.swap_course_partition(course);
+        }
         self.workspace = Workspace::Course;
         self.course_cursor = 0;
         self.spawn_weak_stats(self.current_course_id());
@@ -714,7 +765,8 @@ impl App {
         if self.home_cursor == 0
             && let Some((id, course, _)) = continue_course
         {
-            self.course = course;
+            // 换到该会话所属课程的分区（文档 §32），再开会话
+            self.swap_course_partition(&course);
             self.enter_session_workspace();
             self.open_session(id);
             return;
