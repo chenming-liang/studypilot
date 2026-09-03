@@ -35,9 +35,10 @@ pub(crate) struct SetupState {
     pub(crate) custom_model: String,
     /// API key（遮罩显示）
     pub(crate) api_key: String,
-    /// 测试进行中 / 最近测试结果文本
+    /// 测试进行中 / 最近测试结果文本 / 是否已通过
     pub(crate) testing: bool,
     pub(crate) test_result: Option<String>,
+    pub(crate) test_passed: bool,
     /// 输入缓冲（密钥输入时不落主 input）
     pub(crate) secret_buf: String,
 }
@@ -55,6 +56,7 @@ impl Default for SetupState {
             api_key: String::new(),
             testing: false,
             test_result: None,
+            test_passed: false,
             secret_buf: String::new(),
         }
     }
@@ -95,7 +97,11 @@ impl App {
         s.step = match s.step {
             SetupStep::Provider => SetupStep::Model,
             SetupStep::Model => SetupStep::Credentials,
-            SetupStep::Credentials => SetupStep::Test,
+            SetupStep::Credentials => {
+                // 新 key 已提交：进入 Test，强制重测
+                s.test_passed = false;
+                SetupStep::Test
+            }
             SetupStep::Test => SetupStep::Done,
             SetupStep::Done => SetupStep::Done,
         };
@@ -110,8 +116,17 @@ impl App {
                 return;
             }
             SetupStep::Model => SetupStep::Provider,
-            SetupStep::Credentials => SetupStep::Model,
-            SetupStep::Test => SetupStep::Credentials,
+            SetupStep::Credentials => {
+                // 回到 Model：清空输入缓冲，避免带回旧 key
+                s.secret_buf.clear();
+                SetupStep::Model
+            }
+            SetupStep::Test => {
+                // 回 Credentials：保留旧 key（渲染提示），新输入直接替换；标记重测
+                s.secret_buf.clear();
+                s.test_passed = false;
+                SetupStep::Credentials
+            }
             SetupStep::Done => SetupStep::Test,
         };
     }
@@ -193,10 +208,15 @@ impl App {
                 }
             }
             SetupStep::Test => {
-                // Enter retry / continue；成功时下一步
+                // 已通过 → Enter 前进到 Done；否则重跑测试（文档：失败保留 pending 可重试）
                 match key.code {
                     KeyCode::Enter => {
-                        self.setup_test();
+                        let passed = self.setup.as_ref().map(|s| s.test_passed).unwrap_or(false);
+                        if passed {
+                            self.setup_next();
+                        } else {
+                            self.setup_test();
+                        }
                         true
                     }
                     KeyCode::Esc => {
@@ -283,6 +303,7 @@ impl App {
         if let Some(s) = &mut self.setup {
             s.testing = true;
             s.test_result = None;
+            s.test_passed = false;
         }
         self.run_connection_test(cfg, crate::app::AppEvent::SetupTestDone);
     }
@@ -324,7 +345,7 @@ impl App {
         }
     }
 
-    /// Setup 测试结果回填 + 成功时保存配置。
+    /// Setup 测试结果回填 + 成功时保存配置并进入 Done。
     pub(crate) fn on_setup_test_done(&mut self, text: String) {
         let Some(s) = &mut self.setup else { return };
         s.testing = false;
@@ -332,7 +353,9 @@ impl App {
         if !text.starts_with('✓') {
             return; // 失败：保留 pending，允许修改后重试（文档 §十一）
         }
-        // 成功：Apply 到当前 provider + 持久化 runtime config
+        s.test_passed = true;
+        s.step = SetupStep::Done; // 成功直接进 Done，避免停死在 Test 步（回归）
+        // Apply 到当前 provider + 持久化 runtime config
         let cfg = self.build_pending_config();
         let name = cfg.name.clone();
         if let Ok(client) = agent_providers::OpenAiClient::new(cfg.clone()) {
@@ -467,5 +490,106 @@ mod tests {
         assert_eq!(cfg.model, "model-x");
         assert_eq!(cfg.api_key.as_deref(), Some("sk-test"));
         assert!(!cfg.known_pricing(), "自定义 provider pricing 可选");
+    }
+
+    /// 回归：坏 key 测试失败 → 改好 key → 成功必须能离开 Test 步。
+    /// 旧 bug：Test 成功不推进 step，Test 步 Enter 又恒重跑测试 → 永远停在 Test（"不能加入模型"）。
+    #[test]
+    fn test_step_advances_to_done_after_success_only() {
+        let mut app = test_app();
+        app.start_setup();
+        let ev = |c: char| {
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char(c),
+                crossterm::event::KeyModifiers::NONE,
+            )
+        };
+        let enter = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        let esc = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        // 进入 Credentials，输入坏 key → Enter 进 Test
+        app.setup.as_mut().unwrap().step = SetupStep::Credentials;
+        for c in "bad-key".chars() {
+            app.handle_setup_key(ev(c));
+        }
+        app.handle_setup_key(enter);
+        assert_eq!(app.setup.as_ref().unwrap().step, SetupStep::Test);
+        assert!(!app.setup.as_ref().unwrap().test_passed);
+        // 失败事件：留在 Test，test_passed=false（Enter 走重测分支，不会前进）
+        app.on_setup_test_done("✗ 连接失败（HTTP 401）: invalid key".into());
+        assert_eq!(app.setup.as_ref().unwrap().step, SetupStep::Test);
+        assert!(!app.setup.as_ref().unwrap().test_passed);
+        // Esc 回 Credentials：输入框为空（旧 key 保留在 api_key 供渲染提示）
+        app.handle_setup_key(esc);
+        assert_eq!(app.setup.as_ref().unwrap().step, SetupStep::Credentials);
+        assert!(
+            app.setup.as_ref().unwrap().secret_buf.is_empty(),
+            "回 Credentials 后输入框应为空，重新输入直接替换旧 key"
+        );
+        // 输入好 key → Enter（无需 Delete）
+        for c in "good-key".chars() {
+            app.handle_setup_key(ev(c));
+        }
+        app.handle_setup_key(enter);
+        assert_eq!(
+            app.setup.as_ref().unwrap().api_key,
+            "good-key",
+            "新 key 必须替换旧 key"
+        );
+        assert_eq!(app.setup.as_ref().unwrap().step, SetupStep::Test);
+        // 成功事件：自动进 Done
+        app.on_setup_test_done("✓ API reachable · Authentication valid".into());
+        assert!(app.setup.as_ref().unwrap().test_passed);
+        assert_eq!(
+            app.setup.as_ref().unwrap().step,
+            SetupStep::Done,
+            "成功必须离开 Test 步"
+        );
+        // Done Enter → 关闭 Setup 回 Home
+        app.handle_setup_key(enter);
+        assert!(app.setup.is_none(), "Done 后 Enter 回 Home");
+    }
+
+    /// 回归：Test 失败回 Credentials 时旧 key 不可残留——再输入新 key Enter 必须替换。
+    #[test]
+    fn reentering_credentials_overwrites_old_key() {
+        let mut app = test_app();
+        app.start_setup();
+        let ev = |c: char| {
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char(c),
+                crossterm::event::KeyModifiers::NONE,
+            )
+        };
+        let enter = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        let esc = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        app.setup.as_mut().unwrap().step = SetupStep::Credentials;
+        for c in "old-key".chars() {
+            app.handle_setup_key(ev(c));
+        }
+        app.handle_setup_key(enter);
+        assert_eq!(app.setup.as_ref().unwrap().api_key, "old-key");
+        // Test 失败 → Esc 回 Credentials → 输入新 key → Enter
+        app.handle_setup_key(esc);
+        for c in "new-key".chars() {
+            app.handle_setup_key(ev(c));
+        }
+        app.handle_setup_key(enter);
+        assert_eq!(
+            app.setup.as_ref().unwrap().api_key,
+            "new-key",
+            "第二次输入必须覆盖旧 key"
+        );
     }
 }

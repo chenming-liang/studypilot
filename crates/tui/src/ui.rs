@@ -1489,6 +1489,13 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
                 format!("  {masked}▍"),
                 Style::new().fg(Color::Gray),
             ))));
+            if s.secret_buf.is_empty() && !s.api_key.is_empty() {
+                let n = s.api_key.chars().count();
+                items.push(ListItem::new(Line::from(Span::styled(
+                    format!("  (current key: {} •)", "*".repeat(n.min(20))),
+                    Style::new().fg(DIM),
+                ))));
+            }
             (
                 "AI Setup · API Key".to_owned(),
                 "type key · Enter continue · Esc back".into(),
@@ -1524,7 +1531,11 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
             }
             (
                 "AI Setup · Test".to_owned(),
-                "Enter test / continue · Esc back".into(),
+                if s.test_passed {
+                    "Enter → Finish · Esc back".into()
+                } else {
+                    "Enter test · Esc back".into()
+                },
             )
         }
         SetupStep::Done => {
