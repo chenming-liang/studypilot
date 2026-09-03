@@ -1773,4 +1773,59 @@ mod course_context_tests {
         );
         assert_eq!(app.session_cost, 3.5, "rust 分区花费恢复");
     }
+
+    /// 文档 §38-7：current course = csapp，最近 session 属于 rust——
+    /// Continue → 恢复 rust 的 session（及其课程）；New Conversation → 用当前课程 csapp。
+    #[tokio::test]
+    async fn continue_uses_session_course_new_uses_current_course() {
+        let mut app = super::course_delete_tests::test_app(); // rust(1), csapp(2)
+        app.course = "csapp".into();
+        app.sidebar_sessions = vec![storage::SessionMeta {
+            id: 42,
+            title: Some("Rust 的旧会话".into()),
+            course_id: Some(1), // 属于 rust
+            created_at: "2026-09-02 10:00:00".into(),
+        }];
+
+        // Home Continue（cursor 0）→ 应切到 rust 并开其 session
+        app.home_cursor = 0;
+        app.home_activate();
+        assert_eq!(app.course, "rust", "Continue 应恢复 session 所属课程");
+        assert_eq!(app.workspace, crate::app::Workspace::Session);
+        settle_full(&mut app).await;
+
+        // 重新回到 Home + csapp：New Conversation 用当前课程
+        app.course = "csapp".into();
+        app.enter_course_workspace("csapp");
+        assert_eq!(app.course_cursor_count(), 4, "csapp 无 session：4 个动作");
+        app.course_activate(); // cursor 0 = New Conversation
+        assert_eq!(
+            app.course, "csapp",
+            "New Conversation 不继承旧 session 课程"
+        );
+        assert_eq!(app.workspace, crate::app::Workspace::Session);
+    }
+
+    /// 文档 §38-8：删除当前课程 → Home 光标/当前课程同步，不残留已删课 entries。
+    #[tokio::test]
+    async fn delete_current_course_syncs_context() {
+        let mut app = super::course_delete_tests::test_app(); // rust, csapp
+        app.course = "rust".into();
+        app.push_entry(Entry::User("rust 内容".into()));
+        app.delete_course("rust");
+        settle_full(&mut app).await;
+        // 删除当前课程 → 回落 all 区
+        assert_eq!(app.course, "all", "删除当前课程应回落 all");
+        assert!(
+            !app.courses.iter().any(|(_, n)| n == "rust"),
+            "rust 应从列表移除"
+        );
+        assert_eq!(app.home_cursor, 0, "Home 光标应复位到 all 后的首项");
+        assert!(
+            !app.entries
+                .iter()
+                .any(|e| matches!(e, Entry::User(m) if m.contains("rust"))),
+            "已删课的 entries 不应残留（分区已切走）"
+        );
+    }
 }
