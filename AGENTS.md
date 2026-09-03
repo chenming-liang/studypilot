@@ -76,7 +76,7 @@ cargo test --workspace
 
 ## 当前进度（每会话收工时更新；详细历史与决策见 docs/核心代码逻辑.md）
 
-**完成态**：M0-M8 里程碑 + 收口会话①~㉞ 全数合入 main + **收口会话㉟（Command 体系产品化 + all 剥离为 Global scope + Import 路径语义，分支 refactor/command-integration 进行中）**。核心能力——导入流水线（md/pdf/pptx + 幂等去重）、FTS5+jieba 中文检索（噪声降权）、RAG 学习、Review 复习闭环（逐题生成/预取/evidence 多样性/Review Map/进度监控/素材瘦身）、Outline concept-driven 持久缓存、Agent Trace 可见化、预算熔断与持久化、三级 workspace（Home/Course/Session）、onboarding 卡片与 Home Launchpad 视觉。workspace 229 测试全绿。
+**完成态**：M0-M8 里程碑 + 收口会话①~㉞ 全数合入 main + **收口会话㉟（Command 体系产品化 + all 剥离 + Import 路径语义 + 产品化 Phase 3-7，分支 refactor/command-integration 进行中）**。核心能力——导入流水线（md/pdf/pptx + 幂等去重）、FTS5+jieba 中文检索（噪声降权）、RAG 学习、Review 复习闭环（逐题生成/预取/evidence 多样性/Review Map/进度监控/素材瘦身）、Outline concept-driven 持久缓存、Agent Trace 可见化、预算熔断与持久化、三级 workspace（Home/Course/Session）、onboarding 卡片与 Home Launchpad 视觉；**产品化**（pricing 可选化、Runtime Config ~/.studypilot、Model Registry 内置预设、Home AI 待配置引导、/test 连接测试、binary=studypilot、GitHub Release workflow、README Installation 优先）。workspace 229 测试全绿。
 
 **关键架构决策（后续开发必须遵守，细节见 docs）**：
 - Review 出题是**逐题生成 + 后台预取**；判重=同轮 too_similar(≥0.75)，Concept 是主题不是去重单位
