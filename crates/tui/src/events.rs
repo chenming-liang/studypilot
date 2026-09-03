@@ -107,6 +107,8 @@ pub enum AppEvent {
         seq: u64,
         result: Result<Vec<storage::SessionMeta>, String>,
     },
+    /// `/test` 连接测试结果（用户可读文本，文档 §十二）
+    TestConnection(String),
 }
 
 /// 聊天流里的一条内容。

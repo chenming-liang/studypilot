@@ -112,7 +112,7 @@ pub struct App {
     store: Arc<Store>,
     pub provider_cfg: ProviderConfig,
     /// 全部 provider 配置（/model 切换的候选）
-    all_providers: Vec<ProviderConfig>,
+    pub all_providers: Vec<ProviderConfig>,
     /// 运行时配置文件路径（main 解析；/model 落盘用）
     pub config_file: std::path::PathBuf,
     pub courses: Vec<(i64, String)>,
@@ -495,6 +495,25 @@ impl App {
     /// 简答题批改进行中（供 UI 渲染"批改中…"提示）。
     pub(crate) fn is_review_grading(&self) -> bool {
         self.review_grading
+    }
+
+    /// 是否需要 AI 配置（首次运行 / 配置缺失时 Home 显示引导，文档 §九）。
+    /// 判定：当前 provider 无有效 api_key（明文或 env 均无）即视为未配置。
+    pub(crate) fn ai_needs_setup(&self) -> bool {
+        if self
+            .provider_cfg
+            .api_key
+            .as_deref()
+            .map(|k| !k.is_empty())
+            .unwrap_or(false)
+        {
+            return false;
+        }
+        !self
+            .provider_cfg
+            .api_key_env
+            .as_deref()
+            .is_some_and(|env| std::env::var(env).ok().filter(|v| !v.is_empty()).is_some())
     }
 
     /// header 状态标签：与按键路由同源的覆盖层状态推导（复习 > 导入 > 请求中 > 选择 > 就绪）。
@@ -966,6 +985,14 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
             AppEvent::BrowserResults { seq, result } => app.on_browser_results(seq, result),
             AppEvent::SessionBrowserResults { seq, result } => {
                 app.on_session_browser_results(seq, result)
+            }
+            AppEvent::TestConnection(text) => {
+                app.inflight = None;
+                if text.starts_with('✓') {
+                    app.push_entry(Entry::Info(text));
+                } else {
+                    app.push_entry(Entry::Error(text));
+                }
             }
             AppEvent::NotesDeleted(result, desc) => match result {
                 Ok(true) => {

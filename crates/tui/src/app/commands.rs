@@ -105,6 +105,7 @@ impl App {
             }
             "/course" => self.handle_course_command(&arg),
             "/model" => self.handle_model_command(arg.trim()),
+            "/test" => self.handle_test_command(),
             "/new" => self.start_new_session(),
             "/sessions" => {
                 // 打开会话浏览器（搜索/恢复/重命名/删除）；默认只显示当前课程（文档 §9）
@@ -531,6 +532,55 @@ impl App {
             return;
         }
         self.apply_provider_switch(arg);
+    }
+
+    /// `/test`：连接测试（文档 §十二）——最小成本 chat 调用，
+    /// 返回用户可读结果（endpoint 可达 / 鉴权有效 / 模型可用）。
+    pub(crate) fn handle_test_command(&mut self) {
+        self.enter_session_workspace();
+        if self.is_inflight() {
+            self.push_entry(Entry::Info("请求进行中，请稍后再试".into()));
+            return;
+        }
+        let client = match OpenAiClient::new(self.provider_cfg.clone()) {
+            Ok(c) => c,
+            Err(e) => {
+                self.push_entry(Entry::Error(format!("无法初始化客户端: {e}")));
+                return;
+            }
+        };
+        let provider_name = self.provider_cfg.name.clone();
+        let model = self.provider_cfg.model.clone();
+        let cancel = CancellationToken::new();
+        self.inflight = Some(cancel.clone());
+        let tx = self.tx.clone();
+        self.push_entry(Entry::Info(format!(
+            "正在测试连接: {provider_name} · {model} …"
+        )));
+        tokio::spawn(async move {
+            let msgs = vec![Message::user("ping")];
+            let result = agent_providers::with_cancel(client.chat_json(&msgs), &cancel).await;
+            let outcome = match result {
+                Some(Ok(resp)) if !resp.content.is_empty() => format!(
+                    "✓ API reachable · Authentication valid · Model available\n\
+                     响应: {}",
+                    resp.content.chars().take(60).collect::<String>()
+                ),
+                Some(Ok(_)) => "✓ API reachable · 但模型返回空响应（Invalid response）".to_string(),
+                Some(Err(e)) => match e {
+                    agent_core::Error::Api { status, message } => format!(
+                        "✗ 连接失败（HTTP {status}）: {message}\n如果鉴权失败，请检查 API key 是否有效"
+                    ),
+                    agent_core::Error::Transport(m) => {
+                        format!("✗ Endpoint unreachable: {m}\n检查 base URL 与网络连接")
+                    }
+                    other => format!("✗ 连接失败: {other}"),
+                },
+                None if cancel.is_cancelled() => "连接测试已取消".into(),
+                None => "连接测试失败（无响应）".into(),
+            };
+            let _ = tx.send(AppEvent::TestConnection(outcome));
+        });
     }
 
     /// 执行 provider 切换：解析 key、构建客户端、替换当前 provider，并落盘 runtime config。
@@ -1998,5 +2048,31 @@ mod course_context_tests {
         settle_full(&mut app).await;
         app.handle_key(key(KeyCode::Char('k'), true));
         assert!(app.palette.is_some(), "Course 中 Ctrl+K 应打开命令面板");
+    }
+
+    /// 首次运行 AI 待配置检测（文档 §九）：无明文/env key → 需要 Setup。
+    #[test]
+    fn ai_needs_setup_detects_missing_key() {
+        let mut app = super::course_delete_tests::test_app();
+        app.provider_cfg.api_key = None;
+        app.provider_cfg.api_key_env = None;
+        assert!(app.ai_needs_setup(), "无 key 应需要配置");
+
+        app.provider_cfg.api_key = Some("sk-test".into());
+        assert!(!app.ai_needs_setup(), "明文 key 视为已配置");
+
+        // env 引用：已设置 → 已配置；未设置 → 需要配置
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _g = ENV_LOCK.lock().unwrap();
+        app.provider_cfg.api_key = None;
+        app.provider_cfg.api_key_env = Some("STUDYPILOT_TEST_KEY".into());
+        unsafe {
+            std::env::set_var("STUDYPILOT_TEST_KEY", "sk-env");
+        }
+        assert!(!app.ai_needs_setup(), "env key 已设置视为已配置");
+        unsafe {
+            std::env::remove_var("STUDYPILOT_TEST_KEY");
+        }
+        assert!(app.ai_needs_setup(), "env key 未设置应需要配置");
     }
 }

@@ -27,9 +27,15 @@ async fn main() -> anyhow::Result<()> {
     // 缺失/损坏 → 不 crash，进入 App 后由 Settings/Setup 引导配置（文档 §十七）。
     let config_path = agent_providers::Config::runtime_path()?;
     let mut config_file = config_path.clone();
-    let cfg = match agent_providers::Config::load(&config_path) {
+    let mut cfg = match agent_providers::Config::load(&config_path) {
         Ok(c) => c,
-        Err(_) if config_path.file_name() == Some("config.toml".as_ref()) && config_path.parent().map(|p| p.ends_with(".studypilot")).unwrap_or(false) => {
+        Err(_)
+            if config_path.file_name() == Some("config.toml".as_ref())
+                && config_path
+                    .parent()
+                    .map(|p| p.ends_with(".studypilot"))
+                    .unwrap_or(false) =>
+        {
             // ~/.studypilot 不存在 → 回退 cwd（开发者兼容）
             match agent_providers::Config::load("config.toml") {
                 Ok(c) => {
@@ -41,6 +47,17 @@ async fn main() -> anyhow::Result<()> {
         }
         Err(_) => agent_providers::Config::default(),
     };
+    // 无有效 provider 时，用 Model Registry 内置预设填充（用户可立即选 DeepSeek/GLM/OpenAI）
+    if cfg.providers.is_empty() {
+        cfg.providers = agent_providers::PRESETS
+            .iter()
+            .flat_map(|p| {
+                p.models
+                    .iter()
+                    .map(|m| agent_providers::provider_from_preset(p.id, m.id))
+            })
+            .collect();
+    }
     // 无有效 provider 时，用空占位（Setup/Model 面板可配）；不 crash
     let pc = cfg.default_provider().cloned().unwrap_or_default();
 

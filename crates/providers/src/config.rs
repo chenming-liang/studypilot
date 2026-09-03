@@ -110,7 +110,8 @@ impl Config {
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
         let toml = toml::to_string(self).map_err(|e| Error::Config(format!("序列化失败: {e}")))?;
-        std::fs::write(path, toml).map_err(|e| Error::Config(format!("写入 {}: {e}", path.display())))
+        std::fs::write(path, toml)
+            .map_err(|e| Error::Config(format!("写入 {}: {e}", path.display())))
     }
 
     /// 解析运行时配置路径：优先 `~/.studypilot/config.toml`（产品形态），
@@ -247,5 +248,42 @@ thinking = false
             .unwrap();
         let plain = cfg.provider("plain").unwrap();
         assert!(plain.resolve_api_key().is_err());
+    }
+
+    #[test]
+    fn pricing_optional_parses_without_prices() {
+        // 用户无需填写价格（文档 §十一）：未知模型也能配置/运行
+        let cfg = r#"
+default_provider = "custom"
+[[providers]]
+name = "custom"
+endpoint = "http://localhost:8000/v1"
+model = "my-model"
+"#
+        .parse::<Config>()
+        .unwrap();
+        let p = cfg.default_provider().unwrap();
+        assert!(!p.known_pricing(), "未配价格 = Cost tracking unavailable");
+    }
+
+    #[test]
+    fn known_pricing_detects_present_prices() {
+        let cfg = SAMPLE.parse::<Config>().unwrap();
+        assert!(cfg.provider("deepseek").unwrap().known_pricing());
+    }
+
+    #[test]
+    fn save_roundtrip_preserves_config() {
+        let cfg = SAMPLE.parse::<Config>().unwrap();
+        let ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!("sp-cfg-{}-{ns}.toml", std::process::id()));
+        cfg.save(&path).unwrap();
+        let reloaded = Config::load(&path).unwrap();
+        assert_eq!(reloaded.default_provider, cfg.default_provider);
+        assert_eq!(reloaded.providers.len(), cfg.providers.len());
+        let _ = std::fs::remove_file(&path);
     }
 }

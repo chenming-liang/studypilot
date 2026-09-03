@@ -150,6 +150,27 @@ fn home_lines(app: &App) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = vec![Line::default(), Line::default(), Line::default()];
     // 顶部留白（垂直重心偏上，不用真居中）
 
+    // AI 待配置引导（文档 §九/§十七：无有效配置时提示，不 crash）
+    if app.ai_needs_setup() {
+        lines.push(Line::from(Span::styled(
+            "AI configuration needs attention",
+            Style::new().fg(theme::USER).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!(
+                "Provider: {} · Model: {}",
+                app.provider_cfg.name, app.provider_cfg.model
+            ),
+            Style::new().fg(DIM),
+        )));
+        lines.push(Line::from(Span::styled(
+            "Open Ctrl+K → Model to choose a provider and set your API key, then /test.",
+            Style::new().fg(DIM),
+        )));
+        lines.push(home_divider());
+        lines.push(Line::default());
+    }
+
     if app.courses.is_empty() {
         // 新用户：Welcome + 创建入口（不暴露 CLI 语法）
         lines.push(Line::from(Span::styled(
