@@ -287,4 +287,23 @@ mod tests {
             Err(ImportPathError::NotFound(_))
         ));
     }
+
+    /// 真实绝对路径（用户语料 ~/rust/test-agent）：验证跨 HOME 的绝对目录导入。
+    /// `#[ignore]`：依赖本机目录，跑 `cargo test -p tui real_absolute -- --ignored`。
+    #[test]
+    #[ignore = "cargo test -p tui real_absolute -- --ignored（依赖 ~/rust/test-agent）"]
+    fn real_absolute_dir_resolves() {
+        let home = std::env::var("HOME").expect("无 HOME");
+        let dir = std::path::PathBuf::from(&home).join("rust/test-agent/resources");
+        assert!(dir.is_dir(), "语料目录应存在: {}", dir.display());
+
+        let t = resolve_import_path(&dir.display().to_string()).expect("绝对目录应解析成功");
+        assert!(!t.is_file, "resources 是目录");
+        assert_eq!(t.path, std::fs::canonicalize(&dir).unwrap());
+
+        // Windows 下载副产物（:Zone.Identifier 无扩展名）应被扩展名过滤忽略；
+        // 目录必须仍能发现受支持的 pdf。
+        assert!(dir_has_supported_files(&dir), "目录应包含受支持文件（pdf）");
+        println!("绝对路径 OK: {}", t.path.display());
+    }
 }
