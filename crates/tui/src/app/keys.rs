@@ -20,6 +20,10 @@ impl App {
         // 键盘操作清除文本选区（防止残留高亮）
         self.text_selection = None;
         self.selection_anchor = None;
+        // First-run AI Setup Wizard：覆盖层优先（键盘第一：↑↓/Enter/Esc）
+        if self.setup.is_some() && self.handle_setup_key(key) {
+            return;
+        }
         // Home / Course workspace：导航键（↑↓ Enter Esc）由顶层路由消费；
         // 其余键入打开命令面板（Home 没有输入框，命令入口 = 面板）
         if self.workspace != super::Workspace::Session

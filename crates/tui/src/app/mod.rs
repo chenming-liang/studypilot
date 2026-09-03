@@ -22,6 +22,7 @@ mod keys;
 mod outline_flow;
 mod review_flow;
 mod sessions;
+pub(crate) mod setup;
 
 pub use crate::events::{AgentEvent, AppEvent, CourseOpOutcome, Entry};
 pub use crate::palette::{CommandPalette, ListPicker, ModelPicker};
@@ -193,6 +194,8 @@ pub struct App {
     pub wizard: Option<Wizard>,
     /// 列表选择器；Some 时按键路由给选择器
     pub list_picker: Option<ListPicker>,
+    /// First-run AI Setup Wizard；Some 时进入 Setup 覆盖层
+    pub setup: Option<crate::app::setup::SetupState>,
     /// 笔记浏览器（Search→Select→Act）；Some 时按键路由给浏览器
     pub note_browser: Option<crate::note_browser::NoteBrowser>,
     /// 会话浏览器；Some 时按键路由给会话浏览器
@@ -470,6 +473,7 @@ impl App {
             palette: None,
             wizard: None,
             list_picker: None,
+            setup: None,
             note_browser: None,
             session_browser: None,
             toast: None,
@@ -627,8 +631,9 @@ impl App {
 
     /// Home 视图可选条数：Continue（有可继续 session 时）+ 课程数 + [+ New Course]。
     pub(crate) fn home_cursor_count(&self) -> usize {
+        let setup = if self.ai_needs_setup() { 1 } else { 0 };
         if self.courses.is_empty() {
-            return 1; // [+ New Course]（Welcome 态）
+            return setup + 1; // [+ New Course]（Welcome 态）
         }
         let courses = self.courses.len();
         let items = if self.continue_session_id().is_some() {
@@ -636,7 +641,7 @@ impl App {
         } else {
             courses
         };
-        items + 1 // [+ New Course] 恒在末尾
+        setup + items + 1 // [+ New Course] 恒在末尾
     }
 
     /// Course 视图可选动作条数：Continue（本课程有 session 时）+ New conversation/Review Map/
@@ -788,8 +793,14 @@ impl App {
             self.open_course_creation_wizard();
             return;
         }
+        // AI 未配置时 Home 首项是 [Set up AI]
+        let setup_offset = if self.ai_needs_setup() { 1 } else { 0 };
+        if self.home_cursor == 0 && setup_offset == 1 {
+            self.start_setup();
+            return;
+        }
         let continue_course = self.continue_session();
-        if self.home_cursor == 0
+        if self.home_cursor == setup_offset
             && let Some((id, course, _)) = continue_course
         {
             // 换到该会话所属课程的分区（文档 §32），再开会话
@@ -798,7 +809,7 @@ impl App {
             self.open_session(id);
             return;
         }
-        let offset = if continue_course.is_some() { 1 } else { 0 };
+        let offset = setup_offset + if continue_course.is_some() { 1 } else { 0 };
         let i = self.home_cursor.saturating_sub(offset);
         let name = self.courses.get(i).map(|(_, n)| n.clone());
         if let Some(name) = name {
@@ -806,15 +817,17 @@ impl App {
         }
     }
 
-    /// Home 光标当前指向的课程名（None = 指向 Continue / + New Course）。
+    /// Home 光标当前指向的课程名（None = 指向 Setup/Continue/+ New Course）。
     fn home_cursor_course(&self) -> Option<String> {
-        let offset = if self.continue_session_id().is_some() {
-            1
-        } else {
-            0
-        };
+        let setup = if self.ai_needs_setup() { 1 } else { 0 };
+        let offset = setup
+            + if self.continue_session_id().is_some() {
+                1
+            } else {
+                0
+            };
         if self.home_cursor < offset {
-            return None; // Continue 行
+            return None; // Setup / Continue 行
         }
         let i = self.home_cursor - offset;
         self.courses.get(i).map(|(_, n)| n.clone())
@@ -993,6 +1006,10 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
                 } else {
                     app.push_entry(Entry::Error(text));
                 }
+            }
+            AppEvent::SetupTestDone(text) => {
+                app.inflight = None;
+                app.on_setup_test_done(text);
             }
             AppEvent::NotesDeleted(result, desc) => match result {
                 Ok(true) => {

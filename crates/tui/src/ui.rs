@@ -89,6 +89,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.session_browser.is_some() {
         draw_session_browser(f, app);
     }
+    if app.setup.is_some() {
+        draw_setup(f, app);
+    }
     if app.toast.is_some() {
         draw_toast(f, app);
     }
@@ -150,21 +153,22 @@ fn home_lines(app: &App) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = vec![Line::default(), Line::default(), Line::default()];
     // 顶部留白（垂直重心偏上，不用真居中）
 
-    // AI 待配置引导（文档 §九/§十七：无有效配置时提示，不 crash）
+    // AI 待配置引导（文档 §二/§九：无有效配置时 Set up AI 为首个可聚焦项）
     if app.ai_needs_setup() {
-        lines.push(Line::from(Span::styled(
-            "AI configuration needs attention",
-            Style::new().fg(theme::USER).add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(Span::styled(
-            format!(
-                "Provider: {} · Model: {}",
-                app.provider_cfg.name, app.provider_cfg.model
+        let selected = app.home_cursor == 0;
+        lines.push(Line::from(vec![
+            Span::styled(if selected { "▶ " } else { "  " }, Style::new().fg(ACCENT)),
+            Span::styled(
+                "Set up AI — choose a provider and model to start",
+                if selected {
+                    Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::new().fg(theme::FG)
+                },
             ),
-            Style::new().fg(DIM),
-        )));
+        ]));
         lines.push(Line::from(Span::styled(
-            "Open Ctrl+K → Model to choose a provider and set your API key, then /test.",
+            "   Enter to configure · then start learning",
             Style::new().fg(DIM),
         )));
         lines.push(home_divider());
@@ -1399,7 +1403,158 @@ fn palette_scope_suffix(scope: crate::palette::PaletteScope, current_course: &st
     format!(" · {tag}")
 }
 
-/// 命令面板弹窗：动态宽度、显示宽度对齐，选中项完整信息在底行展示。
+/// First-run AI Setup Wizard 覆盖层（键盘第一：↑↓/Enter/Esc）。
+fn draw_setup(f: &mut Frame, app: &mut App) {
+    use crate::app::setup::SetupStep;
+    let Some(s) = &app.setup else { return };
+    let area = f.area();
+    let width = 52u16.min(area.width.saturating_sub(4));
+    let height = 18u16.min(area.height.saturating_sub(2));
+    let x = area.x + (area.width - width) / 2;
+    let y = area.y + (area.height - height) / 2;
+    let pop = Rect::new(x, y, width, height);
+
+    f.render_widget(ratatui::widgets::Clear, pop);
+
+    let mut items: Vec<ListItem> = Vec::new();
+    let (title, hint): (String, String) = match s.step {
+        SetupStep::Provider => {
+            items.push(ListItem::new(Line::from(Span::styled(
+                "Choose a provider",
+                Style::new().fg(DIM),
+            ))));
+            for (i, (_, name)) in s.provider_options().iter().enumerate() {
+                let sel = i == s.cursor;
+                let mark = if sel { "▸ " } else { "  " };
+                items.push(ListItem::new(Line::from(Span::styled(
+                    format!("{mark}{name}"),
+                    if sel {
+                        Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::new().fg(Color::Gray)
+                    },
+                ))));
+            }
+            (
+                "AI Setup".to_owned(),
+                "↑↓ select · Enter continue · Esc back".into(),
+            )
+        }
+        SetupStep::Model => {
+            items.push(ListItem::new(Line::from(Span::styled(
+                "Choose a model",
+                Style::new().fg(DIM),
+            ))));
+            let opts = s.model_options();
+            if opts.is_empty() {
+                items.push(ListItem::new(Line::from(Span::styled(
+                    "  No preset models available.",
+                    Style::new().fg(DIM),
+                ))));
+                items.push(ListItem::new(Line::from(Span::styled(
+                    "  (configure via Custom provider)",
+                    Style::new().fg(DIM),
+                ))));
+            } else {
+                for (i, m) in opts.iter().enumerate() {
+                    let sel = i == s.cursor;
+                    let mark = if sel { "▸ " } else { "  " };
+                    items.push(ListItem::new(Line::from(Span::styled(
+                        format!("{mark}{m}"),
+                        if sel {
+                            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::new().fg(Color::Gray)
+                        },
+                    ))));
+                }
+            }
+            (
+                "AI Setup · Model".to_owned(),
+                "↑↓ select · Enter continue · Esc back".into(),
+            )
+        }
+        SetupStep::Credentials => {
+            items.push(ListItem::new(Line::from(Span::styled(
+                "API Key",
+                Style::new().fg(DIM),
+            ))));
+            let masked: String = s.secret_buf.chars().map(|_| '•').collect();
+            items.push(ListItem::new(Line::from(Span::styled(
+                format!("  {masked}▍"),
+                Style::new().fg(Color::Gray),
+            ))));
+            (
+                "AI Setup · API Key".to_owned(),
+                "type key · Enter continue · Esc back".into(),
+            )
+        }
+        SetupStep::Test => {
+            items.push(ListItem::new(Line::from(Span::styled(
+                "Test connection",
+                Style::new().fg(DIM),
+            ))));
+            let provider = s.provider.as_deref().unwrap_or("-");
+            let model = s.model.as_deref().unwrap_or("-");
+            items.push(ListItem::new(Line::from(Span::styled(
+                format!("  Provider: {provider}"),
+                Style::new().fg(Color::Gray),
+            ))));
+            items.push(ListItem::new(Line::from(Span::styled(
+                format!("  Model: {model}"),
+                Style::new().fg(Color::Gray),
+            ))));
+            items.push(ListItem::new(Line::default()));
+            if s.testing {
+                items.push(ListItem::new(Line::from(Span::styled(
+                    "  ⟳ Connecting…",
+                    Style::new().fg(theme::PRIMARY),
+                ))));
+            } else if let Some(r) = &s.test_result {
+                let ok = r.starts_with('✓');
+                items.push(ListItem::new(Line::from(Span::styled(
+                    format!("  {r}"),
+                    Style::new().fg(if ok { theme::SUCCESS } else { theme::ERROR }),
+                ))));
+            }
+            (
+                "AI Setup · Test".to_owned(),
+                "Enter test / continue · Esc back".into(),
+            )
+        }
+        SetupStep::Done => {
+            items.push(ListItem::new(Line::from(Span::styled(
+                "You're ready.",
+                Style::new().fg(theme::SUCCESS).add_modifier(Modifier::BOLD),
+            ))));
+            items.push(ListItem::new(Line::from(Span::styled(
+                format!(
+                    "  Provider: {} · Model: {}",
+                    s.provider.as_deref().unwrap_or("-"),
+                    s.model.as_deref().unwrap_or("-")
+                ),
+                Style::new().fg(DIM),
+            ))));
+            (
+                "AI Setup · Ready".to_owned(),
+                "Enter → Start Learning".into(),
+            )
+        }
+    };
+
+    f.render_widget(
+        List::new(items).block(
+            Block::new()
+                .borders(Borders::ALL)
+                .title(Span::styled(title, Style::new().fg(ACCENT)))
+                .title_bottom(
+                    Span::styled(format!(" {hint} "), Style::new().fg(DIM))
+                        .into_left_aligned_line(),
+                ),
+        ),
+        pop,
+    );
+}
 fn draw_command_palette(f: &mut Frame, app: &mut App) {
     use crate::palette::{PaletteGroup, PaletteItem};
     // 先取当前课程（避免与 palette 可变借用冲突；scope 标签只需课程名）

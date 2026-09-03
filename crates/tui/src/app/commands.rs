@@ -538,25 +538,33 @@ impl App {
     /// 返回用户可读结果（endpoint 可达 / 鉴权有效 / 模型可用）。
     pub(crate) fn handle_test_command(&mut self) {
         self.enter_session_workspace();
+        self.run_connection_test(self.provider_cfg.clone(), AppEvent::TestConnection);
+    }
+
+    /// canonical 连接测试（Setup 与 /test 共用同一业务实现，文档 §十）。
+    /// `emit` 决定结果回流到哪个事件（/test → TestConnection；Setup → SetupTestDone）。
+    pub(crate) fn run_connection_test(
+        &mut self,
+        cfg: agent_providers::ProviderConfig,
+        emit: fn(String) -> AppEvent,
+    ) {
         if self.is_inflight() {
             self.push_entry(Entry::Info("请求进行中，请稍后再试".into()));
             return;
         }
-        let client = match OpenAiClient::new(self.provider_cfg.clone()) {
+        let client = match OpenAiClient::new(cfg.clone()) {
             Ok(c) => c,
             Err(e) => {
-                self.push_entry(Entry::Error(format!("无法初始化客户端: {e}")));
+                let _ = self.tx.send(emit(format!("✗ 无法初始化客户端: {e}")));
                 return;
             }
         };
-        let provider_name = self.provider_cfg.name.clone();
-        let model = self.provider_cfg.model.clone();
+        let provider_name = cfg.name.clone();
+        let model = cfg.model.clone();
         let cancel = CancellationToken::new();
         self.inflight = Some(cancel.clone());
         let tx = self.tx.clone();
-        self.push_entry(Entry::Info(format!(
-            "正在测试连接: {provider_name} · {model} …"
-        )));
+        let _ = tx.send(emit(format!("正在测试连接: {provider_name} · {model} …")));
         tokio::spawn(async move {
             let msgs = vec![Message::user("ping")];
             let result = agent_providers::with_cancel(client.chat_json(&msgs), &cancel).await;
@@ -579,7 +587,7 @@ impl App {
                 None if cancel.is_cancelled() => "连接测试已取消".into(),
                 None => "连接测试失败（无响应）".into(),
             };
-            let _ = tx.send(AppEvent::TestConnection(outcome));
+            let _ = tx.send(emit(outcome));
         });
     }
 

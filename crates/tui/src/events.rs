@@ -109,6 +109,8 @@ pub enum AppEvent {
     },
     /// `/test` 连接测试结果（用户可读文本，文档 §十二）
     TestConnection(String),
+    /// Setup Wizard 连接测试结果（独立事件，避免与 /test 的聊天流输出混淆）
+    SetupTestDone(String),
 }
 
 /// 聊天流里的一条内容。

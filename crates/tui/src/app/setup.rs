@@ -1,0 +1,471 @@
+//! First-run AI Setup Wizard（文档：普通用户无需理解 Ctrl+K / /test / config.toml）。
+//!
+//! 状态机：Provider → Model → Credentials（API key）→ Test → Done。
+//! 覆盖层模式（类似 palette），不污染 Session；成功才保存 runtime config。
+//!
+//! 复用：`providers::registry`（preset/custom）、`Config::save`、canonical 连接测试。
+
+use crate::app::App;
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use std::sync::Arc;
+
+/// Setup 步骤。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SetupStep {
+    Provider,
+    Model,
+    Credentials,
+    Test,
+    Done,
+}
+
+/// Setup 状态（pending 配置，Test 成功才 Apply）。
+#[derive(Debug)]
+pub(crate) struct SetupState {
+    pub(crate) step: SetupStep,
+    /// 用户当前光标（Provider/Model 选择列表）
+    pub(crate) cursor: usize,
+    /// 选中的 provider（registry preset id 或 "custom"）
+    pub(crate) provider: Option<String>,
+    /// 选中的 model id
+    pub(crate) model: Option<String>,
+    /// 自定义 provider 输入（name/base_url/model）
+    pub(crate) custom_name: String,
+    pub(crate) custom_base_url: String,
+    pub(crate) custom_model: String,
+    /// API key（遮罩显示）
+    pub(crate) api_key: String,
+    /// 测试进行中 / 最近测试结果文本
+    pub(crate) testing: bool,
+    pub(crate) test_result: Option<String>,
+    /// 输入缓冲（密钥输入时不落主 input）
+    pub(crate) secret_buf: String,
+}
+
+impl Default for SetupState {
+    fn default() -> Self {
+        Self {
+            step: SetupStep::Provider,
+            cursor: 0,
+            provider: None,
+            model: None,
+            custom_name: String::new(),
+            custom_base_url: String::new(),
+            custom_model: String::new(),
+            api_key: String::new(),
+            testing: false,
+            test_result: None,
+            secret_buf: String::new(),
+        }
+    }
+}
+
+impl SetupState {
+    /// Provider 列表（registry 展示名 + Custom）。
+    pub(crate) fn provider_options(&self) -> Vec<(&'static str, &'static str)> {
+        let mut v: Vec<_> = agent_providers::PRESETS
+            .iter()
+            .map(|p| (p.id, p.display_name))
+            .collect();
+        v.push(("custom", "Custom OpenAI-compatible"));
+        v
+    }
+
+    /// 当前 provider 的模型列表。
+    pub(crate) fn model_options(&self) -> Vec<String> {
+        match self.provider.as_deref() {
+            Some("custom") => Vec::new(),
+            Some(id) => agent_providers::preset(id)
+                .map(|p| p.models.iter().map(|m| m.id.to_string()).collect())
+                .unwrap_or_default(),
+            None => Vec::new(),
+        }
+    }
+}
+
+impl App {
+    /// 启动 Setup（从 Home 的 Set up AI / palette / 首次自动）。
+    pub(crate) fn start_setup(&mut self) {
+        self.setup = Some(SetupState::default());
+    }
+
+    /// Setup 进入下一步。
+    pub(crate) fn setup_next(&mut self) {
+        let Some(s) = &mut self.setup else { return };
+        s.step = match s.step {
+            SetupStep::Provider => SetupStep::Model,
+            SetupStep::Model => SetupStep::Credentials,
+            SetupStep::Credentials => SetupStep::Test,
+            SetupStep::Test => SetupStep::Done,
+            SetupStep::Done => SetupStep::Done,
+        };
+    }
+
+    /// Setup 返回上一步（Provider 再 Esc = 关闭 Setup 回 Home）。
+    pub(crate) fn setup_back(&mut self) {
+        let Some(s) = &mut self.setup else { return };
+        s.step = match s.step {
+            SetupStep::Provider => {
+                self.setup = None;
+                return;
+            }
+            SetupStep::Model => SetupStep::Provider,
+            SetupStep::Credentials => SetupStep::Model,
+            SetupStep::Test => SetupStep::Credentials,
+            SetupStep::Done => SetupStep::Test,
+        };
+    }
+
+    /// Setup 按键路由（键盘第一，文档 §二十/§二十一）。
+    /// 返回 true = 已消费。
+    pub(crate) fn handle_setup_key(&mut self, key: KeyEvent) -> bool {
+        if key.kind != KeyEventKind::Press {
+            return false;
+        }
+        let Some(step) = self.setup.as_ref().map(|s| s.step) else {
+            return false;
+        };
+        match step {
+            SetupStep::Provider | SetupStep::Model => {
+                // ↑↓ 选择 / Enter 确认 / Esc 返回
+                match key.code {
+                    KeyCode::Up => {
+                        if let Some(s) = &mut self.setup {
+                            s.cursor = s.cursor.saturating_sub(1);
+                        }
+                        true
+                    }
+                    KeyCode::Down => {
+                        {
+                            let n = self.setup_options().len();
+                            if let Some(s) = &mut self.setup
+                                && n > 0
+                            {
+                                s.cursor = (s.cursor + 1).min(n - 1);
+                            }
+                        }
+                        true
+                    }
+                    KeyCode::Enter => {
+                        self.setup_select();
+                        true
+                    }
+                    KeyCode::Esc => {
+                        self.setup_back();
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            SetupStep::Credentials => {
+                // secret input：API key（不明文显示，文档 §七/§二十二）
+                match key.code {
+                    KeyCode::Esc => {
+                        self.setup_back();
+                        true
+                    }
+                    KeyCode::Backspace => {
+                        if let Some(s) = &mut self.setup {
+                            s.secret_buf.pop();
+                        }
+                        true
+                    }
+                    KeyCode::Delete => {
+                        if let Some(s) = &mut self.setup {
+                            s.secret_buf.clear();
+                        }
+                        true
+                    }
+                    KeyCode::Enter => {
+                        if let Some(s) = &mut self.setup {
+                            s.api_key = std::mem::take(&mut s.secret_buf);
+                        }
+                        self.setup_next();
+                        true
+                    }
+                    KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        if let Some(s) = &mut self.setup {
+                            s.secret_buf.push(c);
+                        }
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            SetupStep::Test => {
+                // Enter retry / continue；成功时下一步
+                match key.code {
+                    KeyCode::Enter => {
+                        self.setup_test();
+                        true
+                    }
+                    KeyCode::Esc => {
+                        self.setup_back();
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            SetupStep::Done => {
+                match key.code {
+                    KeyCode::Enter => {
+                        self.setup = None; // 回 Home
+                        true
+                    }
+                    KeyCode::Esc => {
+                        self.setup_back();
+                        true
+                    }
+                    _ => false,
+                }
+            }
+        }
+    }
+
+    /// 当前 Setup 步骤的可用选项（供渲染/按键共用）。
+    pub(crate) fn setup_options(&self) -> Vec<String> {
+        let Some(s) = &self.setup else {
+            return Vec::new();
+        };
+        match s.step {
+            SetupStep::Provider => s
+                .provider_options()
+                .into_iter()
+                .map(|(_, name)| name.to_string())
+                .collect(),
+            SetupStep::Model => {
+                let models = s.model_options();
+                if models.is_empty() {
+                    vec!["Custom model (manual)".to_string()]
+                } else {
+                    models
+                }
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Setup 选择当前光标项（Provider/Model 列表）。
+    pub(crate) fn setup_select(&mut self) {
+        let Some(s) = &mut self.setup else { return };
+        match s.step {
+            SetupStep::Provider => {
+                let opts = s.provider_options();
+                let id = opts.get(s.cursor).map(|(id, _)| id.to_string());
+                if let Some(id) = id {
+                    s.provider = Some(id.clone());
+                    if id != "custom" {
+                        s.model = s.model_options().first().cloned();
+                    }
+                    s.step = SetupStep::Model;
+                }
+            }
+            SetupStep::Model => {
+                let models = s.model_options();
+                let m = if models.is_empty() {
+                    None // custom：交给 Credentials/Test 处理
+                } else {
+                    models.get(s.cursor).cloned()
+                };
+                s.model = m;
+                s.step = SetupStep::Credentials;
+            }
+            _ => {}
+        }
+    }
+
+    /// Setup 连接测试（复用 canonical `run_connection_test`）。
+    pub(crate) fn setup_test(&mut self) {
+        if self.setup.is_none() {
+            return;
+        }
+        let cfg = self.build_pending_config();
+        if let Some(s) = &mut self.setup {
+            s.testing = true;
+            s.test_result = None;
+        }
+        self.run_connection_test(cfg, crate::app::AppEvent::SetupTestDone);
+    }
+
+    /// 构建待保存的 ProviderConfig（pending，不立即 Apply）。
+    fn build_pending_config(&self) -> agent_providers::ProviderConfig {
+        let Some(s) = &self.setup else {
+            return self.provider_cfg.clone();
+        };
+        match s.provider.as_deref() {
+            Some("custom") => {
+                let mut cfg = agent_providers::custom_provider(
+                    if s.custom_name.is_empty() {
+                        "custom"
+                    } else {
+                        &s.custom_name
+                    },
+                    if s.custom_base_url.is_empty() {
+                        "https://api.openai.com/v1"
+                    } else {
+                        &s.custom_base_url
+                    },
+                    if s.custom_model.is_empty() {
+                        s.model.as_deref().unwrap_or("")
+                    } else {
+                        &s.custom_model
+                    },
+                );
+                cfg.api_key = Some(s.api_key.clone());
+                cfg
+            }
+            Some(id) => {
+                let model = s.model.as_deref().unwrap_or("");
+                let mut cfg = agent_providers::provider_from_preset(id, model);
+                cfg.api_key = Some(s.api_key.clone());
+                cfg
+            }
+            None => self.provider_cfg.clone(),
+        }
+    }
+
+    /// Setup 测试结果回填 + 成功时保存配置。
+    pub(crate) fn on_setup_test_done(&mut self, text: String) {
+        let Some(s) = &mut self.setup else { return };
+        s.testing = false;
+        s.test_result = Some(text.clone());
+        if !text.starts_with('✓') {
+            return; // 失败：保留 pending，允许修改后重试（文档 §十一）
+        }
+        // 成功：Apply 到当前 provider + 持久化 runtime config
+        let cfg = self.build_pending_config();
+        let name = cfg.name.clone();
+        if let Ok(client) = agent_providers::OpenAiClient::new(cfg.clone()) {
+            self.provider = Arc::new(client);
+        }
+        // 更新 all_providers 中的该 provider
+        if let Some(p) = self.all_providers.iter_mut().find(|p| p.name == name) {
+            *p = cfg.clone();
+        }
+        if !self.all_providers.iter().any(|p| p.name == name) {
+            self.all_providers.push(cfg.clone());
+        }
+        self.provider_cfg = cfg.clone();
+        // 持久化
+        let persist = agent_providers::Config {
+            default_provider: name.clone(),
+            max_cost: self.max_cost,
+            providers: vec![cfg],
+        };
+        let path = self.config_file.clone();
+        if let Err(e) = persist.save(&path) {
+            tracing::warn!("保存 runtime config 失败: {e}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::commands::course_delete_tests::test_app;
+
+    #[test]
+    fn setup_state_transitions() {
+        let mut app = test_app();
+        app.start_setup();
+        let s = app.setup.as_ref().unwrap();
+        assert_eq!(s.step, SetupStep::Provider);
+        // Provider 选择 deepseek → Model
+        app.setup_select();
+        assert_eq!(app.setup.as_ref().unwrap().step, SetupStep::Model);
+        assert_eq!(
+            app.setup.as_ref().unwrap().provider.as_deref(),
+            Some("deepseek")
+        );
+        // Model 选择 → Credentials
+        app.setup_select();
+        assert_eq!(app.setup.as_ref().unwrap().step, SetupStep::Credentials);
+    }
+
+    #[test]
+    fn provider_selection_lists_registry_and_custom() {
+        let mut app = test_app();
+        app.start_setup();
+        let opts = app.setup.as_ref().unwrap().provider_options();
+        let names: Vec<&str> = opts.iter().map(|(_, n)| *n).collect();
+        assert!(names.contains(&"DeepSeek"));
+        assert!(names.contains(&"GLM (Zhipu)"));
+        assert!(names.contains(&"OpenAI"));
+        assert!(names.contains(&"Custom OpenAI-compatible"));
+    }
+
+    #[test]
+    fn model_selection_from_registry() {
+        let mut app = test_app();
+        app.start_setup();
+        {
+            let s = app.setup.as_mut().unwrap();
+            s.provider = Some("deepseek".into());
+            s.cursor = 0;
+        }
+        let models = app.setup.as_ref().unwrap().model_options();
+        assert!(models.contains(&"deepseek-reasoner".to_string()));
+    }
+
+    #[test]
+    fn secret_input_masking_preserves_typed_value() {
+        let mut app = test_app();
+        app.start_setup();
+        // 手动进入 Credentials 态
+        app.setup.as_mut().unwrap().step = SetupStep::Credentials;
+        // 模拟输入密钥
+        let ev = |c: char| {
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char(c),
+                crossterm::event::KeyModifiers::NONE,
+            )
+        };
+        app.handle_setup_key(ev('s'));
+        app.handle_setup_key(ev('k'));
+        assert_eq!(app.setup.as_ref().unwrap().secret_buf, "sk");
+        // Enter → api_key 写入 + 进入 Test
+        let enter = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        app.handle_setup_key(enter);
+        assert_eq!(app.setup.as_ref().unwrap().api_key, "sk");
+    }
+
+    #[test]
+    fn esc_back_navigation_walks_steps() {
+        let mut app = test_app();
+        app.start_setup();
+        app.setup.as_mut().unwrap().step = SetupStep::Done;
+        app.setup_back();
+        assert_eq!(app.setup.as_ref().unwrap().step, SetupStep::Test);
+        app.setup_back();
+        assert_eq!(app.setup.as_ref().unwrap().step, SetupStep::Credentials);
+        app.setup_back();
+        assert_eq!(app.setup.as_ref().unwrap().step, SetupStep::Model);
+        app.setup_back();
+        assert_eq!(app.setup.as_ref().unwrap().step, SetupStep::Provider);
+        app.setup_back();
+        assert!(app.setup.is_none(), "Provider 再 Esc 回 Home");
+    }
+
+    #[test]
+    fn custom_provider_builds_pending_config() {
+        let mut app = test_app();
+        app.start_setup();
+        {
+            let s = app.setup.as_mut().unwrap();
+            s.provider = Some("custom".into());
+            s.custom_name = "my-llm".into();
+            s.custom_base_url = "http://localhost:8000/v1".into();
+            s.custom_model = "model-x".into();
+            s.api_key = "sk-test".into();
+        }
+        let cfg = app.build_pending_config();
+        assert_eq!(cfg.name, "my-llm");
+        assert_eq!(cfg.endpoint, "http://localhost:8000/v1");
+        assert_eq!(cfg.model, "model-x");
+        assert_eq!(cfg.api_key.as_deref(), Some("sk-test"));
+        assert!(!cfg.known_pricing(), "自定义 provider pricing 可选");
+    }
+}
