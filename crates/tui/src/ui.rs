@@ -1437,8 +1437,8 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
     use crate::app::setup::SetupStep;
     let Some(s) = &app.setup else { return };
     let area = f.area();
-    let width = 52u16.min(area.width.saturating_sub(4));
-    let height = 18u16.min(area.height.saturating_sub(2));
+    let width = 68u16.min(area.width.saturating_sub(4));
+    let height = 24u16.min(area.height.saturating_sub(2));
     let x = area.x + (area.width - width) / 2;
     let y = area.y + (area.height - height) / 2;
     let pop = Rect::new(x, y, width, height);
@@ -1521,14 +1521,19 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
                 label,
                 Style::new().fg(DIM),
             ))));
-            items.push(ListItem::new(Line::from(Span::styled(
-                format!("  {}▍", s.custom_buf),
-                Style::new().fg(Color::Gray),
-            ))));
-            (
-                title.to_owned(),
-                "type value · Enter continue · Esc back".into(),
-            )
+            // 输入文本按宽度折行（Model ID 多模型逗号长文本不溢出；光标 ▍ 在最后一行行尾）
+            for seg in setup_input_lines(&s.custom_buf, width) {
+                items.push(ListItem::new(Line::from(Span::styled(
+                    seg,
+                    Style::new().fg(Color::Gray),
+                ))));
+            }
+            let hint = if s.step == SetupStep::CustomModel {
+                "type value (comma = multiple models) · Enter continue · Esc back"
+            } else {
+                "type value · Enter continue · Esc back"
+            };
+            (title.to_owned(), hint.into())
         }
         SetupStep::Credentials => {
             items.push(ListItem::new(Line::from(Span::styled(
@@ -1981,6 +1986,24 @@ fn warmup_card_lines(text: &str, pop_width: u16) -> Vec<String> {
         .into_iter()
         .map(|seg| format!("  {seg}"))
         .collect()
+}
+
+/// Setup 输入步文本折行（Custom name/base_url/model）：与 warmup_card_lines 同一 wrap 路径，
+/// 多模型逗号长文本按宽度折行不溢出；光标 ▍ 追加在最后一行的行尾。
+fn setup_input_lines(text: &str, pop_width: u16) -> Vec<String> {
+    let inner = pop_width.saturating_sub(2) as usize;
+    let body_w = inner.saturating_sub(2).max(4);
+    let mut out: Vec<String> = wrap(text, body_w)
+        .into_iter()
+        .map(|seg| format!("  {seg}"))
+        .collect();
+    if out.is_empty() {
+        out.push("  ▍".to_string());
+    } else {
+        let last = out.len() - 1;
+        out[last].push('▍');
+    }
+    out
 }
 
 /// Flashcard Warm-up 覆盖层：当前卡 + 翻面答案 + 自评（✓ Got it / △ Shaky / ○ Don't know）。
@@ -2759,6 +2782,31 @@ mod warmup_card_lines_tests {
         let lines = setup_test_lines(&msg, 20);
         assert!(lines.len() >= 2, "超长应 wrap，实际 {} 行", lines.len());
         assert_all_lines_within(&lines);
+    }
+
+    /// Setup 输入步折行：多模型逗号长文本（Model ID）按宽度换行，光标只落在最后一行。
+    #[test]
+    fn setup_input_wraps_long_model_list() {
+        let pop_w: u16 = 68;
+        let buf = "Qwen3.7-Plus, Deepseek-V4-Flash-0731, GLM-5.3-Flash, Some-Very-Long-Model-Name-With-Many-Tokens";
+        let lines = setup_input_lines(buf, pop_w);
+        assert!(lines.len() > 1, "多模型应折成多行，实际: {lines:?}");
+        for l in &lines {
+            assert!(l.width() <= (pop_w - 2) as usize, "行宽超界: {l:?}");
+        }
+        assert!(lines.last().unwrap().ends_with('▍'), "光标应在最后一行");
+        let has_cursor_last = lines.last().unwrap().ends_with('▍');
+        assert!(has_cursor_last);
+        for l in lines.iter().take(lines.len() - 1) {
+            assert!(!l.contains('▍'), "光标不得出现在非最后一行: {l:?}");
+        }
+    }
+
+    /// 空输入：仍显示光标占位行。
+    #[test]
+    fn setup_input_empty_shows_cursor() {
+        let lines = setup_input_lines("", 68);
+        assert_eq!(lines, vec!["  ▍"]);
     }
 }
 
