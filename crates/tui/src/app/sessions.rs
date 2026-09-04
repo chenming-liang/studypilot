@@ -797,6 +797,19 @@ impl App {
                 // all（course_id=None）= 全部笔记出题，同样合法
                 self.run_review(course_id, course_name, scope, n);
             }
+            WizardKind::ReviewCount {
+                course_id,
+                course_name,
+                scope,
+            } => {
+                // 正式复习题数 = 用户指定（默认 5）；warm-up 卡数由 LLM 自主 3~8
+                let n = values
+                    .first()
+                    .and_then(|v| v.trim().parse::<usize>().ok())
+                    .filter(|n| *n > 0)
+                    .unwrap_or(5);
+                self.start_warmup(scope, course_id, course_name, n);
+            }
             WizardKind::Import => {
                 let dir = values
                     .first()

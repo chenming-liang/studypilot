@@ -13,12 +13,13 @@ use crate::review;
 impl App {
     /// 启动 Flashcard Warm-up（正式 Review 前置）：生成卡片期间挂 inflight，
     /// 事件 WarmupReady 回流后进入暖场覆盖层。范围 = 本次复习选中的概念/section。
-    /// 卡片与正式复习数量均固定（WARMUP_CARD_COUNT / FORMAL_REVIEW_COUNT），LLM 不决定。
+    /// `n` = 正式 Review 题数（调用方显式传入；warm-up 卡数由 LLM 自主 3~8）。
     pub(crate) fn start_warmup(
         &mut self,
         scope_text: String,
         course_id: Option<i64>,
         course_name: String,
+        n: usize,
     ) {
         if self.review.is_some() {
             self.push_entry(Entry::Error("复习进行中，请先完成或 Esc 退出".into()));
@@ -39,7 +40,7 @@ impl App {
         let cancel = CancellationToken::new();
         self.inflight = Some(cancel.clone());
         // 先建空暖场状态（卡片到达后填充）：覆盖层即时出现（"生成中…"），
-        // scope/course 先记录；正式复习题数固定 FORMAL_REVIEW_COUNT。
+        // scope/course/n 先记录，供 finish_warmup 传给正式 Review。
         self.warmup = Some(review::WarmupState {
             cards: Vec::new(),
             current: 0,
@@ -48,7 +49,7 @@ impl App {
             scope_text: scope_text.clone(),
             course_id,
             course_name: course_name.clone(),
-            n: review::FORMAL_REVIEW_COUNT,
+            n,
         });
         self.push_entry(Entry::Info(format!(
             "Flashcard Warm-up · 范围「{scope_text}」生成中…"

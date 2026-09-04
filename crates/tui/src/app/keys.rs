@@ -1171,8 +1171,14 @@ impl App {
                 let course_name = self.course.clone();
                 self.review_map_picker = None;
                 self.drop_input_backup();
-                // 进入 Flashcard Warm-up，随后正式 Review（focus 概念优先；题数固定 5）
-                self.start_warmup(scope, Some(course_id), course_name);
+                // 先选正式复习题数（默认 5，用户可改），确认后进入 Warm-up → Formal Review
+                self.take_input_for_overlay();
+                self.wizard = Some(crate::wizard::Wizard::new_review_count(
+                    Some(course_id),
+                    course_name,
+                    scope,
+                ));
+                self.enter_wizard_step();
                 true
             }
             _ => false,

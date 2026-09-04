@@ -14,6 +14,12 @@ pub(crate) enum WizardKind {
         course_id: Option<i64>,
         course_name: String,
     },
+    /// 复习地图 → Warm-up 前的正式复习题数（默认 5，用户可改）
+    ReviewCount {
+        course_id: Option<i64>,
+        course_name: String,
+        scope: String,
+    },
     /// 导入笔记
     Import,
     /// 重命名当前会话
@@ -74,6 +80,27 @@ impl Wizard {
             },
         ];
         Self::build(WizardKind::Import, course, "导入笔记".to_owned(), steps)
+    }
+
+    /// 复习地图 → Warm-up 前的正式复习题数选择（默认 5，用户可改；不做题数自适应）。
+    pub(crate) fn new_review_count(
+        course_id: Option<i64>,
+        course_name: String,
+        scope: String,
+    ) -> Self {
+        Self::build(
+            WizardKind::ReviewCount {
+                course_id,
+                course_name: course_name.clone(),
+                scope,
+            },
+            course_name,
+            "正式复习题数".to_owned(),
+            vec![WizardStep {
+                prompt: "正式复习题数（默认 5）",
+                default: "5".to_owned(),
+            }],
+        )
     }
 
     /// 单步自由文本向导（palette Prompt 动作：/rename /load /course -new）。
@@ -168,6 +195,21 @@ mod wizard_tests {
         assert!(!w.confirm("~/notes".into()));
         assert_eq!(w.back().as_deref(), Some("~/notes"));
         assert!(w.back().is_none()); // 第一步再 Esc → 关闭
+    }
+
+    /// 复习地图路径：正式复习题数向导（默认 5，用户可改；warm-up 卡数不参与）。
+    #[test]
+    fn review_count_wizard_defaults_and_value() {
+        let mut w = Wizard::new_review_count(Some(1), "rust".into(), "借用、所有权".into());
+        assert_eq!(w.steps.len(), 1, "只问题数");
+        assert_eq!(w.steps[0].default, "5", "默认 5");
+        assert!(matches!(w.kind(), WizardKind::ReviewCount { .. }));
+        assert!(w.confirm("10".into())); // 用户改 10
+        assert_eq!(w.values(), vec!["10"]);
+        // 留空 → 上层 fallback 5
+        let mut w2 = Wizard::new_review_count(Some(1), "rust".into(), "借用".into());
+        assert!(w2.confirm(String::new()));
+        assert_eq!(w2.values(), vec![""]);
     }
 
     #[test]
