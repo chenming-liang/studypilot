@@ -1684,7 +1684,7 @@ fn draw_command_palette(f: &mut Frame, app: &mut App) {
         shown.push('▍');
     }
     let area = f.area();
-    let height = 24u16.min(area.height.saturating_sub(2));
+    let height = 32u16.min(area.height.saturating_sub(2));
     let visible = height.saturating_sub(2) as usize;
 
     // 显示行序列：无过滤时插组头分隔行，过滤时纯条目列表

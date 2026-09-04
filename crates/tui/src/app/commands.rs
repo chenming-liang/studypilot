@@ -541,6 +541,38 @@ impl App {
         self.run_connection_test(self.provider_cfg.clone(), AppEvent::TestConnection);
     }
 
+    /// 单次连接测试（对给定 client 做一次最小 chat 调用，返回用户可读结果）。
+    /// 供单模型 `/test` 与 Setup 多模型逐测共用。
+    pub(crate) async fn connection_test_once(
+        client: OpenAiClient,
+        cancel: CancellationToken,
+    ) -> String {
+        // 连接测试走普通 chat（非 JSON mode）：`chat_json` 会带 response_format，
+        // DeepSeek 对不含 "json" 字样的 prompt 直接 400（"Prompt must contain the word 'json'"），
+        // 而连接测试只关心 endpoint/auth/model 可用，不需要结构化输出。
+        let msgs = vec![Message::user("请直接回复：ping")];
+        let result = agent_providers::with_cancel(client.chat(&msgs, &[]), &cancel).await;
+        match result {
+            Some(Ok(resp)) if !resp.content.is_empty() => format!(
+                "✓ API reachable · Authentication valid · Model available\n\
+                 响应: {}",
+                resp.content.chars().take(60).collect::<String>()
+            ),
+            Some(Ok(_)) => "✓ API reachable · 但模型返回空响应（Invalid response）".to_string(),
+            Some(Err(e)) => match e {
+                agent_core::Error::Api { status, message } => format!(
+                    "✗ 连接失败（HTTP {status}）: {message}\n如果鉴权失败，请检查 API key 是否有效"
+                ),
+                agent_core::Error::Transport(m) => {
+                    format!("✗ Endpoint unreachable: {m}\n检查 base URL 与网络连接")
+                }
+                other => format!("✗ 连接失败: {other}"),
+            },
+            None if cancel.is_cancelled() => "连接测试已取消".into(),
+            None => "连接测试失败（无响应）".into(),
+        }
+    }
+
     /// canonical 连接测试（Setup 与 /test 共用同一业务实现，文档 §十）。
     /// `emit` 决定结果回流到哪个事件（/test → TestConnection；Setup → SetupTestDone）。
     pub(crate) fn run_connection_test(
@@ -566,30 +598,7 @@ impl App {
         let tx = self.tx.clone();
         let _ = tx.send(emit(format!("正在测试连接: {provider_name}/{model} …")));
         tokio::spawn(async move {
-            // 连接测试走普通 chat（非 JSON mode）：`chat_json` 会带 response_format，
-            // DeepSeek 对不含 "json" 字样的 prompt 直接 400（"Prompt must contain the word 'json'"），
-            // 而连接测试只关心 endpoint/auth/model 可用，不需要结构化输出（回归：Setup 接 DeepSeek 必失败）。
-            let msgs = vec![Message::user("请直接回复：ping")];
-            let result = agent_providers::with_cancel(client.chat(&msgs, &[]), &cancel).await;
-            let outcome = match result {
-                Some(Ok(resp)) if !resp.content.is_empty() => format!(
-                    "✓ API reachable · Authentication valid · Model available\n\
-                     响应: {}",
-                    resp.content.chars().take(60).collect::<String>()
-                ),
-                Some(Ok(_)) => "✓ API reachable · 但模型返回空响应（Invalid response）".to_string(),
-                Some(Err(e)) => match e {
-                    agent_core::Error::Api { status, message } => format!(
-                        "✗ 连接失败（HTTP {status}）: {message}\n如果鉴权失败，请检查 API key 是否有效"
-                    ),
-                    agent_core::Error::Transport(m) => {
-                        format!("✗ Endpoint unreachable: {m}\n检查 base URL 与网络连接")
-                    }
-                    other => format!("✗ 连接失败: {other}"),
-                },
-                None if cancel.is_cancelled() => "连接测试已取消".into(),
-                None => "连接测试失败（无响应）".into(),
-            };
+            let outcome = Self::connection_test_once(client, cancel).await;
             let _ = tx.send(emit(outcome));
         });
     }

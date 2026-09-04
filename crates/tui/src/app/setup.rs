@@ -6,8 +6,10 @@
 //! 复用：`providers::registry`（preset/custom）、`Config::save`、canonical 连接测试。
 
 use crate::app::App;
+use agent_providers::OpenAiClient;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 /// Setup 步骤。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +82,12 @@ pub(crate) fn split_custom_models(input: &str) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .collect()
+}
+
+/// Setup 连接测试整体是否通过：多模型结果逐行（"model ✓ …" / "model ✗ …"），
+/// 任一行含 ✗ 即整体失败；单模型结果同样兼容（✓ 行无 ✗ = 通过）。
+pub(crate) fn setup_test_all_passed(text: &str) -> bool {
+    !text.lines().any(|l| l.contains('✗'))
 }
 
 impl SetupState {
@@ -448,7 +456,9 @@ impl App {
         }
     }
 
-    /// Setup 连接测试（复用 canonical `run_connection_test`）。
+    /// Setup 连接测试。
+    /// 单模型 → 复用 canonical `run_connection_test`；
+    /// 多模型（preset 多选 / Custom 逗号分隔）→ 逐个测试每个 model，任一失败即整体失败。
     pub(crate) fn setup_test(&mut self) {
         if self.setup.is_none() {
             return;
@@ -459,7 +469,35 @@ impl App {
             s.test_result = None;
             s.test_passed = false;
         }
-        self.run_connection_test(cfg, crate::app::AppEvent::SetupTestDone);
+        let models: Vec<String> = cfg.models.iter().map(|m| m.id.clone()).collect();
+        if models.len() <= 1 {
+            // 单模型：走既有 canonical 路径
+            self.run_connection_test(cfg, crate::app::AppEvent::SetupTestDone);
+            return;
+        }
+        // 多模型：逐个连接测试，结果逐行汇总（"✓ model …" / "✗ model …"）
+        let cancel = CancellationToken::new();
+        self.inflight = Some(cancel.clone());
+        let tx = self.tx.clone();
+        let base = cfg.clone();
+        tokio::spawn(async move {
+            let mut lines: Vec<String> = Vec::new();
+            for m in &models {
+                let mut mc = base.clone();
+                mc.model = m.clone();
+                let client = match OpenAiClient::new(mc) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        lines.push(format!("✗ {m}: 无法初始化客户端: {e}"));
+                        continue;
+                    }
+                };
+                let out = crate::app::App::connection_test_once(client, cancel.clone()).await;
+                let head = out.lines().next().unwrap_or(out.as_str()).trim();
+                lines.push(format!("{m} {head}"));
+            }
+            let _ = tx.send(crate::app::AppEvent::SetupTestDone(lines.join("\n")));
+        });
     }
 
     /// 构建待保存的 ProviderConfig（pending，不立即 Apply）。
@@ -512,7 +550,8 @@ impl App {
         let Some(s) = &mut self.setup else { return };
         s.testing = false;
         s.test_result = Some(text.clone());
-        if !text.starts_with('✓') {
+        // 多模型结果逐行（"model ✓ …" / "model ✗ …"）：任一行失败即整体失败
+        if !setup_test_all_passed(&text) {
             return; // 失败：保留 pending，允许修改后重试（文档 §十一）
         }
         s.test_passed = true;
@@ -835,6 +874,24 @@ mod tests {
             "paratera/Qwen3.7-Plus"
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// 多模型测试：逐个 model 连接测试，任一 ✗ 即整体失败（不进入 Done）。
+    #[test]
+    fn multi_model_test_result_requires_all_pass() {
+        // 全部 ✓ → 通过
+        let all_ok = "deepseek-reasoner ✓ API reachable · Authentication valid · Model available\ndeepseek-chat ✓ API reachable · Authentication valid · Model available";
+        assert!(setup_test_all_passed(all_ok), "全部模型通过应整体通过");
+        // 任一 ✗ → 失败（保留 pending，允许重试）
+        let one_fail = "deepseek-reasoner ✓ API reachable · Authentication valid · Model available\ndeepseek-chat ✗ 连接失败（HTTP 400）: invalid model";
+        assert!(!setup_test_all_passed(one_fail), "任一模型失败应整体失败");
+        // 单模型兼容：✓ 无 ✗ → 通过
+        assert!(setup_test_all_passed(
+            "✓ API reachable · Authentication valid · Model available\n响应: ping"
+        ));
+        assert!(!setup_test_all_passed(
+            "✗ 连接失败（HTTP 401）: unauthorized"
+        ));
     }
 
     /// 预设（DeepSeek）多选：空格 toggle 多个模型 → cfg.models 全量保留（非单选）。
