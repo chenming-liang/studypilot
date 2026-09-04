@@ -1266,6 +1266,15 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
     out
 }
 
+/// Setup 连接测试结果渲染：按 `\n` 拆行（丢弃空行），每行再按宽度 wrap。
+/// 供 draw_setup Test 步与单测共用（回归：失败提示 "✗ 连接失败…\n如果鉴权失败…" 必须换行显示）。
+fn setup_test_lines(text: &str, width: usize) -> Vec<String> {
+    text.lines()
+        .flat_map(|l| wrap(l.trim_end(), width))
+        .filter(|l| !l.trim().is_empty())
+        .collect()
+}
+
 /// 输入按显示宽度折行 + 光标定位：返回 (每行文本, 光标所在行, 光标在行内显示宽度)。
 /// 光标边界 = 字符索引 `cursor`（位于前字符之后、下字符之前）。折行规则与 `wrap` 一致。
 fn wrap_input_with_cursor(input: &str, cursor: usize, width: usize) -> (Vec<String>, usize, usize) {
@@ -1588,10 +1597,14 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
                 ))));
             } else if let Some(r) = &s.test_result {
                 let ok = r.starts_with('✓');
-                items.push(ListItem::new(Line::from(Span::styled(
-                    format!("  {r}"),
-                    Style::new().fg(if ok { theme::SUCCESS } else { theme::ERROR }),
-                ))));
+                // 结果可能多行（如 "✗ 连接失败…\n如果鉴权失败…"）：逐行渲染，超长再 wrap
+                let body_w = (width.saturating_sub(2) as usize).max(4);
+                for seg in setup_test_lines(r, body_w) {
+                    items.push(ListItem::new(Line::from(Span::styled(
+                        format!("  {seg}"),
+                        Style::new().fg(if ok { theme::SUCCESS } else { theme::ERROR }),
+                    ))));
+                }
             }
             (
                 "AI Setup · Test".to_owned(),
@@ -2726,6 +2739,26 @@ mod warmup_card_lines_tests {
             let lines = warmup_card_lines(text, POP_W);
             assert_all_lines_within(&lines);
         }
+    }
+
+    /// 回归：Setup 连接测试失败提示必须换行显示（"✗ 连接失败…\n如果鉴权失败…" 拆成多行）。
+    #[test]
+    fn setup_test_result_multiline_breaks() {
+        let msg = "✗ 连接失败（HTTP 400）: invalid model\n如果鉴权失败，请检查 API key 是否有效";
+        let lines = setup_test_lines(msg, 40);
+        assert_eq!(lines.len(), 2, "两行应分开，实际: {lines:?}");
+        assert!(lines[0].contains("HTTP 400"), "首行为错误详情");
+        assert!(lines[1].contains("如果鉴权失败"), "次行为提示");
+        assert!(!lines[0].contains('\n'), "每行不得再含换行");
+    }
+
+    /// 超长单行（如 API 错误 message 很长）wrap 折行，且不丢字符。
+    #[test]
+    fn setup_test_result_long_line_wraps() {
+        let msg = format!("✗ 连接失败（HTTP 400）: {}", "x".repeat(200));
+        let lines = setup_test_lines(&msg, 20);
+        assert!(lines.len() >= 2, "超长应 wrap，实际 {} 行", lines.len());
+        assert_all_lines_within(&lines);
     }
 }
 
