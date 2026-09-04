@@ -633,11 +633,6 @@ impl App {
             if rs.next_pending || rs.questions.len() >= rs.planned {
                 return;
             }
-            let done_short = rs
-                .questions
-                .iter()
-                .filter(|q| q.q_type == QType::ShortAnswer)
-                .count();
             // evidence history：已答的题带学生判分；未答的当前题只带题面
             let answered = rs.results.len();
             let mut same_round: Vec<review::QuestionContext> = rs
@@ -687,7 +682,7 @@ impl App {
                 rs.planned,
                 rs.quiz_id,
                 std::sync::Arc::clone(&rs.ctx),
-                review::pick_qtype(rs.planned, done_short),
+                review::pick_qtype(rs.planned, rs.questions.len()),
                 same_round,
             )
         };

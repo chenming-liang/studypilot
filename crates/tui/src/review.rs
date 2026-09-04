@@ -654,8 +654,11 @@ pub struct QuestionContext {
 }
 
 /// 题型分配：简答占 1/5（上取整），其余全选（问题 3：减少简答题量）。
-pub fn pick_qtype(planned: usize, done_short: usize) -> QType {
-    if done_short < planned.div_ceil(5) {
+/// 出题顺序：先选择后简答——简答题安排在整轮**末尾**（`planned.div_ceil(5)` 个）。
+/// `index` = 当前要生成第几题（0-based）。
+pub fn pick_qtype(planned: usize, index: usize) -> QType {
+    let short_quota = planned.div_ceil(5);
+    if short_quota > 0 && index + short_quota >= planned {
         QType::ShortAnswer
     } else {
         QType::Choice
@@ -1458,20 +1461,25 @@ mod warmup_tests {
 mod quiz_parse_tests {
     use super::*;
 
-    /// 问题 3：简答只占 1/5（上取整），其余全选择。
+    /// 先选择后简答：简答题排整轮末尾（planned.div_ceil(5) 个）。
     #[test]
     fn short_answer_ratio_is_one_fifth() {
-        // 5 题 → 简答 1 个（5/5 上取整=1）
-        assert_eq!(pick_qtype(5, 0), QType::ShortAnswer);
-        assert_eq!(pick_qtype(5, 1), QType::Choice, "简答满额后全选择");
-        // 6 题 → 简答 2 个（6/5 上取整=2）
-        assert_eq!(pick_qtype(6, 0), QType::ShortAnswer);
-        assert_eq!(pick_qtype(6, 1), QType::ShortAnswer);
-        assert_eq!(pick_qtype(6, 2), QType::Choice);
-        // 10 题 → 简答 2 个
-        assert_eq!(pick_qtype(10, 0), QType::ShortAnswer);
-        assert_eq!(pick_qtype(10, 1), QType::ShortAnswer);
-        assert_eq!(pick_qtype(10, 2), QType::Choice);
+        // 5 题 → 简答 1 个（5/5 上取整=1），放在最后一题
+        assert_eq!(pick_qtype(5, 0), QType::Choice, "第 1 题选择");
+        assert_eq!(pick_qtype(5, 1), QType::Choice);
+        assert_eq!(pick_qtype(5, 2), QType::Choice);
+        assert_eq!(pick_qtype(5, 3), QType::Choice);
+        assert_eq!(pick_qtype(5, 4), QType::ShortAnswer, "最后一题简答");
+        // 6 题 → 简答 2 个（6/5 上取整=2），放在最后两题
+        assert_eq!(pick_qtype(6, 0), QType::Choice);
+        assert_eq!(pick_qtype(6, 3), QType::Choice);
+        assert_eq!(pick_qtype(6, 4), QType::ShortAnswer);
+        assert_eq!(pick_qtype(6, 5), QType::ShortAnswer);
+        // 10 题 → 简答 2 个，放在最后两题
+        assert_eq!(pick_qtype(10, 0), QType::Choice);
+        assert_eq!(pick_qtype(10, 7), QType::Choice);
+        assert_eq!(pick_qtype(10, 8), QType::ShortAnswer);
+        assert_eq!(pick_qtype(10, 9), QType::ShortAnswer);
     }
 
     #[test]
