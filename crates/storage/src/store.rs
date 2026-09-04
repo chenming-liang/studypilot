@@ -636,6 +636,100 @@ impl Store {
         Ok(n)
     }
 
+    /// 课程内概念名归一化归并（A② 跨篇同义去重的代码层补刀）。
+    ///
+    /// 抽取只看得见单篇笔记，同一概念在不同篇可能以「空白/全半角/常见后缀」差异各抽一次
+    /// （如 `& str` vs `&str`、`String ` vs `String`、`所有权模型` vs `所有权`）。本方法按
+    /// 归一化键分组，把同组概念并成一个：迁移 note_concepts / concept_mastery / questions
+    /// 的引用到 canonical，再删冗余行。语义级近义（如「字符串类型」vs「String」）由抽取
+    /// prompt 的命名稳定规则在源头压住，这里只做确定的格式级归并，不冒误并风险。
+    ///
+    /// 返回合并掉的冗余概念数。
+    pub fn merge_duplicate_concepts(&self, course_id: i64) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT id, name FROM concepts WHERE course_id = ?1 ORDER BY id")?;
+        let rows = stmt.query_map([course_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        let concepts: Vec<(i64, String)> = rows.flatten().collect();
+        if concepts.len() < 2 {
+            return Ok(0);
+        }
+        // 归一化键 → 候选概念（保留顺序靠前者；后续选定 canonical 前先算权重）
+        let mut groups: std::collections::HashMap<String, Vec<i64>> =
+            std::collections::HashMap::new();
+        for (id, name) in &concepts {
+            groups
+                .entry(normalize_concept_key(name))
+                .or_default()
+                .push(*id);
+        }
+        let mut merged = 0usize;
+        for group in groups.values() {
+            if group.len() < 2 {
+                continue;
+            }
+            // canonical：有 mastery 记录者优先（学习历史不迁移到空壳），否则取 id 最小者
+            let canonical = {
+                let mut pick = group[0];
+                for id in &group[1..] {
+                    let has_mastery: i64 = conn.query_row(
+                        "SELECT COUNT(*) FROM concept_mastery WHERE concept_id = ?1",
+                        [id],
+                        |r| r.get(0),
+                    )?;
+                    let cur_has: i64 = conn.query_row(
+                        "SELECT COUNT(*) FROM concept_mastery WHERE concept_id = ?1",
+                        [pick],
+                        |r| r.get(0),
+                    )?;
+                    if has_mastery > 0 && cur_has == 0 {
+                        pick = *id;
+                    }
+                }
+                pick
+            };
+            for dup in group {
+                if *dup == canonical {
+                    continue;
+                }
+                self.merge_concept(&conn, canonical, *dup)?;
+                merged += 1;
+            }
+        }
+        Ok(merged)
+    }
+
+    /// 把 `dup` 概念的引用迁移到 `canonical`，再删除 `dup`。
+    /// 假设调用方持有 conn 锁（本方法内部不再上锁）。
+    fn merge_concept(&self, conn: &Connection, canonical: i64, dup: i64) -> Result<()> {
+        // note_concepts：INSERT OR IGNORE 防 (note_id, concept_id) 主键冲突，再删 dup 关联
+        conn.execute(
+            "INSERT OR IGNORE INTO note_concepts(note_id, concept_id)
+             SELECT note_id, ?1 FROM note_concepts WHERE concept_id = ?2",
+            params![canonical, dup],
+        )?;
+        conn.execute("DELETE FROM note_concepts WHERE concept_id = ?1", [dup])?;
+        // concept_mastery：合并计数（attempts/correct 相加，last_reviewed 取较新）
+        conn.execute(
+            "INSERT INTO concept_mastery(concept_id, attempts, correct, last_reviewed)
+             SELECT ?1, attempts, correct, last_reviewed FROM concept_mastery WHERE concept_id = ?2
+             ON CONFLICT(concept_id) DO UPDATE SET
+               attempts = concept_mastery.attempts + excluded.attempts,
+               correct  = concept_mastery.correct  + excluded.correct,
+               last_reviewed = CASE
+                 WHEN excluded.last_reviewed > concept_mastery.last_reviewed
+                   THEN excluded.last_reviewed ELSE concept_mastery.last_reviewed END",
+            params![canonical, dup],
+        )?;
+        // questions：concept 级引用迁移
+        conn.execute(
+            "UPDATE questions SET concept_id = ?1 WHERE concept_id = ?2",
+            params![canonical, dup],
+        )?;
+        conn.execute("DELETE FROM concepts WHERE id = ?1", [dup])?;
+        Ok(())
+    }
+
     /// 获取课程下所有笔记的 (note_id, title) 列表，按 id 排序。
     pub fn list_note_titles_by_course(&self, course_id: i64) -> Result<Vec<(i64, String)>> {
         let conn = self.conn.lock().unwrap();
@@ -1121,6 +1215,45 @@ impl Store {
     }
 }
 
+/// 概念名归一化键（概念归并用，docs/LLM Prompts.md 附 A 登记的第 2 条补偿规则）。
+///
+/// 把「格式级」差异抹平，使同篇/跨篇以不同写法出现的同一概念能归组：
+/// - 移除全部空白（含全角空格；`& str` ≡ `&str`）
+/// - ASCII 转小写（`String` ≡ `string`）
+/// - 全角 ASCII 转半角（`＆str` ≡ `&str`）
+/// - 剥离常见结构后缀（`Vec容器` → `Vec`、`所有权模型` → `所有权`），仅当剥后非空
+///
+/// 语义级近义（「字符串类型」vs「String」）不在本函数范围——那是抽取 prompt 的
+/// 命名稳定规则负责的源头压制，这里只做确定的格式级归并。
+pub fn normalize_concept_key(name: &str) -> String {
+    let mut s = String::with_capacity(name.len());
+    for c in name.chars() {
+        // 全角 ASCII → 半角（U+FF01..U+FF5E 映射到 U+0021..U+007E）；全角空格单独处理
+        let c = match c {
+            '　' => ' ',
+            '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+            _ => c,
+        };
+        if c.is_whitespace() {
+            continue;
+        }
+        s.push(c.to_ascii_lowercase());
+    }
+    let s = s.trim();
+    // 剥离常见结构后缀（保守清单：只剥确定是修饰性结构词的）
+    const SUFFIXES: [&str; 5] = ["容器", "模型", "机制", "类型", "宏"];
+    let mut stripped = s.to_string();
+    for suf in SUFFIXES {
+        if let Some(base) = stripped.strip_suffix(suf)
+            && !base.is_empty()
+        {
+            stripped = base.to_string();
+            break;
+        }
+    }
+    stripped
+}
+
 #[cfg(test)]
 mod schema_v3_tests {
     use super::*;
@@ -1153,5 +1286,84 @@ mod schema_v3_tests {
             .unwrap();
         assert_eq!(quiz_course, None);
         assert_eq!(session_course, None);
+    }
+}
+
+#[cfg(test)]
+mod concept_merge_tests {
+    use super::*;
+
+    #[test]
+    fn normalize_concept_key_squashes_format_differences() {
+        assert_eq!(normalize_concept_key("&str"), "&str");
+        assert_eq!(normalize_concept_key("& str"), "&str", "内部空白压缩");
+        assert_eq!(normalize_concept_key("＆str"), "&str", "全角转半角");
+        assert_eq!(normalize_concept_key("String "), "string", "trim + 小写");
+        assert_eq!(
+            normalize_concept_key("所有权模型"),
+            "所有权",
+            "剥离结构后缀"
+        );
+        assert_eq!(normalize_concept_key("Vec容器"), "vec", "剥离容器后缀");
+        assert_eq!(normalize_concept_key("所有权"), "所有权", "无后缀不动");
+        assert_eq!(normalize_concept_key("  String\t "), "string");
+        // 语义级近义不在本函数范围（由抽取 prompt 源头压制）
+        assert_ne!(
+            normalize_concept_key("字符串类型"),
+            normalize_concept_key("String")
+        );
+    }
+
+    /// 格式级重复概念归并：引用迁移（note_concepts / concept_mastery / questions），
+    /// 冗余行删除，canonical 保留；语义不同概念不误并。
+    #[test]
+    fn merge_duplicate_concepts_merges_format_dups() {
+        let store = Store::open_in_memory().unwrap();
+        let cid = store.get_or_create_course("rust").unwrap();
+        // 格式级重复组：&str / & str；独立概念：所有权
+        let id1 = store.get_or_create_concept("&str", Some(cid)).unwrap();
+        let id2 = store.get_or_create_concept("& str", Some(cid)).unwrap();
+        let id3 = store.get_or_create_concept("所有权", Some(cid)).unwrap();
+        // 给 id2 挂掌握度（验证迁移到 canonical 后不丢）
+        store.update_concept_mastery(id2, true).unwrap();
+        store.update_concept_mastery(id2, false).unwrap();
+        // 挂题目引用
+        let quiz = store.create_quiz(Some(cid), "rust").unwrap();
+        let qid = store
+            .insert_question(
+                quiz,
+                "choice",
+                "题干",
+                Some(r#"["A","B","C","D"]"#),
+                Some(0),
+                None,
+                Some("解析"),
+                Some(id2),
+            )
+            .unwrap();
+        assert!(qid > 0);
+
+        let merged = store.merge_duplicate_concepts(cid).unwrap();
+        assert_eq!(merged, 1, "只并 &str 一组，所有权独立");
+
+        // canonical = 有 mastery 的 id2（学习历史不迁到空壳）；id1 被并入
+        assert!(
+            store.get_concept_mastery(id2).unwrap().is_some(),
+            "掌握度留在 canonical"
+        );
+        let m = store.get_concept_mastery(id2).unwrap().unwrap();
+        assert_eq!((m.0, m.1), (2, 1), "attempts/correct 相加保留");
+        assert!(
+            store.get_concept_mastery(id1).unwrap().is_none(),
+            "冗余概念已删"
+        );
+        // 题目引用迁移到 canonical
+        let q = store.get_quiz_questions(quiz).unwrap().pop().unwrap();
+        assert_eq!(q.concept_id, Some(id2));
+        // 独立概念仍在
+        assert_eq!(
+            store.list_concept_names_by_course(cid).unwrap(),
+            vec!["& str".to_string(), "所有权".to_string()]
+        );
     }
 }

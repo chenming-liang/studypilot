@@ -332,7 +332,7 @@ async fn judge_answer(
         answer.chars().take(1500).collect::<String>()
     );
     let messages = [
-        Message::system("只输出 JSON，不要 markdown 代码块。"),
+        Message::system("只输出一个 JSON 对象，不要 markdown 代码块、不要多余文字。"),
         Message::user(&prompt),
     ];
     let resp = client.chat(&messages, &[]).await?;

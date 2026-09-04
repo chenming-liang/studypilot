@@ -544,6 +544,8 @@ impl App {
         // 连接测试走普通 chat（非 JSON mode）：`chat_json` 会带 response_format，
         // DeepSeek 对不含 "json" 字样的 prompt 直接 400（"Prompt must contain the word 'json'"），
         // 而连接测试只关心 endpoint/auth/model 可用，不需要结构化输出。
+        // 注意：该 400 行为为 DeepSeek 特有——若支持多后端，此逻辑需按 provider 分流，
+        // 不要假定其它后端也有此限制。
         let msgs = vec![Message::user("请直接回复：ping")];
         let result = agent_providers::with_cancel(client.chat(&msgs, &[]), &cancel).await;
         match result {
