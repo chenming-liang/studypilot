@@ -119,8 +119,7 @@ impl App {
         }
 
         let store = Arc::clone(&self.store);
-        let provider = self.provider.clone();
-        let provider_cfg = self.provider_cfg.clone();
+        let (provider, provider_cfg) = self.role_client(agent_providers::ModelRole::Fast);
         let tx = self.tx.clone();
         let course_name = name.clone();
         // 生成期间挂 inflight：header 显示进行中，Ctrl+C 可中断
@@ -191,8 +190,7 @@ impl App {
         };
 
         let store = Arc::clone(&self.store);
-        let provider = self.provider.clone();
-        let provider_cfg = self.provider_cfg.clone();
+        let (provider, provider_cfg) = self.role_client(agent_providers::ModelRole::Fast);
         let tx = self.tx.clone();
         let cancel = CancellationToken::new();
         self.inflight = Some(cancel.clone());

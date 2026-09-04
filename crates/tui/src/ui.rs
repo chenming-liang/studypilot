@@ -2855,6 +2855,7 @@ mod home_lines_tests {
             store,
             cfg.clone(),
             vec![cfg],
+            std::collections::BTreeMap::new(),
             5.0,
             vec![(1, "rust".into()), (2, "csapp".into())],
         );
@@ -2959,6 +2960,7 @@ mod home_lines_tests {
                 models: Vec::new(),
             },
             vec![],
+            std::collections::BTreeMap::new(),
             5.0,
             vec![],
         );
@@ -3003,6 +3005,7 @@ mod home_lines_tests {
                 models: Vec::new(),
             },
             vec![],
+            std::collections::BTreeMap::new(),
             5.0,
             vec![],
         )
@@ -3100,6 +3103,7 @@ mod home_lines_tests {
                 models: Vec::new(),
             },
             vec![],
+            std::collections::BTreeMap::new(),
             5.0,
             vec![],
         );

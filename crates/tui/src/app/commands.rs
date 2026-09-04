@@ -167,8 +167,7 @@ impl App {
         let cancel = CancellationToken::new();
         self.inflight = Some(cancel.clone());
         let store = Arc::clone(&self.store);
-        let provider = Arc::clone(&self.provider);
-        let provider_cfg = self.provider_cfg.clone();
+        let (provider, provider_cfg) = self.role_client(agent_providers::ModelRole::Fast);
         let max_cost = self.max_cost;
         let tx = self.tx.clone();
         // Agent Trace：START（完成行由 ConceptsRefreshed 汇总回投）
@@ -340,8 +339,7 @@ impl App {
             )));
             return;
         }
-        let provider = self.provider.clone();
-        let provider_cfg = self.provider_cfg.clone();
+        let (provider, provider_cfg) = self.role_client(agent_providers::ModelRole::Fast);
         let store = Arc::clone(&self.store);
         let tx = self.tx.clone();
         // 出题期间挂 inflight：header 显示进行中，Ctrl+C 可取消
@@ -493,7 +491,8 @@ impl App {
         });
     }
 
-    /// `/model [provider[/model]]`：无参弹窗选择（全量分组：provider 头 + 模型行）；带参直接切换。
+    /// `/model [provider/model]`：无参弹窗选择（全量分组：provider 头 + 模型行）；带参直接切换。
+    /// `/model fast|balanced|reasoning`：切到 `[roles]` 表配置的角色模型（文档 §Model Role §五）。
     pub(crate) fn handle_model_command(&mut self, arg: &str) {
         if arg.is_empty() {
             self.model_picker = Some(ModelPicker::from_providers(
@@ -501,6 +500,31 @@ impl App {
                 &self.provider_cfg.name,
                 &self.provider_cfg.model,
             ));
+            return;
+        }
+        // role 快捷切换：/model fast|balanced|reasoning
+        let roles = ["fast", "balanced", "reasoning"];
+        if roles.contains(&arg) {
+            let canonical = match self.roles.get(arg) {
+                Some(c) => c.clone(),
+                None => {
+                    self.push_entry(Entry::Error(format!(
+                        "`{arg}` 角色未配置：先在 config.toml `[roles]` 里设置 {} = \"provider/model\"",
+                        arg
+                    )));
+                    return;
+                }
+            };
+            let (provider, model) = match canonical.split_once('/') {
+                Some((p, m)) if !p.is_empty() && !m.is_empty() => (p.to_string(), m.to_string()),
+                _ => {
+                    self.push_entry(Entry::Error(format!(
+                        "角色 `{arg}` 指向的 `{canonical}` 格式应为 provider/model"
+                    )));
+                    return;
+                }
+            };
+            self.apply_model_switch(&provider, &model);
             return;
         }
         // power-user：/model provider/model 或 /model model（默认当前 provider）
@@ -609,6 +633,7 @@ impl App {
                     default_model: format!("{provider}/{model}"),
                     max_cost: self.max_cost,
                     providers: self.all_providers.clone(),
+                    roles: self.roles.clone(),
                 };
                 let path = self.config_file.clone();
                 if let Err(e) = persist.save(&path) {
@@ -943,6 +968,7 @@ pub(crate) mod course_delete_tests {
             store,
             cfg.clone(),
             vec![cfg],
+            std::collections::BTreeMap::new(),
             5.0,
             vec![(1, "rust".into()), (2, "csapp".into())],
         )
@@ -1009,6 +1035,128 @@ pub(crate) mod course_delete_tests {
         assert_eq!(app.provider_cfg.model, "deepseek-v4-flash");
         assert_eq!(app.provider_cfg.price_prompt, Some(2.0));
         assert!(!app.provider_cfg.thinking);
+    }
+
+    /// Model Role：roles 表配置的 role → 对应 provider/model；未配置 → 回退当前模型。
+    #[test]
+    fn resolve_role_cfg_uses_roles_table_and_falls_back() {
+        use agent_providers::ModelRole;
+        let mut app = test_app();
+        app.all_providers.push(agent_providers::ProviderConfig {
+            name: "deepseek".into(),
+            endpoint: "https://api.deepseek.com/v1".into(),
+            api_key: Some("sk-deepseek".into()),
+            api_key_env: None,
+            model: "deepseek-v4-pro".into(),
+            models: Vec::new(),
+            price_prompt: Some(4.0),
+            price_completion: Some(16.0),
+            price_prompt_cached: None,
+            context_length: 65536,
+            thinking: true,
+        });
+        app.provider_cfg.model = "deepseek-v4-flash".into();
+        // 未配置 role → 回退当前模型
+        let fallback = app.resolve_role_cfg(ModelRole::Reasoning);
+        assert_eq!(fallback.name, "test", "未配置 role 回退当前 provider");
+        assert_eq!(
+            fallback.model, "deepseek-v4-flash",
+            "未配置 role 用当前模型"
+        );
+        // 配置 fast role → 命中 roles 表
+        app.roles
+            .insert("fast".into(), "deepseek/deepseek-v4-pro".into());
+        let fast = app.resolve_role_cfg(ModelRole::Fast);
+        assert_eq!(fast.model, "deepseek-v4-pro", "命中 [roles].fast");
+        assert!(fast.thinking, "角色模型带元数据");
+        assert_eq!(
+            fast.api_key.as_deref(),
+            Some("sk-deepseek"),
+            "角色切换不要求重新输入 key"
+        );
+        // roles 表指向未知 provider → 回退当前模型
+        app.roles.insert("balanced".into(), "nope/m".into());
+        let balanced = app.resolve_role_cfg(ModelRole::Balanced);
+        assert_eq!(balanced.model, "deepseek-v4-flash", "未知 provider 回退");
+    }
+
+    /// `/model fast|balanced|reasoning`：切到 [roles] 配置的角色模型；未配置报错。
+    #[test]
+    fn model_role_command_switches_model() {
+        let mut app = test_app();
+        app.all_providers.push(agent_providers::ProviderConfig {
+            name: "deepseek".into(),
+            endpoint: "https://api.deepseek.com/v1".into(),
+            api_key: Some("sk-deepseek".into()),
+            api_key_env: None,
+            model: "deepseek-v4-pro".into(),
+            models: Vec::new(),
+            price_prompt: Some(4.0),
+            price_completion: Some(16.0),
+            price_prompt_cached: None,
+            context_length: 65536,
+            thinking: true,
+        });
+        app.provider_cfg.model = "deepseek-v4-flash".into();
+        app.roles
+            .insert("fast".into(), "deepseek/deepseek-v4-pro".into());
+        // /model fast → 切到配置的模型
+        app.handle_model_command("fast");
+        assert_eq!(app.provider_cfg.model, "deepseek-v4-pro");
+        assert!(app.provider_cfg.thinking);
+        // /model provider/model 直接指定仍可用
+        app.handle_model_command("deepseek/deepseek-v4-flash");
+        assert_eq!(app.provider_cfg.model, "deepseek-v4-flash");
+        // 未配置的 role → 明确报错
+        let before = app.provider_cfg.clone();
+        app.handle_model_command("reasoning");
+        assert_eq!(app.provider_cfg.model, before.model, "未配置 role 不切换");
+        assert!(
+            app.entries
+                .iter()
+                .any(|e| matches!(e, Entry::Error(s) if s.contains("reasoning")))
+        );
+    }
+
+    /// role_client：role 命中 roles 表 → 独立 client（不同模型）；未命中 → 当前 client。
+    #[test]
+    fn role_client_switches_model_only_when_configured() {
+        use agent_providers::ModelRole;
+        let mut app = test_app();
+        app.all_providers.push(agent_providers::ProviderConfig {
+            name: "deepseek".into(),
+            endpoint: "https://api.deepseek.com/v1".into(),
+            api_key: Some("sk-deepseek".into()),
+            api_key_env: None,
+            model: "deepseek-v4-pro".into(),
+            models: Vec::new(),
+            price_prompt: Some(4.0),
+            price_completion: Some(16.0),
+            price_prompt_cached: None,
+            context_length: 65536,
+            thinking: true,
+        });
+        app.provider_cfg.model = "deepseek-v4-flash".into();
+        // 未配置 role → 复用当前 client
+        let (client, cfg) = app.role_client(ModelRole::Reasoning);
+        assert_eq!(cfg.model, "deepseek-v4-flash");
+        assert!(
+            Arc::ptr_eq(&client, &app.provider),
+            "未命中 role 复用现有 client"
+        );
+        // 配置 fast → 新建独立 client，不破坏当前模型
+        app.roles
+            .insert("fast".into(), "deepseek/deepseek-v4-pro".into());
+        let (fast_client, fast_cfg) = app.role_client(ModelRole::Fast);
+        assert_eq!(fast_cfg.model, "deepseek-v4-pro");
+        assert!(
+            !Arc::ptr_eq(&fast_client, &app.provider),
+            "角色命中时新建 client"
+        );
+        assert_eq!(
+            app.provider_cfg.model, "deepseek-v4-flash",
+            "当前模型不被角色覆盖"
+        );
     }
 
     /// 模型 picker 全量分组：多 provider × 多 model 展开成扁平行，当前模型定位。
@@ -1167,7 +1315,15 @@ mod selection_mapping_tests {
         };
         let store = Arc::new(Store::open_in_memory().unwrap());
         let client = Arc::new(OpenAiClient::new(cfg.clone()).unwrap());
-        App::new(client, store, cfg.clone(), vec![cfg], 5.0, Vec::new())
+        App::new(
+            client,
+            store,
+            cfg.clone(),
+            vec![cfg],
+            std::collections::BTreeMap::new(),
+            5.0,
+            Vec::new(),
+        )
     }
 
     /// 回归：拖选行号映射与渲染同系（聊天区无边框）。
@@ -1250,7 +1406,15 @@ mod onboarding_tests {
         };
         let store = Arc::new(Store::open_in_memory().unwrap());
         let client = Arc::new(OpenAiClient::new(cfg.clone()).unwrap());
-        App::new(client, store, cfg.clone(), vec![cfg], 5.0, Vec::new())
+        App::new(
+            client,
+            store,
+            cfg.clone(),
+            vec![cfg],
+            std::collections::BTreeMap::new(),
+            5.0,
+            Vec::new(),
+        )
     }
 
     /// 建两门课的 App（老用户态）。
@@ -1731,6 +1895,7 @@ mod course_context_tests {
             store,
             cfg.clone(),
             vec![cfg],
+            std::collections::BTreeMap::new(),
             5.0,
             vec![(1, "rust".into())],
         );
@@ -1803,6 +1968,7 @@ mod course_context_tests {
             store,
             cfg.clone(),
             vec![cfg],
+            std::collections::BTreeMap::new(),
             5.0,
             vec![(1, "rust".into())],
         );
@@ -1853,6 +2019,7 @@ mod course_context_tests {
             store,
             cfg.clone(),
             vec![cfg],
+            std::collections::BTreeMap::new(),
             5.0,
             vec![(1, "rust".into())],
         );
@@ -1914,6 +2081,7 @@ mod course_context_tests {
             store,
             cfg.clone(),
             vec![cfg],
+            std::collections::BTreeMap::new(),
             5.0,
             vec![(1, "rust".into())],
         );
@@ -1955,6 +2123,7 @@ mod course_context_tests {
             store,
             cfg.clone(),
             vec![cfg],
+            std::collections::BTreeMap::new(),
             5.0,
             vec![(1, "rust".into())],
         );

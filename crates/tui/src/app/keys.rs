@@ -467,8 +467,8 @@ impl App {
                     self.input.clear();
                     self.cursor_pos = 0;
                     self.push_entry(Entry::Info("◌ Grading…".into()));
-                    let provider = self.provider.clone();
-                    let provider_cfg = self.provider_cfg.clone();
+                    let (provider, provider_cfg) =
+                        self.role_client(agent_providers::ModelRole::Reasoning);
                     let store = Arc::clone(&self.store);
                     let tx = self.tx.clone();
                     tokio::spawn(async move {

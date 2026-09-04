@@ -86,8 +86,7 @@ impl App {
         self.import_cancel = Some(cancel.clone());
 
         let store = Arc::clone(&self.store);
-        let provider = Arc::clone(&self.provider);
-        let provider_cfg = self.provider_cfg.clone();
+        let (provider, provider_cfg) = self.role_client(agent_providers::ModelRole::Fast);
         let config = importer::ImportConfig {
             dir: dir.clone(),
             course: course.clone(),

@@ -13,7 +13,8 @@ use storage::Store;
 
 impl App {
     pub(crate) fn spawn_chat(&mut self) {
-        let provider: Arc<dyn Provider> = self.provider.clone();
+        let (provider, _cfg) = self.role_client(agent_providers::ModelRole::Balanced);
+        let provider: Arc<dyn Provider> = provider;
         let store = Arc::clone(&self.store);
         let course_id = self.current_course_id();
         let history = self.history.clone();

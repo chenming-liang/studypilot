@@ -101,7 +101,15 @@ async fn main() -> anyhow::Result<()> {
         crossterm::cursor::SetCursorStyle::SteadyBlock
     )?;
     let result = {
-        let mut app = app::App::new(client, store, pc, cfg.providers.clone(), max_cost, courses);
+        let mut app = app::App::new(
+            client,
+            store,
+            pc,
+            cfg.providers.clone(),
+            cfg.roles.clone(),
+            max_cost,
+            courses,
+        );
         app.config_file = config_file;
         app.sidebar_course_stats = course_stats;
         // R6：状态栏显示含历史的累计成本，预算熔断按累计值判断

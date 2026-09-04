@@ -619,6 +619,7 @@ impl App {
             default_model: format!("{}/{}", name, cfg.model),
             max_cost: self.max_cost,
             providers: self.all_providers.clone(),
+            roles: self.roles.clone(),
         };
         let path = self.config_file.clone();
         if let Err(e) = persist.save(&path) {
@@ -902,6 +903,7 @@ mod tests {
             default_model: format!("{}/{}", name, cfg.model),
             max_cost: app.max_cost,
             providers: vec![cfg.clone()],
+            roles: std::collections::BTreeMap::new(),
         };
         let ns = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

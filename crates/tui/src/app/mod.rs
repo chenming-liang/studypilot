@@ -114,6 +114,9 @@ pub struct App {
     pub provider_cfg: ProviderConfig,
     /// 全部 provider 配置（/model 切换的候选）
     pub all_providers: Vec<ProviderConfig>,
+    /// Model Role → provider/model（文档 §Model Role）：任务入口按 Role 解析模型，
+    /// 未配置的 Role 回退 provider_cfg（当前模型）。来自 config.toml `[roles]`。
+    pub roles: std::collections::BTreeMap<String, String>,
     /// 运行时配置文件路径（main 解析；/model 落盘用）
     pub config_file: std::path::PathBuf,
     pub courses: Vec<(i64, String)>,
@@ -425,6 +428,7 @@ impl App {
         store: Arc<Store>,
         provider_cfg: ProviderConfig,
         all_providers: Vec<ProviderConfig>,
+        roles: std::collections::BTreeMap<String, String>,
         max_cost: f64,
         courses: Vec<(i64, String)>,
     ) -> Self {
@@ -434,6 +438,7 @@ impl App {
             store,
             provider_cfg,
             all_providers,
+            roles,
             config_file: std::path::PathBuf::from("config.toml"),
             max_cost,
             courses,
@@ -521,6 +526,52 @@ impl App {
             .api_key_env
             .as_deref()
             .is_some_and(|env| std::env::var(env).ok().filter(|v| !v.is_empty()).is_some())
+    }
+
+    /// Model Role → 该任务应使用的 ProviderConfig（文档 §Model Role）。
+    /// 优先 `[roles]` 表的 `provider/model`；未配置该 Role → 回退当前模型（provider_cfg）。
+    pub(crate) fn resolve_role_cfg(&self, role: agent_providers::ModelRole) -> ProviderConfig {
+        let Some(canonical) = self.roles.get(role.key()) else {
+            return self.provider_cfg.clone();
+        };
+        let Some((pname, mname)) = canonical.split_once('/') else {
+            tracing::warn!(
+                role = role.key(),
+                "role 指向的 `{canonical}` 应为 provider/model"
+            );
+            return self.provider_cfg.clone();
+        };
+        match self
+            .all_providers
+            .iter()
+            .find(|p| p.name == pname)
+            .map(|p| p.with_model(mname))
+        {
+            Some(cfg) => cfg,
+            None => {
+                tracing::warn!(role = role.key(), "role 指向的 provider `{pname}` 未配置");
+                self.provider_cfg.clone()
+            }
+        }
+    }
+
+    /// Model Role → (client, cfg)（文档 §Model Role）：任务入口用角色模型跑，
+    /// 角色未配置 → 回退当前模型与现有 client（零额外请求）。
+    pub(crate) fn role_client(
+        &self,
+        role: agent_providers::ModelRole,
+    ) -> (Arc<OpenAiClient>, ProviderConfig) {
+        let cfg = self.resolve_role_cfg(role);
+        if cfg.name == self.provider_cfg.name && cfg.model == self.provider_cfg.model {
+            return (self.provider.clone(), self.provider_cfg.clone());
+        }
+        match OpenAiClient::new(cfg.clone()) {
+            Ok(client) => (Arc::new(client), cfg),
+            Err(e) => {
+                tracing::warn!(role = role.key(), "角色模型初始化失败，回退当前模型: {e}");
+                (self.provider.clone(), self.provider_cfg.clone())
+            }
+        }
     }
 
     /// header 状态标签：与按键路由同源的覆盖层状态推导（复习 > 导入 > 请求中 > 选择 > 就绪）。

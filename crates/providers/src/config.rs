@@ -12,6 +12,11 @@ pub struct Config {
     /// 当前模型（canonical `provider_id/model_id`）；空 = 回退旧 `provider.model`。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub default_model: String,
+    /// 模型角色（Task → Role → Configured Model，文档 §七/§三）：
+    /// `roles = { fast = "provider/model", balanced = "...", reasoning = "..." }`。
+    /// 缺失的 role 回退 default_model；不影响 Provider → models[] 架构。
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub roles: std::collections::BTreeMap<String, String>,
     #[serde(default = "default_max_cost")]
     pub max_cost: f64,
     #[serde(default)]
@@ -182,6 +187,7 @@ impl Default for Config {
         Self {
             default_provider: "custom".into(),
             default_model: String::new(),
+            roles: std::collections::BTreeMap::new(),
             max_cost: default_max_cost(),
             providers: vec![ProviderConfig::default()],
         }
@@ -376,6 +382,73 @@ impl Config {
         }
         Ok(format!("{}/{}", self.default_provider, p.model))
     }
+}
+
+/// 模型角色（文档 §一/§三）：业务代码只表达"任务属于什么角色"，
+/// 具体模型 ID 由 config.toml `[roles]` 配置，不硬编码。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelRole {
+    /// 大量、结构化、低难度：导入整理/概念抽取/大纲/复习地图/闪卡/出题
+    Fast,
+    /// 默认学习模型：普通问答/概念解释/基于资料回答
+    Balanced,
+    /// 高难度推理：复杂分析/深度评价/错误诊断/多资料综合
+    Reasoning,
+}
+
+impl ModelRole {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Fast => "fast",
+            Self::Balanced => "balanced",
+            Self::Reasoning => "reasoning",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Fast => "Fast",
+            Self::Balanced => "Balanced",
+            Self::Reasoning => "Reasoning",
+        }
+    }
+}
+
+/// 解析 `provider/model` canonical 字符串为 (provider, model)。
+fn split_canonical(full: &str) -> Option<(&str, &str)> {
+    match full.split_once('/') {
+        Some((p, m)) if !p.is_empty() && !m.is_empty() => Some((p, m)),
+        _ => None,
+    }
+}
+
+impl Config {
+    /// Model Role → 配置好的 ProviderConfig（文档 §四 `resolve_model(role)`）。
+    ///
+    /// - `[roles]` 配了该 role → 按 `provider/model` 解析（key/endpoint 原样，model/pricing 切换）
+    /// - 未配置该 role → 回退 `default_model`（保持现有配置兼容，所有 role 都可 fallback）
+    /// - 最后兜底 default_provider + 其单 model
+    pub fn resolve_model(&self, role: ModelRole) -> Result<ProviderConfig> {
+        // ① 优先 [roles] 表；② 未配置则回退 default_model（保持兼容，所有 role 可 fallback）
+        let canonical = self
+            .roles
+            .get(role.key())
+            .cloned()
+            .or_else(|| self.resolve_default_model().ok());
+        let Some(canonical) = canonical else {
+            return Err(Error::Config(format!(
+                "未配置模型: role `{}` 与 default_model 均缺失",
+                role.key()
+            )));
+        };
+        let (pname, mname) = split_canonical(&canonical).ok_or_else(|| {
+            Error::Config(format!(
+                "role `{}` 指向的 `{canonical}` 格式应为 provider/model",
+                role.key()
+            ))
+        })?;
+        let p = self.provider(pname)?;
+        Ok(p.with_model(mname))
+    }
 
     /// 解析 `default_model` 为 (provider, model) 对（旧式迁移时 provider = default_provider）。
     pub fn resolve_default_model_pair(&self) -> Result<(String, String)> {
@@ -508,6 +581,53 @@ model = "my-model"
     fn known_pricing_detects_present_prices() {
         let cfg = SAMPLE.parse::<Config>().unwrap();
         assert!(cfg.provider("deepseek").unwrap().known_pricing());
+    }
+
+    #[test]
+    fn resolve_role_uses_roles_table() {
+        // ① [roles] 配了该 role → 返回对应 provider/model 的 ProviderConfig
+        let cfg = format!("{SAMPLE}\n[roles]\nfast = \"plain/gpt-4o-mini\"\n")
+            .parse::<Config>()
+            .unwrap();
+        let got = cfg.resolve_model(ModelRole::Fast).unwrap();
+        assert_eq!(got.name, "plain");
+        assert_eq!(got.model, "gpt-4o-mini");
+    }
+
+    #[test]
+    fn resolve_role_falls_back_to_default_model() {
+        // ② 未配置该 role → 回退 default_model（所有 role 可 fallback）
+        let cfg = SAMPLE.parse::<Config>().unwrap();
+        let got = cfg.resolve_model(ModelRole::Reasoning).unwrap();
+        assert_eq!(got.name, "deepseek");
+        assert_eq!(got.model, "deepseek-reasoner");
+    }
+
+    #[test]
+    fn resolve_role_without_default_fails_clearly() {
+        // ③ role 与 default_model 都缺（provider 也无 model）→ 明确报错
+        let cfg = r#"
+default_provider = "p"
+[[providers]]
+name = "p"
+endpoint = "https://example.com/v1"
+model = ""
+"#
+        .parse::<Config>()
+        .unwrap();
+        let err = cfg.resolve_model(ModelRole::Fast).unwrap_err();
+        assert!(err.to_string().contains("未配置模型"), "{err}");
+    }
+
+    #[test]
+    fn resolve_role_bad_canonical_reports_role() {
+        // ④ roles 表里格式错误 → 报错带 role 名
+        let cfg = format!("{SAMPLE}\n[roles]\nfast = \"no-slash\"\n")
+            .parse::<Config>()
+            .unwrap();
+        let err = cfg.resolve_model(ModelRole::Fast).unwrap_err();
+        assert!(err.to_string().contains("fast"), "{err}");
+        assert!(err.to_string().contains("no-slash"), "{err}");
     }
 
     #[test]
