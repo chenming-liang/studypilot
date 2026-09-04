@@ -90,22 +90,24 @@ StudyPilot 把任务分为几类角色（fast / balanced / reasoning），每类
 - **Windows**：`StudyPilot-windows-x64.zip`，解压后运行 `studypilot.exe`
 - **Linux**：`StudyPilot-linux-x64.tar.gz`，解压后运行 `./studypilot`
 
-> 注意：如果导入的资料包含 PDF，需要系统已安装 **Python 3 + PyMuPDF**（PDF 提取由 `python3` 子进程完成，对 Release 版本同样是运行依赖）。
+> macOS 用户暂未提供预编译包，请按下方「从源码构建」安装。
+> 若导入的资料包含 PDF，需先安装 PDF 提取所需依赖（Release 版本同样需要）。运行一次安装脚本即可：
+>
+> - **Windows**：双击或运行 `scripts/install-deps.ps1`
+> - **Linux / macOS**：运行 `bash scripts/install-deps.sh`
 
 ### 从源码构建
 
 ```bash
 git clone <repo-url>
 cd <repo-dir>
+# 先安装 PDF 提取所需依赖（仅在导入 PDF 时需要）：
+#   Windows:  scripts/install-deps.ps1
+#   Linux/macOS: bash scripts/install-deps.sh
 cargo build --release
 ```
 
-构建需要 **Rust**（stable 工具链）；若要用 PDF 导入，还需 **Python 3 + PyMuPDF**：
-
-```bash
-pip install pymupdf
-# Debian/Ubuntu (PEP 668) 环境：pip install --break-system-packages pymupdf
-```
+构建需要 **Rust**（stable 工具链）。
 
 ---
 
