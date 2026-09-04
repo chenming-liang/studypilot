@@ -76,48 +76,65 @@ fn parse_markdown(path: &Path) -> Result<RawDoc> {
 /// pdf：经 scripts/pdf_extract.py 子进程提取。决策 D3。
 fn parse_pdf(path: &Path) -> Result<RawDoc> {
     let script = find_script();
-    let output = std::process::Command::new("python3")
-        .arg(script)
-        .arg(path)
-        .env("PYTHONIOENCODING", "utf-8")
-        .output()
-        .map_err(|e| ParseError::Pdf(format!("启动 python3 失败: {e}（确保已安装 pymupdf）")))?;
-
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        return Err(ParseError::Pdf(err.to_string()));
+    // 平台感知的 python 命令：Windows 用 python / py（无 python3），Unix 用 python3。
+    let python_candidates: &[&str] = if cfg!(windows) {
+        &["python", "py"]
+    } else {
+        &["python3", "python"]
+    };
+    let mut last_err: Option<String> = None;
+    for python in python_candidates {
+        match std::process::Command::new(python)
+            .arg(&script)
+            .arg(path)
+            .env("PYTHONIOENCODING", "utf-8")
+            .output()
+        {
+            Ok(out) => {
+                if !out.status.success() {
+                    let err = String::from_utf8_lossy(&out.stderr).to_string();
+                    // 命令存在但脚本执行失败 → 直接报错（换个 python 命令不会改变结果）
+                    return Err(ParseError::Pdf(err));
+                }
+                let json: serde_json::Value = serde_json::from_slice(&out.stdout)
+                    .map_err(|e| ParseError::Pdf(format!("解析 JSON 失败: {e}")))?;
+                // pdf_extract.py 输出：{"pages": N, "page_texts": [每页文本, ...]}
+                let pages: Vec<String> = json
+                    .get("page_texts")
+                    .and_then(|a| a.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let text = pages.join("\n\n");
+                if text.trim().is_empty() {
+                    return Err(ParseError::Pdf("提取文本为空（疑似扫描版 PDF）".into()));
+                }
+                let title = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("untitled")
+                    .to_owned();
+                let hash = content_hash(&text);
+                return Ok(RawDoc {
+                    title,
+                    text: text.clone(),
+                    fts_text: text,
+                    content_hash: hash,
+                });
+            }
+            Err(e) => {
+                // 命令不存在（NotFound）→ 换下一个候选
+                last_err = Some(e.to_string());
+            }
+        }
     }
-
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .map_err(|e| ParseError::Pdf(format!("解析 JSON 失败: {e}")))?;
-
-    let pages: Vec<String> = json
-        .get("page_texts")
-        .and_then(|a| a.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let text = pages.join("\n\n");
-    if text.trim().is_empty() {
-        return Err(ParseError::Pdf("提取文本为空（疑似扫描版 PDF）".into()));
-    }
-
-    let title = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("untitled")
-        .to_owned();
-    let hash = content_hash(&text);
-    Ok(RawDoc {
-        title,
-        text: text.clone(),
-        fts_text: text,
-        content_hash: hash,
-    })
+    Err(ParseError::Pdf(format!(
+        "未找到可用的 Python 解释器（{last}），请运行 scripts/install-deps.sh 或 scripts/install-deps.ps1 安装依赖",
+        last = last_err.unwrap_or_default()
+    )))
 }
 
 /// pptx：zip 解压 → 读 ppt/slides/slide*.xml → 抽 <a:t> 文本。

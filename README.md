@@ -89,8 +89,8 @@ StudyPilot 把任务分为几类角色（fast / balanced / reasoning），每类
 
 - **Windows**：`StudyPilot-windows-x64.zip`，解压后运行 `studypilot.exe`
 - **Linux**：`StudyPilot-linux-x64.tar.gz`，解压后运行 `./studypilot`
+- **macOS**：`StudyPilot-macos-aarch64.tar.gz`（Apple Silicon）或 `StudyPilot-macos-x64.tar.gz`（Intel），解压后运行 `./studypilot`
 
-> macOS 用户暂未提供预编译包，请按下方「从源码构建」安装。
 > 若导入的资料包含 PDF，需先安装 PDF 提取所需依赖（Release 版本同样需要）。运行一次安装脚本即可：
 >
 > - **Windows**：双击或运行 `scripts/install-deps.ps1`
