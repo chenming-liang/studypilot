@@ -1361,6 +1361,28 @@ impl App {
             }
             KeyCode::Enter => {
                 let sel = picker.selected;
+                // 角色模式：选定模型 → 绑定到该角色（落盘 roles，不切换当前模型）
+                if let Some(role) = picker.role.clone() {
+                    let chosen = picker
+                        .options
+                        .get(sel)
+                        .map(|o| (o.provider.clone(), o.model.clone()));
+                    self.model_picker = None;
+                    if let Some((p, m)) = chosen {
+                        self.apply_role_assign(&role, &p, &m);
+                    }
+                    return;
+                }
+                // 普通模式：角色行 → 进入角色模型选择；模型行 → 切换当前模型
+                if picker.selected_is_role() {
+                    if let Some(o) = picker.options.get(sel) {
+                        let role = o.model_display.clone();
+                        if ["fast", "balanced", "reasoning"].contains(&role.as_str()) {
+                            picker.enter_role(&role);
+                        }
+                    }
+                    return;
+                }
                 let chosen = picker
                     .options
                     .get(sel)

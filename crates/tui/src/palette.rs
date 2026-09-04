@@ -78,24 +78,44 @@ pub struct ModelOption {
     pub known_pricing: bool,
     /// 思考模式
     pub thinking: bool,
+    /// 角色配置行（fast/balanced/reasoning 绑定模型），非真实模型
+    pub is_role: bool,
 }
 
 /// 模型选择弹窗状态（全量分组：provider 分组头 + 模型行）。
 pub struct ModelPicker {
     pub options: Vec<ModelOption>,
     pub selected: usize,
+    /// Some(role_key) = 正在为该角色选择模型；None = 切换当前模型
+    pub role: Option<String>,
+    /// config.toml `[roles]` 当前绑定（角色行渲染 + 角色模式初始定位）
+    pub roles: std::collections::BTreeMap<String, String>,
 }
 
 impl ModelPicker {
-    /// 从 providers 展开成「provider 分组 + 模型行」扁平行。
+    /// 从 providers 展开成「角色配置行 + provider 分组 + 模型行」扁平行。
     /// 展示当前选中模型（provider/model 匹配的行）。
     pub fn from_providers(
         providers: &[ProviderConfig],
         current_provider: &str,
         current_model: &str,
+        roles: &std::collections::BTreeMap<String, String>,
     ) -> Self {
         let mut options = Vec::new();
         let mut selected = 0usize;
+        // 顶部角色配置行（fast/balanced/reasoning）：Enter 进入该角色的模型选择。
+        // 初始定位：优先当前选中模型；无模型时落在 fast 角色行。
+        for role in ["fast", "balanced", "reasoning"] {
+            options.push(ModelOption {
+                provider: String::new(),
+                provider_display: String::new(),
+                model: String::new(),
+                model_display: role.to_string(),
+                known_pricing: false,
+                thinking: false,
+                is_role: true,
+            });
+        }
         for pc in providers {
             for m in pc.models_or_legacy() {
                 let is_current = pc.name == current_provider && m.id == current_model;
@@ -109,13 +129,52 @@ impl ModelPicker {
                     model_display: m.display_name().to_string(),
                     known_pricing: pc.known_pricing(),
                     thinking: m.thinking,
+                    is_role: false,
                 });
             }
         }
-        if options.is_empty() {
-            selected = 0;
+        let n = options.len();
+        Self {
+            options,
+            selected: selected.min(n.saturating_sub(1)),
+            role: None,
+            roles: roles.clone(),
         }
-        Self { options, selected }
+    }
+
+    /// 进入角色选择模式：选项只剩真实模型，初始定位到该角色当前绑定（若已配置）。
+    pub fn enter_role(&mut self, role: &str) {
+        let bound = self.roles.get(role).cloned().unwrap_or_default();
+        let mut selected = 0usize;
+        let mut models = Vec::new();
+        for o in &self.options {
+            if o.is_role {
+                continue;
+            }
+            if !bound.is_empty() && format!("{}/{}", o.provider, o.model) == bound {
+                selected = models.len();
+            }
+            models.push(ModelOption {
+                provider: o.provider.clone(),
+                provider_display: o.provider_display.clone(),
+                model: o.model.clone(),
+                model_display: o.model_display.clone(),
+                known_pricing: o.known_pricing,
+                thinking: o.thinking,
+                is_role: false,
+            });
+        }
+        self.role = Some(role.to_string());
+        self.options = models;
+        self.selected = selected.min(self.options.len().saturating_sub(1));
+    }
+
+    /// 当前选中行是否角色配置行。
+    pub fn selected_is_role(&self) -> bool {
+        self.options
+            .get(self.selected)
+            .map(|o| o.is_role)
+            .unwrap_or(false)
     }
 }
 
@@ -404,7 +463,7 @@ impl CommandPalette {
             P {
                 label: "Model",
                 command: "/model",
-                desc: "切换模型",
+                desc: "切换模型 / 配置角色（fast/balanced/reasoning）",
                 action: A::OpenModel,
                 group: G::Settings,
                 scope: S::Global,

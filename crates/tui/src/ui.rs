@@ -2577,6 +2577,35 @@ fn draw_model_picker(
     let mut items: Vec<ListItem> = Vec::new();
     let mut last_provider: Option<&str> = None;
     for (i, o) in picker.options.iter().enumerate() {
+        // 角色配置行：显示角色名 + 已绑定模型（未配置 = 用当前模型）
+        if o.is_role {
+            let bound = picker
+                .roles
+                .get(o.model_display.as_str())
+                .cloned()
+                .unwrap_or_else(|| "（未配置 → 用当前模型）".into());
+            let role_label = match o.model_display.as_str() {
+                "fast" => "⚡ fast",
+                "balanced" => "◎ balanced",
+                "reasoning" => "✦ reasoning",
+                _ => o.model_display.as_str(),
+            };
+            let mark = if i == picker.selected { "▸" } else { " " };
+            let style = if i == picker.selected {
+                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+            } else {
+                Style::new()
+            };
+            items.push(ListItem::new(Line::from(vec![
+                Span::styled(format!(" {} ", mark), style),
+                Span::styled(
+                    format!("{role_label:<12}"),
+                    style.add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(bound, Style::new().fg(theme::MUTED)),
+            ])));
+            continue;
+        }
         // provider 分组头（仅在切换 provider 时插入分隔行）
         if last_provider != Some(o.provider.as_str()) {
             if last_provider.is_some() {
@@ -2627,10 +2656,12 @@ fn draw_model_picker(
         items.push(ListItem::new(Span::styled(label, style)));
     }
 
-    let title = if picker.options.len() > (height.saturating_sub(2)) as usize {
-        " AI Models (↑↓ 移动 · PgUp/PgDn 翻页 · Enter 切换 · Esc 取消) "
+    let title: String = if let Some(role) = &picker.role {
+        format!(" 角色 `{role}` 用哪个模型？(Enter 绑定 · Esc 返回) ")
+    } else if picker.options.len() > (height.saturating_sub(2)) as usize {
+        " AI Models (↑↓ · PgUp/PgDn 翻页 · Enter 切换 / 配置角色 · Esc 取消) ".into()
     } else {
-        " AI Models (↑↓ 移动 · Enter 切换 · Esc 取消) "
+        " AI Models (↑↓ · Enter 切换 / 配置角色 · Esc 取消) ".into()
     };
     let mut state = ratatui::widgets::ListState::default().with_selected(Some(picker.selected));
     f.render_stateful_widget(

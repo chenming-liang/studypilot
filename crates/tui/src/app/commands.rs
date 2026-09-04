@@ -493,39 +493,29 @@ impl App {
     }
 
     /// `/model [provider/model]`：无参弹窗选择（全量分组：provider 头 + 模型行）；带参直接切换。
-    /// `/model fast|balanced|reasoning`：切到 `[roles]` 表配置的角色模型（文档 §Model Role §五）。
+    /// `/model [provider[/model]]`：无参弹窗选择（角色配置行 + 全量分组：provider 头 + 模型行）；带参直接切换。
+    /// `/model fast|balanced|reasoning`：打开该角色的模型选择（配到 config.toml `[roles]`）。
     pub(crate) fn handle_model_command(&mut self, arg: &str) {
         if arg.is_empty() {
             self.model_picker = Some(ModelPicker::from_providers(
                 &self.all_providers,
                 &self.provider_cfg.name,
                 &self.provider_cfg.model,
+                &self.roles,
             ));
             return;
         }
-        // role 快捷切换：/model fast|balanced|reasoning
+        // role 配置：/model fast|balanced|reasoning → 进入该角色模型选择
         let roles = ["fast", "balanced", "reasoning"];
         if roles.contains(&arg) {
-            let canonical = match self.roles.get(arg) {
-                Some(c) => c.clone(),
-                None => {
-                    self.push_entry(Entry::Error(format!(
-                        "`{arg}` 角色未配置：先在 config.toml `[roles]` 里设置 {} = \"provider/model\"",
-                        arg
-                    )));
-                    return;
-                }
-            };
-            let (provider, model) = match canonical.split_once('/') {
-                Some((p, m)) if !p.is_empty() && !m.is_empty() => (p.to_string(), m.to_string()),
-                _ => {
-                    self.push_entry(Entry::Error(format!(
-                        "角色 `{arg}` 指向的 `{canonical}` 格式应为 provider/model"
-                    )));
-                    return;
-                }
-            };
-            self.apply_model_switch(&provider, &model);
+            let mut picker = ModelPicker::from_providers(
+                &self.all_providers,
+                &self.provider_cfg.name,
+                &self.provider_cfg.model,
+                &self.roles,
+            );
+            picker.enter_role(arg);
+            self.model_picker = Some(picker);
             return;
         }
         // power-user：/model provider/model 或 /model model（默认当前 provider）
@@ -653,6 +643,31 @@ impl App {
             }
             Err(e) => self.push_entry(Entry::Error(format!("切换失败: {e}"))),
         }
+    }
+
+    /// 把模型绑定到角色（UI /model 面板 → fast/balanced/reasoning）：
+    /// 只写 `App.roles` + 持久化 `[roles]` 表，不切换当前对话模型。
+    pub(crate) fn apply_role_assign(&mut self, role: &str, provider: &str, model: &str) {
+        let canonical = format!("{provider}/{model}");
+        let old = self.roles.insert(role.to_string(), canonical.clone());
+        let persist = agent_providers::Config {
+            default_provider: self.provider_cfg.name.clone(),
+            default_model: format!("{}/{}", self.provider_cfg.name, self.provider_cfg.model),
+            max_cost: self.max_cost,
+            providers: self.all_providers.clone(),
+            roles: self.roles.clone(),
+        };
+        let path = self.config_file.clone();
+        if let Err(e) = persist.save(&path) {
+            tracing::warn!("保存 runtime config 失败: {e}");
+        }
+        let note = match old {
+            Some(prev) if prev != canonical => format!("（原 `{prev}`）"),
+            Some(_) | None => String::new(),
+        };
+        self.push_entry(Entry::Info(format!(
+            "已设置角色 `{role}` = `{canonical}` {note}│ 该角色的任务将用此模型，未配置的角色用当前模型"
+        )));
     }
 
     /// `/course`：`-list` 列出全部；`-new <名>` 新建并切换；`-delete <名>` 删除；
@@ -1081,9 +1096,10 @@ pub(crate) mod course_delete_tests {
         assert_eq!(balanced.model, "deepseek-v4-flash", "未知 provider 回退");
     }
 
-    /// `/model fast|balanced|reasoning`：切到 [roles] 配置的角色模型；未配置报错。
+    /// `/model fast|balanced|reasoning`：打开该角色的模型选择面板（配置 `[roles]`），
+    /// Enter 绑定后写 roles 落盘，不切换当前模型。
     #[test]
-    fn model_role_command_switches_model() {
+    fn model_role_command_opens_role_picker() {
         let mut app = test_app();
         app.all_providers.push(agent_providers::ProviderConfig {
             name: "deepseek".into(),
@@ -1099,23 +1115,66 @@ pub(crate) mod course_delete_tests {
             thinking: true,
         });
         app.provider_cfg.model = "deepseek-v4-flash".into();
-        app.roles
-            .insert("fast".into(), "deepseek/deepseek-v4-pro".into());
-        // /model fast → 切到配置的模型
+        // /model fast → 进入 fast 角色模型选择（面板存在、role=fast、只剩真实模型）
         app.handle_model_command("fast");
-        assert_eq!(app.provider_cfg.model, "deepseek-v4-pro");
-        assert!(app.provider_cfg.thinking);
-        // /model provider/model 直接指定仍可用
-        app.handle_model_command("deepseek/deepseek-v4-flash");
-        assert_eq!(app.provider_cfg.model, "deepseek-v4-flash");
-        // 未配置的 role → 明确报错
-        let before = app.provider_cfg.clone();
-        app.handle_model_command("reasoning");
-        assert_eq!(app.provider_cfg.model, before.model, "未配置 role 不切换");
+        let picker = app.model_picker.as_ref().unwrap();
+        assert_eq!(picker.role, Some("fast".to_string()));
+        assert!(
+            picker.options.iter().all(|o| !o.is_role),
+            "角色模式只显示真实模型"
+        );
+        // 选定 fast 角色绑定 deepseek-v4-pro（模拟 Enter 确认）
+        let picker = app.model_picker.as_mut().unwrap();
+        let ds_idx = picker
+            .options
+            .iter()
+            .position(|o| o.provider == "deepseek" && o.model == "deepseek-v4-pro")
+            .expect("deepseek-v4-pro 应在候选中");
+        picker.selected = ds_idx;
+        app.handle_picker_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert!(app.model_picker.is_none(), "确认后关闭面板");
+        assert_eq!(app.roles.get("fast").unwrap(), "deepseek/deepseek-v4-pro");
+        assert_eq!(
+            app.provider_cfg.model, "deepseek-v4-flash",
+            "角色绑定不改当前对话模型"
+        );
         assert!(
             app.entries
                 .iter()
-                .any(|e| matches!(e, Entry::Error(s) if s.contains("reasoning")))
+                .any(|e| matches!(e, Entry::Info(s) if s.contains("角色 `fast` = `deepseek/deepseek-v4-pro`")))
+        );
+        // /model provider/model 直接指定仍可用
+        app.handle_model_command("deepseek/deepseek-v4-flash");
+        assert_eq!(app.provider_cfg.model, "deepseek-v4-flash");
+    }
+
+    /// 无参 /model：面板顶部先列三个角色配置行，Enter 角色行进入对应角色模型选择。
+    #[test]
+    fn model_command_plain_lists_role_rows_first() {
+        let mut app = test_app();
+        app.handle_model_command("");
+        let picker = app.model_picker.as_ref().unwrap();
+        assert!(picker.role.is_none(), "无参 = 普通切换模式");
+        assert!(
+            picker.options.iter().take(3).all(|o| o.is_role),
+            "顶部 3 行为角色配置行"
+        );
+        assert_eq!(picker.options[0].model_display, "fast");
+        assert_eq!(picker.options[1].model_display, "balanced");
+        assert_eq!(picker.options[2].model_display, "reasoning");
+        // Enter 角色行 → 进入 fast 角色模式
+        app.model_picker.as_mut().unwrap().selected = 0;
+        app.handle_picker_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_eq!(
+            app.model_picker.as_ref().unwrap().role,
+            Some("fast".to_string()),
+            "角色行 Enter 进入角色选择"
         );
     }
 
@@ -1217,17 +1276,31 @@ pub(crate) mod course_delete_tests {
             context_length: 1000,
             thinking: false,
         };
-        let picker = ModelPicker::from_providers(&[cfg_a, cfg_b], "glm", "glm-5");
-        assert_eq!(picker.options.len(), 3, "deepseek 2 模型 + glm 1 模型");
-        assert_eq!(picker.options[2].provider, "glm");
-        assert_eq!(picker.options[2].model, "glm-5");
-        assert_eq!(picker.selected, 2, "当前 glm/glm-5 行定位");
+        let picker = ModelPicker::from_providers(
+            &[cfg_a, cfg_b],
+            "glm",
+            "glm-5",
+            &std::collections::BTreeMap::new(),
+        );
+        // 顶部 3 行角色配置 + 3 个真实模型
+        assert_eq!(
+            picker.options.len(),
+            6,
+            "3 角色行 + deepseek 2 模型 + glm 1 模型"
+        );
         assert!(
-            picker.options[0].known_pricing,
+            picker.options[0].is_role && picker.options[1].is_role && picker.options[2].is_role,
+            "前 3 行为角色配置行"
+        );
+        assert_eq!(picker.options[5].provider, "glm");
+        assert_eq!(picker.options[5].model, "glm-5");
+        assert_eq!(picker.selected, 5, "当前 glm/glm-5 行定位");
+        assert!(
+            picker.options[3].known_pricing,
             "deepseek 模型 known_pricing"
         );
-        assert!(!picker.options[2].known_pricing, "glm 无定价");
-        assert!(picker.options[1].thinking, "V4 Pro thinking 元数据");
+        assert!(!picker.options[5].known_pricing, "glm 无定价");
+        assert!(picker.options[4].thinking, "V4 Pro thinking 元数据");
     }
 
     /// 问题 13b：模型多时可用 ↑↓/PgUp/PgDn 翻页——selected 能越过视口到达屏外选项，
@@ -1235,7 +1308,12 @@ pub(crate) mod course_delete_tests {
     #[test]
     fn model_picker_pages_beyond_viewport() {
         let mut app = test_app();
-        let mut picker = crate::palette::ModelPicker::from_providers(&[], "p", "m");
+        let mut picker = crate::palette::ModelPicker::from_providers(
+            &[],
+            "p",
+            "m",
+            &std::collections::BTreeMap::new(),
+        );
         // 造 30 个选项（> 视口高 24-2）
         picker.options = (0..30)
             .map(|i| crate::palette::ModelOption {
@@ -1245,6 +1323,7 @@ pub(crate) mod course_delete_tests {
                 model_display: format!("M{i}"),
                 known_pricing: true,
                 thinking: false,
+                is_role: false,
             })
             .collect();
         picker.selected = 0;
