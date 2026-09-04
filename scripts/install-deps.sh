@@ -18,7 +18,25 @@ install_pip_pymupdf() {
   # 优先用系统包；PEP 668 (Debian 12+/Ubuntu 23.04+) 需 --break-system-packages
   if python3 -c "import fitz" 2>/dev/null; then
     echo "PyMuPDF 已安装"
-  elif pip3 install pymupdf 2>/dev/null; then
+    return
+  fi
+  # Python 版本下限：PyMuPDF 新版本要求 Python >= 3.9
+  local pyver
+  pyver="$(python3 -c 'import sys; print(sys.version_info.major, sys.version_info.minor)' 2>/dev/null || echo '0 0')"
+  local maj="${pyver%% *}" min="${pyver##* }"
+  if [ "$maj" -lt 3 ] || { [ "$maj" -eq 3 ] && [ "$min" -lt 9 ]; }; then
+    echo "检测到 Python ${maj}.${min}，PyMuPDF 需要 Python 3.9+，请升级 Python 后重试。"
+    exit 1
+  fi
+  # pip3 缺失（部分发行版 python3/pip3 分开装）
+  if ! command -v pip3 >/dev/null; then
+    echo "未检测到 pip3，尝试安装..."
+    if command -v apt-get >/dev/null; then sudo apt-get install -y python3-pip
+    elif command -v dnf >/dev/null; then sudo dnf install -y python3-pip
+    elif command -v pacman >/dev/null; then sudo pacman -S --noconfirm python-pip
+    else echo "无法自动安装 pip3，请手动安装后重试。"; exit 1; fi
+  fi
+  if pip3 install pymupdf 2>/dev/null; then
     echo "PyMuPDF 已通过 pip 安装"
   else
     echo "尝试使用系统环境安装 PyMuPDF（PEP 668）..."
