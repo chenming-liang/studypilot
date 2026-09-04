@@ -131,7 +131,6 @@ pip install pymupdf
 几个常用操作：
 
 - **切换课程**：`Ctrl+K` → Switch Course，选择目标课程后，之后的提问和复习都在该课程内进行
-- **跨课程提问**：切换到 `Global`（全部课程），可检索所有课程的笔记
 - **费用控制**：`Ctrl+K` → Budget 查看累计花费、设置上限；达到上限后自动停止调用，避免超出预算
 - **导出会话**：`Ctrl+K` → Export Conversation 保存为文件，之后可用 Load Conversation 恢复
 
