@@ -9,7 +9,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 use walkdir::WalkDir;
 
-use crate::events::ImportEvent;
+use crate::events::{FilePhase, ImportEvent};
 use crate::extract;
 use crate::parser;
 
@@ -132,6 +132,14 @@ async fn process_one(
 ) -> Result<ProcessOutcome, String> {
     // ① 解析格式（pdf/pptx 走 spawn_blocking）
     let path_owned = path.to_owned();
+    let _ = tx.send(ImportEvent::FileProgress {
+        name: path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("?")
+            .to_owned(),
+        phase: FilePhase::Parsing,
+    });
     let raw = tokio::task::spawn_blocking(move || parser::parse_file(&path_owned))
         .await
         .map_err(|e| format!("任务错误: {e}"))?
@@ -143,6 +151,14 @@ async fn process_one(
 
     // ② LLM 概念抽取（异步）；D2：Store 调用经 spawn_blocking
     let mut import_cost = 0.0f64;
+    let _ = tx.send(ImportEvent::FileProgress {
+        name: path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("?")
+            .to_owned(),
+        phase: FilePhase::Extracting,
+    });
     let extracted = extract::extract(
         provider,
         provider_cfg,
@@ -161,6 +177,14 @@ async fn process_one(
     }
 
     // ③ 入库（spawn_blocking，D2）
+    let _ = tx.send(ImportEvent::FileProgress {
+        name: path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("?")
+            .to_owned(),
+        phase: FilePhase::Inserting,
+    });
     let store = Arc::clone(store);
     let path_owned = path.to_owned();
     let tx_warn = tx.clone();
