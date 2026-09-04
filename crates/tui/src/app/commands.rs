@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use agent_core::Message;
+use agent_core::{Message, Provider};
 use agent_providers::OpenAiClient;
 use tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
@@ -566,8 +566,11 @@ impl App {
         let tx = self.tx.clone();
         let _ = tx.send(emit(format!("正在测试连接: {provider_name}/{model} …")));
         tokio::spawn(async move {
-            let msgs = vec![Message::user("ping")];
-            let result = agent_providers::with_cancel(client.chat_json(&msgs), &cancel).await;
+            // 连接测试走普通 chat（非 JSON mode）：`chat_json` 会带 response_format，
+            // DeepSeek 对不含 "json" 字样的 prompt 直接 400（"Prompt must contain the word 'json'"），
+            // 而连接测试只关心 endpoint/auth/model 可用，不需要结构化输出（回归：Setup 接 DeepSeek 必失败）。
+            let msgs = vec![Message::user("请直接回复：ping")];
+            let result = agent_providers::with_cancel(client.chat(&msgs, &[]), &cancel).await;
             let outcome = match result {
                 Some(Ok(resp)) if !resp.content.is_empty() => format!(
                     "✓ API reachable · Authentication valid · Model available\n\
