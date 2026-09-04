@@ -1238,6 +1238,10 @@ impl App {
                 true
             }
             KeyCode::Char(c @ '1'..='3') => {
+                // 必须先 Space Reveal 才能自评（问题 14：避免没看答案就乱评）
+                if !w.revealed {
+                    return true;
+                }
                 let rating = match c {
                     '1' => crate::review::WarmupRating::GotIt,
                     '2' => crate::review::WarmupRating::Shaky,
@@ -1323,6 +1327,7 @@ impl App {
     }
 
     /// 弹窗按键：↑↓/j/k 移动、数字直选、Enter 确认、Esc 关闭。
+    /// 模型多时支持 PageUp/PageDown 翻页（问题 13b）。
     pub(crate) fn handle_picker_key(&mut self, key: KeyEvent) {
         let picker = self.model_picker.as_mut().unwrap();
         let len = picker.options.len();
@@ -1333,6 +1338,22 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => {
                 if len > 0 {
                     picker.selected = (picker.selected + 1).min(len - 1);
+                }
+            }
+            KeyCode::PageUp => {
+                picker.selected = picker.selected.saturating_sub(10);
+            }
+            KeyCode::PageDown => {
+                if len > 0 {
+                    picker.selected = (picker.selected + 10).min(len - 1);
+                }
+            }
+            KeyCode::Home => {
+                picker.selected = 0;
+            }
+            KeyCode::End => {
+                if len > 0 {
+                    picker.selected = len - 1;
                 }
             }
             KeyCode::Esc | KeyCode::Char('q') => {

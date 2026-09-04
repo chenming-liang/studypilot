@@ -74,10 +74,13 @@ impl Default for SetupState {
     }
 }
 
-/// Custom 模型输入按逗号拆分并 trim 空白（`A, B,C` → ["A","B","C"]；空项丢弃）。
+/// Custom 模型输入按分隔符拆分并 trim 空白。兼容中文输入习惯：
+/// ASCII 逗号 `,`、中文逗号 `，`、顿号 `、`、分号 `;`/`；`、换行。
+/// 例：`A,B` `A，B` `A、B` `A; B` 都拆成 ["A","B"]；空项丢弃。
+/// 注意：不按空格拆分（模型名可含空格，如 "DS V4 Flash"）。
 pub(crate) fn split_custom_models(input: &str) -> Vec<String> {
     input
-        .split(',')
+        .split([',', '，', '、', ';', '；', '\n', '\r'])
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
@@ -829,6 +832,29 @@ mod tests {
         );
     }
 
+    /// 问题 13a：中文顿号/分号/中英逗号/换行混合分隔都能拆（修复 "DS V4 Flash 没添上"）。
+    #[test]
+    fn split_custom_models_supports_cn_separators() {
+        for input in [
+            "Qwen3.7-Plus、Deepseek-V4-Flash-0731、GLM-5.3-Flash",
+            "Qwen3.7-Plus；Deepseek-V4-Flash-0731;GLM-5.3-Flash",
+            "Qwen3.7-Plus，Deepseek-V4-Flash-0731， GLM-5.3-Flash",
+            "Qwen3.7-Plus\nDeepseek-V4-Flash-0731\r\n GLM-5.3-Flash",
+        ] {
+            let list = split_custom_models(input);
+            assert_eq!(
+                list,
+                vec!["Qwen3.7-Plus", "Deepseek-V4-Flash-0731", "GLM-5.3-Flash"],
+                "分隔符 {input:?} 应拆出 3 个模型"
+            );
+        }
+        // 模型名含空格（如 "DS V4 Flash"）不得被空格误拆
+        assert_eq!(
+            split_custom_models("Qwen3.7-Plus, DS V4 Flash, GLM-5.3-Flash"),
+            vec!["Qwen3.7-Plus", "DS V4 Flash", "GLM-5.3-Flash"]
+        );
+    }
+
     /// 问题 3 配置落盘回归：config.toml 写入后重读，name 与 models 保持。
     /// （模拟 on_setup_test_done 的 persist 结构；api_key 剥离到 auth.toml 不落 config）
     #[test]
@@ -892,6 +918,80 @@ mod tests {
         assert!(!setup_test_all_passed(
             "✗ 连接失败（HTTP 401）: unauthorized"
         ));
+    }
+
+    /// 问题 13a 端到端：首次 Setup 输入 3 个 custom 模型，成功保存后
+    /// all_providers / provider_cfg / 重读 config 都应保留 3 个。
+    #[test]
+    fn first_time_custom_setup_keeps_all_three_models() {
+        let mut app = test_app();
+        // 隔离 auth.toml 到临时目录（on_setup_test_done 会写 auth）
+        static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _g = HOME_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!(
+            "sp-auth-iso-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let orig_home = std::env::var_os("HOME");
+        unsafe { std::env::set_var("HOME", &tmp) };
+
+        app.start_setup();
+        {
+            let s = app.setup.as_mut().unwrap();
+            s.provider = Some("custom".into());
+            s.custom_name = "paratera".into();
+            s.custom_base_url = "https://llmapi.paratera.com/v1".into();
+            s.custom_model = "Qwen3.7-Plus, DeepSeek-V4-Flash-0731, GLM-5.3-Flash".into();
+            s.api_key = "sk-paratera".into();
+        }
+        let ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let cfg_path = tmp.join(format!("config-{ns}.toml"));
+        app.config_file = cfg_path.clone();
+        // 模拟连接测试全部通过（多模型逐测汇总文本）
+        let all_ok = "Qwen3.7-Plus ✓ API reachable · Authentication valid · Model available\nDeepSeek-V4-Flash-0731 ✓ API reachable · Authentication valid · Model available\nGLM-5.3-Flash ✓ API reachable · Authentication valid · Model available";
+        app.on_setup_test_done(all_ok.to_owned());
+        assert!(app.setup.as_ref().unwrap().test_passed, "全 ✓ 应进入 Done");
+        // all_providers 中 paratera 的 models 全量保留
+        let ids: Vec<String> = app
+            .all_providers
+            .iter()
+            .find(|p| p.name == "paratera")
+            .map(|p| p.models.iter().map(|m| m.id.clone()).collect())
+            .expect("paratera 应在 all_providers");
+        assert_eq!(
+            ids,
+            vec!["Qwen3.7-Plus", "DeepSeek-V4-Flash-0731", "GLM-5.3-Flash"],
+            "all_providers 应保留 3 个模型"
+        );
+        // provider_cfg 同步
+        let ids2: Vec<String> = app
+            .provider_cfg
+            .models
+            .iter()
+            .map(|m| m.id.clone())
+            .collect();
+        assert_eq!(ids2.len(), 3, "provider_cfg.models 应保留 3 个");
+        // 重读 config.toml
+        let reloaded = agent_providers::Config::load(&cfg_path).unwrap();
+        let rp = reloaded
+            .providers
+            .iter()
+            .find(|p| p.name == "paratera")
+            .expect("config 里应有 paratera");
+        assert_eq!(rp.models.len(), 3, "重读 config 应保留 3 个模型");
+        // 恢复 HOME + 清理
+        match orig_home {
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// 预设（DeepSeek）多选：空格 toggle 多个模型 → cfg.models 全量保留（非单选）。

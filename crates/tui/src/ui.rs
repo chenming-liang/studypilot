@@ -1960,19 +1960,9 @@ fn draw_review_map_picker(f: &mut Frame, p: &crate::palette::ReviewMapPicker) {
 
 /// Flashcard 卡片文本折行（question/answer 共用同一条安全渲染路径）：
 /// 按弹窗内可用宽度 wrap（CJK 宽 2、长 token/URL 硬折行），每行前缀 "  "。
-/// 保证内容永不超出边框水平溢出。
-fn warmup_card_lines(text: &str, pop_width: u16) -> Vec<String> {
-    // pop 边框占 2，内容缩进 "  " 占 2
-    let inner = pop_width.saturating_sub(2) as usize;
-    let body_w = inner.saturating_sub(2).max(4);
-    wrap(text, body_w)
-        .into_iter()
-        .map(|seg| format!("  {seg}"))
-        .collect()
-}
-
-/// Setup 输入步文本折行（Custom name/base_url/model）：与 warmup_card_lines 同一 wrap 路径，
-/// 多模型逗号长文本按宽度折行不溢出；光标 ▍ 追加在最后一行的行尾。
+/// Setup 输入步文本折行（Custom name/base_url/model）：按宽度 wrap（CJK 宽 2、长 token/URL
+/// 硬折行），每行前缀 "  "，光标 ▍ 追加在最后一行的行尾。问题 10/13 修复：多模型逗号长文本
+/// 折行不溢出、末尾字符不被边框裁掉。
 fn setup_input_lines(text: &str, pop_width: u16) -> Vec<String> {
     let inner = pop_width.saturating_sub(2) as usize;
     let body_w = inner.saturating_sub(2).max(4);
@@ -1996,7 +1986,7 @@ fn draw_warmup(f: &mut Frame, app: &mut App) {
     };
     let area = f.area();
     let width = 60u16.min(area.width.saturating_sub(4));
-    let height = 14u16.min(area.height.saturating_sub(2));
+    let height = 20u16.min(area.height.saturating_sub(2));
     let x = area.x + (area.width - width) / 2;
     let y = area.y + (area.height - height) / 2;
     let pop = Rect::new(x, y, width, height);
@@ -2019,21 +2009,15 @@ fn draw_warmup(f: &mut Frame, app: &mut App) {
         ))));
         items.push(ListItem::new(Line::default()));
         let card = &w.cards[w.current];
-        // question：wrap 折行（长代码/泛型/URL/中英混排都不溢出边框）
-        for seg in warmup_card_lines(&card.question, width) {
-            items.push(ListItem::new(Line::from(Span::styled(
-                seg,
-                Style::new().fg(theme::FG).add_modifier(Modifier::BOLD),
-            ))));
+        // question：markdown 渲染（支持 ``` 代码块高亮，问题 15），折行由 markdown 管线处理
+        for l in crate::markdown::render_markdown(&card.question, (width - 4).max(10) as usize) {
+            items.push(ListItem::new(l));
         }
         items.push(ListItem::new(Line::default()));
         if w.revealed {
-            // answer：与 question 同一 wrap 路径
-            for seg in warmup_card_lines(&card.answer, width) {
-                items.push(ListItem::new(Line::from(Span::styled(
-                    seg,
-                    Style::new().fg(theme::FG),
-                ))));
+            // answer：markdown 渲染（支持 ``` 代码块高亮，问题 15）
+            for l in crate::markdown::render_markdown(&card.answer, (width - 4).max(10) as usize) {
+                items.push(ListItem::new(l));
             }
             if let Some(c) = &card.concept {
                 items.push(ListItem::new(Line::from(Span::styled(
@@ -2045,7 +2029,7 @@ fn draw_warmup(f: &mut Frame, app: &mut App) {
             let rated = w.ratings.get(w.current).copied().flatten();
             items.push(ListItem::new(Line::from(Span::styled(
                 match rated {
-                    Some(r) => format!("  ✓ 已评: {}", r.mark()),
+                    Some(r) => format!("  已评: {}", r.mark()),
                     None => "  [1] Got it  [2] Shaky  [3] Don't know".to_string(),
                 },
                 Style::new().fg(if rated.is_some() {
@@ -2540,7 +2524,7 @@ fn draw_model_picker(
     current_model: &str,
 ) {
     let area = f.area();
-    let height = (picker.options.len() + 4).min(area.height as usize) as u16;
+    let height = 24u16.min(area.height.saturating_sub(2));
     let width = 60u16.min(area.width);
     let x = area.x + (area.width - width) / 2;
     let y = area.y + (area.height - height) / 2;
@@ -2602,14 +2586,20 @@ fn draw_model_picker(
         items.push(ListItem::new(Span::styled(label, style)));
     }
 
-    let title = " AI Models (↑↓ 移动 · Enter 切换 · Esc 取消) ";
-    f.render_widget(
+    let title = if picker.options.len() > (height.saturating_sub(2)) as usize {
+        " AI Models (↑↓ 移动 · PgUp/PgDn 翻页 · Enter 切换 · Esc 取消) "
+    } else {
+        " AI Models (↑↓ 移动 · Enter 切换 · Esc 取消) "
+    };
+    let mut state = ratatui::widgets::ListState::default().with_selected(Some(picker.selected));
+    f.render_stateful_widget(
         List::new(items).block(
             Block::new()
                 .borders(Borders::ALL)
                 .title(Span::styled(title, Style::new().fg(DIM))),
         ),
         pop,
+        &mut state,
     );
 }
 
@@ -2676,7 +2666,7 @@ mod wrap_cursor_tests {
 }
 
 #[cfg(test)]
-mod warmup_card_lines_tests {
+mod setup_input_lines_tests {
     use super::*;
     use unicode_width::UnicodeWidthStr;
 
@@ -2688,10 +2678,12 @@ mod warmup_card_lines_tests {
     fn assert_all_lines_within(lines: &[String]) {
         assert!(!lines.is_empty());
         for l in lines {
+            // 剥行尾光标 ▍（仅 setup_input_lines 末行有）再量宽
+            let body = l.trim_end_matches('▍');
             assert!(
-                l.width() <= MAX_LINE_W,
+                body.width() <= MAX_LINE_W,
                 "行宽 {} > {MAX_LINE_W}: {:?}",
-                l.width(),
+                body.width(),
                 l
             );
         }
@@ -2701,12 +2693,12 @@ mod warmup_card_lines_tests {
     #[test]
     fn long_rust_signature_wraps() {
         let code = "fn transform<T: IntoIterator<Item = u8>>(xs: T) -> impl Iterator<Item = (u8, String)> where T::IntoIter: 'static";
-        let lines = warmup_card_lines(code, POP_W);
+        let lines = setup_input_lines(code, POP_W);
         assert_all_lines_within(&lines);
-        // 去掉每行的 "  " 缩进后拼接 == 原文：折行不得丢失或改写任何字符
+        // 去掉每行的 "  " 缩进与行尾光标后拼接 == 原文：折行不得丢失或改写任何字符
         let joined: String = lines
             .iter()
-            .map(|l| l.strip_prefix("  ").unwrap_or(l))
+            .map(|l| l.strip_prefix("  ").unwrap_or(l).trim_end_matches('▍'))
             .collect::<Vec<_>>()
             .join("");
         assert_eq!(joined, code, "折行不得丢失或改写字符");
@@ -2715,7 +2707,7 @@ mod warmup_card_lines_tests {
     #[test]
     fn long_generic_type_wraps() {
         let q = "HashMap<&'static str, Vec<Result<Option<T>, Box<dyn std::error::Error + Send + Sync>>>> 是什么类型？";
-        let lines = warmup_card_lines(q, POP_W);
+        let lines = setup_input_lines(q, POP_W);
         assert_all_lines_within(&lines);
     }
 
@@ -2723,7 +2715,7 @@ mod warmup_card_lines_tests {
     #[test]
     fn long_url_wraps() {
         let url = "查看 https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/418 与 https://example.com/some/very/long/path?query=parameter&value=12345 的区别";
-        let lines = warmup_card_lines(url, POP_W);
+        let lines = setup_input_lines(url, POP_W);
         assert_all_lines_within(&lines);
         assert!(lines.len() > 1, "长 URL 应折成多行");
     }
@@ -2732,7 +2724,7 @@ mod warmup_card_lines_tests {
     #[test]
     fn mixed_cjk_and_code_wraps() {
         let q = "为什么 fn main() { let x = 5; println!(\"hello {x}\"); } 中的所有权在这里没有转移？借用检查器的规则是什么？";
-        let lines = warmup_card_lines(q, POP_W);
+        let lines = setup_input_lines(q, POP_W);
         assert_all_lines_within(&lines);
     }
 
@@ -2742,7 +2734,7 @@ mod warmup_card_lines_tests {
         let q = "解释泛型签名 fn bar<A: Clone, B: Default>(a: A) -> B where A: std::fmt::Debug";
         let a = "A 必须 Clone 且 Debug，返回 B 必须实现 Default；约束在编译期检查。详细见 https://doc.rust-lang.org/book/ch10-01-syntax.html";
         for text in [q, a] {
-            let lines = warmup_card_lines(text, POP_W);
+            let lines = setup_input_lines(text, POP_W);
             assert_all_lines_within(&lines);
         }
     }

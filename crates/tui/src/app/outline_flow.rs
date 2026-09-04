@@ -238,7 +238,7 @@ impl App {
                     // Agent Trace：完成行（区分真生成 / 缓存命中——不伪造）
                     if payload.regenerated {
                         self.push_entry(Entry::Tool {
-                            text: "✓ [整理] 复习地图已生成".into(),
+                            text: "[整理] 复习地图已生成".into(),
                             ok: Some(true),
                         });
                     }

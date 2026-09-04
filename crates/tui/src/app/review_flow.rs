@@ -93,16 +93,17 @@ impl App {
         }
     }
 
-    /// 暖场完成：计算 Focus Concepts（△/○）→ 传给正式 Review（复用现有引擎）。
+    /// 暖场完成：计算正式 Review 范围（focus 全带 + ✓ 按比例补）→ 传给现有引擎。
     /// Flashcard 绝不写 mastery（不调 update_concept_mastery）。
     pub(crate) fn finish_warmup(&mut self) {
         let Some(w) = self.warmup.take() else { return };
         let focus = w.focus_concepts();
-        let scope: Option<String> = if focus.is_empty() {
-            // 全部 Got it：回到原始范围正常复习
+        let scoped = w.review_scope();
+        let scope: Option<String> = if scoped.is_empty() {
+            // 无任何概念名：回退原始范围正常复习（问题 16：全过也提问）
             Some(w.scope_text.clone())
         } else {
-            Some(focus.join("、"))
+            Some(scoped.join("、"))
         };
         let mut focus_msg = String::from("Warm-up complete\n\nFocus:");
         if focus.is_empty() {
@@ -525,7 +526,7 @@ impl App {
     pub(crate) fn on_review_advice(&mut self, text: String) {
         // Agent Trace：完成（START 行已在 finish_review_state）
         self.push_entry(Entry::Tool {
-            text: "✓ [整理] 复习小结已生成".into(),
+            text: "[整理] 复习小结已生成".into(),
             ok: Some(true),
         });
         // 小结建议分组着色（✓绿/△黄/→蓝），解析失败静默降级为 Markdown 块
