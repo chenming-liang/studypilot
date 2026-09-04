@@ -18,6 +18,7 @@ crates/storage     rusqlite 存储（同步 API）+ FTS5(jieba 预分词)
 crates/tui         bin crate：ratatui App shell + Import/Study/Review mode view
 scripts/pdf_extract.py   pymupdf 提取脚本（子进程调用，stdout 输出 JSON）
 config.toml        provider 配置（格式见 crates/providers/src/config.rs）
+docs/LLM Prompts.md 全部功能用到的 LLM prompt 汇总（唯一事实源，改 prompt 同步更新）
 data/              运行时生成的 sqlite 文件（gitignore）
 ```
 
