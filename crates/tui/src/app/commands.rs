@@ -72,33 +72,8 @@ impl App {
                 for l in [
                     "StudyPilot — Quick Guide",
                     "",
-                    "Home",
-                    "  Choose a course → Enter",
-                    "  Continue learning → Enter",
-                    "  New course → + New Course",
-                    "",
-                    "Course",
-                    "  New Conversation    /new",
-                    "  Review             /review",
-                    "  Review Map         /review-map",
-                    "  Outline            /outline",
-                    "  Materials          /notes",
-                    "  Import             /import",
-                    "",
-                    "Session",
-                    "  Ask questions (type directly)",
-                    "  Rename session     /rename",
-                    "  Export             /export",
-                    "",
-                    "Shortcuts",
-                    "  Ctrl+K  Command Palette (search all actions)",
-                    "  ↑↓      Navigate",
-                    "  Enter   Open / activate",
-                    "  Esc     Back / quit (Home)",
-                    "  d       Delete (Home course)",
-                    "  Ctrl+C  Interrupt / quit",
-                    "",
-                    "Type / to open the command palette.",
+                    "按 Ctrl+K 打开命令面板（全部动作/搜索）。",
+                    "详细用法见 docs/核心代码逻辑.md 与项目 README。",
                 ] {
                     self.push_entry(Entry::Info(l.into()));
                 }
@@ -107,28 +82,8 @@ impl App {
             "/model" => self.handle_model_command(arg.trim()),
             "/test" => self.handle_test_command(),
             "/new" => self.start_new_session(),
-            "/sessions" => {
-                // 打开会话浏览器（搜索/恢复/重命名/删除）；默认只显示当前课程（文档 §9）
-                self.take_input_for_overlay();
-                self.session_browser = Some(crate::session_browser::SessionBrowser::new(
-                    self.current_course_id(),
-                ));
-                self.session_browser_search();
-            }
-            "/open" => match arg.trim().parse::<i64>() {
-                Ok(id) => self.open_session(id),
-                Err(_) if arg.trim().is_empty() => {
-                    // 无参 = 打开会话浏览器（与 /sessions 同一入口）
-                    self.take_input_for_overlay();
-                    self.session_browser = Some(crate::session_browser::SessionBrowser::new(
-                        self.current_course_id(),
-                    ));
-                    self.session_browser_search();
-                }
-                Err(_) => self.push_entry(Entry::Error(
-                    "用法: /open <会话 id>（无参数打开浏览器）".into(),
-                )),
-            },
+            "/sessions" => self.open_session_browser(),
+            "/open" => self.handle_open_command(&arg),
             "/export" => self.export_session(),
             "/rename" => match self.workspace {
                 crate::app::Workspace::Course => {
@@ -244,6 +199,28 @@ impl App {
     // ---- 预算管理 ----
 
     /// `/budget`：查/改/重置预算。
+    /// 打开会话浏览器（搜索/恢复/重命名/删除）；默认只显示当前课程（文档 §9）。
+    /// palette 直开与 /sessions /open 无参共用。
+    pub(crate) fn open_session_browser(&mut self) {
+        self.take_input_for_overlay();
+        self.session_browser = Some(crate::session_browser::SessionBrowser::new(
+            self.current_course_id(),
+        ));
+        self.session_browser_search();
+    }
+
+    /// `/open <id>`：按 id 打开会话；无参 = 打开会话浏览器。
+    pub(crate) fn handle_open_command(&mut self, arg: &str) {
+        match arg.trim().parse::<i64>() {
+            Ok(id) => self.open_session(id),
+            Err(_) if arg.trim().is_empty() => self.open_session_browser(),
+            Err(_) => self.push_entry(Entry::Error(
+                "用法: /open <会话 id>（无参数打开浏览器）".into(),
+            )),
+        }
+    }
+
+    /// `/budget`：无参显示预算；`reset` 清零；数字设置上限。
     pub(crate) fn handle_budget_command(&mut self, arg: &str) {
         if arg.is_empty() {
             let remaining = (self.max_cost - self.total_cost).max(0.0);

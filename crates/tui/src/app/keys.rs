@@ -937,6 +937,23 @@ impl App {
                     self.submit();
                     return;
                 }
+                // 直开动作：不填输入框（文档：UI 不拼命令字符串→解析→handler）
+                A::OpenModel => {
+                    self.handle_model_command("");
+                    return;
+                }
+                A::OpenSessions => {
+                    self.open_session_browser();
+                    return;
+                }
+                A::BudgetInfo => {
+                    self.handle_budget_command("");
+                    return;
+                }
+                A::BudgetReset => {
+                    self.handle_budget_command("reset");
+                    return;
+                }
                 A::WizardReview => {
                     self.open_review_wizard();
                     return;
@@ -1104,7 +1121,19 @@ impl App {
     ) {
         use crate::palette::ListChoiceAction as A;
         match action {
-            A::SwitchCourse(id) => self.switch_course_by_id(id),
+            A::SwitchCourse(id) => {
+                self.switch_course_by_id(id);
+                // Home 上 Switch Course 应直接进入 Course 页（问题 11）
+                if self.workspace == super::Workspace::Home
+                    && let Some(name) = self
+                        .courses
+                        .iter()
+                        .find(|(i, _)| *i == id)
+                        .map(|(_, n)| n.clone())
+                {
+                    self.enter_course_workspace(&name);
+                }
+            }
             A::DeleteCourse(id) => self.delete_course_by_id(id),
         }
     }
@@ -1221,6 +1250,11 @@ impl App {
                 {
                     *r = Some(rating);
                 }
+                true
+            }
+            KeyCode::Char('s') => {
+                // 跳过剩余卡片：直接用已评的 focus（未评不计）进入正式复习
+                self.finish_warmup();
                 true
             }
             KeyCode::Enter | KeyCode::Right => {

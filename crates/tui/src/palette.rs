@@ -120,13 +120,12 @@ impl ModelPicker {
 }
 
 /// 面板分组（渲染为组头分隔行；过滤时隐藏）。顺序即显示顺序。
-/// 产品化分组：STUDY / COURSE / SETTINGS / HELP（文档 §4）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PaletteGroup {
     Study,
     Course,
+    Session,
     Settings,
-    Help,
 }
 
 impl PaletteGroup {
@@ -134,8 +133,8 @@ impl PaletteGroup {
         match self {
             PaletteGroup::Study => "学习",
             PaletteGroup::Course => "课程",
+            PaletteGroup::Session => "会话",
             PaletteGroup::Settings => "设置",
-            PaletteGroup::Help => "帮助",
         }
     }
 }
@@ -156,6 +155,14 @@ pub enum PaletteScope {
 pub enum PaletteAction {
     /// 无参命令，直接执行
     Run,
+    /// 直接打开模型选择弹窗（不填输入框）
+    OpenModel,
+    /// 直接打开会话浏览器（不填输入框）
+    OpenSessions,
+    /// 直接查看预算（不填输入框）
+    BudgetInfo,
+    /// 直接重置累计花费（不填输入框）
+    BudgetReset,
     /// /review 参数向导
     WizardReview,
     /// /import 参数向导
@@ -356,8 +363,8 @@ impl CommandPalette {
                 label: "Recent Sessions",
                 command: "/sessions",
                 desc: "查看当前课程学习历史",
-                action: A::Run,
-                group: G::Course,
+                action: A::OpenSessions,
+                group: G::Session,
                 scope: S::CurrentCourse,
             },
             // ---- 会话 ----
@@ -370,7 +377,7 @@ impl CommandPalette {
                     prompt: "新标题",
                     kind: crate::wizard::WizardKind::RenameSession,
                 },
-                group: G::Study,
+                group: G::Session,
                 scope: S::CurrentSession,
             },
             P {
@@ -378,7 +385,7 @@ impl CommandPalette {
                 command: "/export",
                 desc: "导出当前会话为 JSON",
                 action: A::Run,
-                group: G::Study,
+                group: G::Session,
                 scope: S::CurrentSession,
             },
             P {
@@ -390,7 +397,7 @@ impl CommandPalette {
                     prompt: "JSON 文件路径",
                     kind: crate::wizard::WizardKind::LoadFile,
                 },
-                group: G::Study,
+                group: G::Session,
                 scope: S::Global,
             },
             // ---- 设置 ----
@@ -398,7 +405,7 @@ impl CommandPalette {
                 label: "Model",
                 command: "/model",
                 desc: "切换模型",
-                action: A::Run,
+                action: A::OpenModel,
                 group: G::Settings,
                 scope: S::Global,
             },
@@ -406,7 +413,7 @@ impl CommandPalette {
                 label: "Budget",
                 command: "/budget",
                 desc: "查看/设置预算（累计/上限/剩余）",
-                action: A::Run,
+                action: A::BudgetInfo,
                 group: G::Settings,
                 scope: S::Global,
             },
@@ -426,17 +433,8 @@ impl CommandPalette {
                 label: "Budget → Reset",
                 command: "/budget reset",
                 desc: "重置累计花费",
-                action: A::Run,
+                action: A::BudgetReset,
                 group: G::Settings,
-                scope: S::Global,
-            },
-            // ---- 帮助 ----
-            P {
-                label: "Help",
-                command: "/help",
-                desc: "能力总览",
-                action: A::Run,
-                group: G::Help,
                 scope: S::Global,
             },
         ]
@@ -466,14 +464,14 @@ impl CommandPalette {
             .filter(|(_, i)| match workspace {
                 W::Home => {
                     // Home 不执行课程级动作（Review/Outline/Materials…），
-                    // 保留 New Course / Switch Course / Import / 设置 / 帮助
+                    // 保留 New Course / Switch Course / Import / 设置
                     match i.group {
                         PaletteGroup::Course => {
                             i.label == "New Course"
                                 || i.label == "Switch Course"
                                 || i.label == "Import Materials"
                         }
-                        PaletteGroup::Settings | PaletteGroup::Help => true,
+                        PaletteGroup::Settings | PaletteGroup::Session => true,
                         PaletteGroup::Study => i.label == "New Conversation",
                     }
                 }
@@ -517,6 +515,68 @@ impl CommandPalette {
 #[cfg(test)]
 mod picker_filter_tests {
     use super::*;
+
+    /// 问题 2/4/5：Model / Budget / Budget Reset / Recent Sessions 必须直开（不填输入框）。
+    #[test]
+    fn settings_and_sessions_actions_are_direct() {
+        let p = CommandPalette::new();
+        let get = |label: &str| p.items.iter().find(|i| i.label == label).unwrap();
+        assert!(
+            matches!(get("Model").action, PaletteAction::OpenModel),
+            "Model 应直开弹窗"
+        );
+        assert!(
+            matches!(get("Budget").action, PaletteAction::BudgetInfo),
+            "Budget 应直开信息"
+        );
+        assert!(
+            matches!(get("Budget → Reset").action, PaletteAction::BudgetReset),
+            "Budget reset 应直开"
+        );
+        assert!(
+            matches!(get("Recent Sessions").action, PaletteAction::OpenSessions),
+            "Recent Sessions 应直开会话浏览器"
+        );
+        // 这些都不应走 Run（Run = 填输入框再 submit）
+        for label in ["Model", "Budget", "Budget → Reset", "Recent Sessions"] {
+            let i = get(label);
+            assert!(
+                !matches!(i.action, PaletteAction::Run),
+                "{label} 不应走 Run（会污染输入框）"
+            );
+        }
+    }
+
+    /// 问题 6：Load Conversation 与 Recent Sessions 归入"会话"分组。
+    #[test]
+    fn conversation_actions_in_session_group() {
+        let p = CommandPalette::new();
+        let load = p
+            .items
+            .iter()
+            .find(|i| i.label == "Load Conversation")
+            .unwrap();
+        let recent = p
+            .items
+            .iter()
+            .find(|i| i.label == "Recent Sessions")
+            .unwrap();
+        assert_eq!(
+            load.group,
+            PaletteGroup::Session,
+            "Load Conversation 应在会话组"
+        );
+        assert_eq!(
+            recent.group,
+            PaletteGroup::Session,
+            "Recent Sessions 应在会话组"
+        );
+        // 问题 3：Help 能力总览已移除
+        assert!(
+            p.items.iter().all(|i| i.label != "Help"),
+            "能力总览条目应移除"
+        );
+    }
 
     /// Learning Map 树形选择器：section 头行 + 缩进概念行，聚合状态与状态标记正确。
     #[test]

@@ -1419,19 +1419,6 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     }
 }
 
-/// /model 弹窗：居中覆盖层，当前 provider 打 →，选中项高亮。
-/// scope 标签（文档 §24）：Global → " · Global"；CurrentCourse → " · Rust"；
-/// CurrentSession → " · 当前会话"。全部 dim。
-fn palette_scope_suffix(scope: crate::palette::PaletteScope, current_course: &str) -> String {
-    use crate::palette::PaletteScope as S;
-    let tag = match scope {
-        S::Global => "Global".to_owned(),
-        S::CurrentCourse => current_course.to_owned(),
-        S::CurrentSession => "当前会话".to_owned(),
-    };
-    format!(" · {tag}")
-}
-
 /// First-run AI Setup Wizard 覆盖层（键盘第一：↑↓/Enter/Esc）。
 fn draw_setup(f: &mut Frame, app: &mut App) {
     use crate::app::setup::SetupStep;
@@ -1602,8 +1589,9 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
                 ))));
             } else if let Some(r) = &s.test_result {
                 let ok = r.starts_with('✓');
-                // 结果可能多行（如 "✗ 连接失败…\n如果鉴权失败…"）：逐行渲染，超长再 wrap
-                let body_w = (width.saturating_sub(2) as usize).max(4);
+                // 结果可能多行（如 "✗ 连接失败…\n如果鉴权失败…"）：逐行渲染。
+                // body_w = pop 宽 - 边框 2 - 缩进 2（否则末尾字符被裁，问题 10）
+                let body_w = (width.saturating_sub(4) as usize).max(4);
                 for seg in setup_test_lines(r, body_w) {
                     items.push(ListItem::new(Line::from(Span::styled(
                         format!("  {seg}"),
@@ -1639,12 +1627,24 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
                     list.join("、")
                 }
             } else {
-                s.model.clone().unwrap_or_else(|| "-".into())
+                let sel = &s.selected_models;
+                if sel.is_empty() {
+                    s.model.clone().unwrap_or_else(|| "-".into())
+                } else {
+                    sel.join("、")
+                }
             };
             items.push(ListItem::new(Line::from(Span::styled(
-                format!("  Provider: {provider} · Model: {model}"),
+                format!("  Provider: {provider}"),
                 Style::new().fg(DIM),
             ))));
+            // Model 可能多模型 join（长）：按宽度 wrap 折行，不溢出
+            for seg in setup_input_lines(&format!("Model: {model}"), width) {
+                items.push(ListItem::new(Line::from(Span::styled(
+                    seg,
+                    Style::new().fg(DIM),
+                ))));
+            }
             (
                 "AI Setup · Ready".to_owned(),
                 "Enter → Start Learning".into(),
@@ -1667,8 +1667,6 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
 }
 fn draw_command_palette(f: &mut Frame, app: &mut App) {
     use crate::palette::{PaletteGroup, PaletteItem};
-    // 先取当前课程（避免与 palette 可变借用冲突；scope 标签只需课程名）
-    let current_course = app.course.clone();
     let Some(palette) = app.palette.as_mut() else {
         return;
     };
@@ -1763,15 +1761,8 @@ fn draw_command_palette(f: &mut Frame, app: &mut App) {
                 let item: &PaletteItem = &palette.items[*idx];
                 let is_sel = Some(*idx) == selected_idx;
                 let mark = if is_sel { "▸ " } else { "  " };
-                // scope 标签（文档 §24）：Global / Current course · Rust / Session
-                let scope_suffix = palette_scope_suffix(item.scope, &current_course);
                 let desc = display_truncate(item.desc, desc_avail);
-                let label = format!(
-                    "{mark}{}  {}{}",
-                    display_pad(item.label, cmd_w),
-                    desc,
-                    scope_suffix
-                );
+                let label = format!("{mark}{}  {}", display_pad(item.label, cmd_w), desc);
                 let style = if is_sel {
                     Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
                 } else {
@@ -1785,15 +1776,7 @@ fn draw_command_palette(f: &mut Frame, app: &mut App) {
     let detail = selected_idx
         .map(|i| {
             let it = &palette.items[i];
-            display_truncate(
-                &format!(
-                    "{} — {}{}",
-                    it.label,
-                    it.desc,
-                    palette_scope_suffix(it.scope, &current_course)
-                ),
-                width as usize - 4,
-            )
+            display_truncate(&format!("{} — {}", it.label, it.desc), width as usize - 4)
         })
         .unwrap_or_else(|| "（无匹配命令）".into());
     let title = format!(
@@ -2082,7 +2065,7 @@ fn draw_warmup(f: &mut Frame, app: &mut App) {
         List::new(items).block(
             Block::new().borders(Borders::ALL).title_bottom(
                 Span::styled(
-                    " Space reveal · 1/2/3 rate · Enter next · Esc exit ",
+                    " Space reveal · 1/2/3 rate · Enter next · s skip · Esc exit ",
                     Style::new().fg(DIM),
                 )
                 .into_centered_line(),
@@ -2100,7 +2083,7 @@ fn draw_session_browser(f: &mut Frame, app: &App) {
     };
     let area = f.area();
     let width = 60u16.min(area.width.saturating_sub(2));
-    let height = 20u16.min(area.height.saturating_sub(2));
+    let height = 26u16.min(area.height.saturating_sub(2));
     let x = area.x + (area.width - width) / 2;
     let y = area.y + (area.height - height) / 2;
     let pop = Rect::new(x, y, width, height);
@@ -2254,7 +2237,7 @@ fn draw_note_browser(f: &mut Frame, app: &mut App) {
     };
     let area = f.area();
     let width = 66u16.min(area.width.saturating_sub(2));
-    let height = 18u16.min(area.height.saturating_sub(2));
+    let height = 24u16.min(area.height.saturating_sub(2));
     let x = area.x + (area.width - width) / 2;
     let y = area.y + (area.height - height) / 2;
     let pop = Rect::new(x, y, width, height);
@@ -2438,7 +2421,7 @@ fn pick_items(app: &App) -> Vec<(i64, String)> {
 fn draw_wizard(f: &mut Frame, app: &App) {
     let wizard = app.wizard.as_ref().expect("调用方保证 wizard 已打开");
     let area = f.area();
-    let height = 7u16.min(area.height.saturating_sub(2));
+    let height = 12u16.min(area.height.saturating_sub(2));
     let width = 58u16.min(area.width.saturating_sub(2));
     let x = area.x + (area.width - width) / 2;
     let y = area.y + (area.height - height) / 2;

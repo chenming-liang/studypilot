@@ -76,9 +76,10 @@ cargo test --workspace
 
 ## 当前进度（每会话收工时更新；详细历史与决策见 docs/核心代码逻辑.md）
 
-**完成态**：M0-M8 里程碑 + 收口会话①~㉞ 全数合入 main + **收口会话㉟（Command 体系产品化 + all 剥离 + Import 路径语义 + 产品化 Phase 3-7，分支 refactor/command-integration 进行中）**。核心能力——导入流水线（md/pdf/pptx + 幂等去重）、FTS5+jieba 中文检索（噪声降权）、RAG 学习、Review 复习闭环（逐题生成/预取/evidence 多样性/Review Map/进度监控/素材瘦身）、Outline concept-driven 持久缓存、Agent Trace 可见化、预算熔断与持久化、三级 workspace（Home/Course/Session）、onboarding 卡片与 Home Launchpad 视觉；**产品化**（pricing 可选化、Runtime Config ~/.studypilot、Model Registry 内置预设、Home AI 待配置引导、/test 连接测试、binary=studypilot、GitHub Release workflow、README Installation 优先）。workspace 280 测试全绿。
+**完成态**：M0-M8 里程碑 + 收口会话①~㉞ 全数合入 main + **收口会话㉟（Command 体系产品化 + all 剥离 + Import 路径语义 + 产品化 Phase 3-7，分支 refactor/command-integration 进行中）**。核心能力——导入流水线（md/pdf/pptx + 幂等去重）、FTS5+jieba 中文检索（噪声降权）、RAG 学习、Review 复习闭环（逐题生成/预取/evidence 多样性/Review Map/进度监控/素材瘦身）、Outline concept-driven 持久缓存、Agent Trace 可见化、预算熔断与持久化、三级 workspace（Home/Course/Session）、onboarding 卡片与 Home Launchpad 视觉；**产品化**（pricing 可选化、Runtime Config ~/.studypilot、Model Registry 内置预设、Home AI 待配置引导、/test 连接测试、binary=studypilot、GitHub Release workflow、README Installation 优先）。workspace 282 测试全绿。
 
 **关键架构决策（后续开发必须遵守，细节见 docs）**：
+- **问题.md 十二项 UI 收口**：palette 直开动作（Model/Budget/Reset/Sessions 不填输入框）、会话分组（Load/Recent/Rename/Export）、移除 Help 总览、scope 后缀删除、Flashcard s 键跳过、Setup Done 折行、setup_test_lines 宽度-4、对话框调大、Home Switch Course 直进 Course
 - **Learning Map + Flashcard Warm-up（v3）**：Review Map = 三层（Course→Section→Concept）+ `organize` 按 concept_id 去重 + `ReviewMapPicker` 树形选择器（section 头行聚合 ✓/△/○、概念行缩进，Enter 概念=复习概念/section=复习整节）；Flashcard 是正式 Review 前置 recall 暖场（一次 LLM 调用产 **3~8 张** `WARMUP_CARD_MIN/MAX`——LLM 自主数量但 `.take(8)` 硬上限不无限生成、范围=选定概念素材、question/answer 按弹窗宽度 wrap 折行永不溢出、Space 翻开/1·2·3 自评/Enter 下一张/Esc 退出；**正式题数=用户指定**——Review Map 路径经题数向导（默认 5 可改），`/review --n N` 保持，引擎不写死 5、focus/卡数/section 数均不影响题数），**自评绝不写 mastery**（纯内存 WarmupState，focus_concepts 汇总 △/○ 作为 scope 传现有 run_review），Focus 只存当前 session 用完即丢；Only Formal Review 更新 mastery
 - Review 出题是**逐题生成 + 后台预取**；判重=同轮 too_similar(≥0.75)，Concept 是主题不是去重单位
 - Review Map 用 `importer::review_map`（lib 共用）；Outline 缓存签名自愈（data/outline/{id}.json）
