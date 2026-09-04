@@ -73,7 +73,7 @@ impl App {
                     "StudyPilot — Quick Guide",
                     "",
                     "按 Ctrl+K 打开命令面板（全部动作/搜索）。",
-                    "详细用法见 docs/核心代码逻辑.md 与项目 README。",
+                    "详细操作见项目 README 与 docs/使用手册.md。",
                 ] {
                     self.push_entry(Entry::Info(l.into()));
                 }

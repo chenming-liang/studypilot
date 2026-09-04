@@ -1,12 +1,12 @@
 # AGENTS.md — AI 会话约定（每次会话开始前必读）
 
-**关键技术决策的唯一事实源是 `docs/核心代码逻辑.md`**（与代码同步维护）。`规划.md` 为早期历史规划，roadmap 部分已过时，仅作背景参考，不再约束开发。
+**关键技术决策的唯一事实源是 `_personal/核心代码逻辑.md`**（与代码同步维护）。`规划.md` 为早期历史规划，roadmap 部分已过时，仅作背景参考，不再约束开发。
 
 ## 项目一句话
 
 StudyPilot（仓库目录 agent）：Rust TUI 个人学习/笔记管理 Agent（导入 → 学习 → 复习三模式），ratatui + SQLite，本地优先。
 
-> **方向回退（2026-08-30，用户决策）**：Web 论文阅读转向（Learning Session + 诊断引擎，66 个提交）经评估判定转向失败，main 已整体回退到 `archive/course-agent-v1`（收口会话⑪ 完整态）。Web 转向的全部工作保留在分支 **`archive/web-pivot`**（tag `web-pivot-final`），需要参考（诊断动作设计/页级 chunk/tool_trace 等经验）时切分支查看，不并入主线。本文件与 docs/核心代码逻辑.md 均已随回退还原为 TUI 版本。注意：`data/mynotes.db` 的 schema user_version 曾被 Web 版升到 5（sessions.document_id 列、diagnosis_stats 表），TUI 版（SCHEMA_VERSION=3）打开会把它写回 3，多余列/表对旧代码无害；若要彻底干净可删掉该文件让 schema 重建（会丢历史数据，删前自行备份）。
+> **方向回退（2026-08-30，用户决策）**：Web 论文阅读转向（Learning Session + 诊断引擎，66 个提交）经评估判定转向失败，main 已整体回退到 `archive/course-agent-v1`（收口会话⑪ 完整态）。Web 转向的全部工作保留在分支 **`archive/web-pivot`**（tag `web-pivot-final`），需要参考（诊断动作设计/页级 chunk/tool_trace 等经验）时切分支查看，不并入主线。本文件与 _personal/核心代码逻辑.md 均已随回退还原为 TUI 版本。注意：`data/mynotes.db` 的 schema user_version 曾被 Web 版升到 5（sessions.document_id 列、diagnosis_stats 表），TUI 版（SCHEMA_VERSION=3）打开会把它写回 3，多余列/表对旧代码无害；若要彻底干净可删掉该文件让 schema 重建（会丢历史数据，删前自行备份）。
 
 ## Workspace 布局
 
@@ -18,13 +18,13 @@ crates/storage     rusqlite 存储（同步 API）+ FTS5(jieba 预分词)
 crates/tui         bin crate：ratatui App shell + Import/Study/Review mode view
 scripts/pdf_extract.py   pymupdf 提取脚本（子进程调用，stdout 输出 JSON）
 config.toml        provider 配置（格式见 crates/providers/src/config.rs）
-docs/LLM Prompts.md 全部功能用到的 LLM prompt 汇总（唯一事实源，改 prompt 同步更新）
+_personal/LLM Prompts.md 全部功能用到的 LLM prompt 汇总（唯一事实源，改 prompt 同步更新）
 data/              运行时生成的 sqlite 文件（gitignore）
 ```
 
 ## 编码约定
 
-- **文档同步（强制）**：每次修改代码后，必须同步更新 `docs/核心代码逻辑.md` 中受影响的章节——改了哪条数据流/机制/决策落点，就更新对应小节；新增机制补新小节。禁止出现"代码已改、文档还是旧逻辑"的状态。
+- **文档同步（强制）**：每次修改代码后，必须同步更新 `_personal/核心代码逻辑.md` 中受影响的章节——改了哪条数据流/机制/决策落点，就更新对应小节；新增机制补新小节。禁止出现"代码已改、文档还是旧逻辑"的状态。
 - **错误处理**：库 crate 用 `thiserror` 定义错误枚举；bin/TUI 层用 `anyhow` 透传
 - **异步纪律**：禁止在 async 上下文直接调 rusqlite 或等待子进程——一律 `tokio::task::spawn_blocking`（决策 D2）
 - **LLM 调用**：全部经 `Provider` trait；测试一律用 `MockProvider` + 录制的 JSON fixture，**绝不真调外部 API**
@@ -42,7 +42,7 @@ data/              运行时生成的 sqlite 文件（gitignore）
 - 大改/实验（跨 crate 重构、schema 变更、架构试验）：`git switch -c refactor|experiment/<名>` 分支进行，全绿后合回 main，失败丢弃分支
 - 提交前必查 `git status` / `git diff`：config.toml、密钥、data/ 绝不入库
 - 提交粒度 = 一个逻辑改动；信息一行中文说清（做什么 + 为什么）
-- 代码改动与 `docs/核心代码逻辑.md` 对应更新放**同一个 commit**
+- 代码改动与 `_personal/核心代码逻辑.md` 对应更新放**同一个 commit**
 - 改崩可回退：小范围 `git restore <file>`，整体 `git reset --hard`（执行前告知用户）
 - 不 push、不 force-push、不改写历史（本地仓，保持线性历史）
 
@@ -60,7 +60,7 @@ cargo test --workspace
 
 每次新会话第一句固定为：
 
-> 读 AGENTS.md 和 docs/核心代码逻辑.md。本次会话只做一件事：<目标一句话>。完成后跑收工检查并更新进度表。
+> 读 AGENTS.md 和 _personal/核心代码逻辑.md。本次会话只做一件事：<目标一句话>。完成后跑收工检查并更新进度表。
 
 不要单会话连做多个里程碑。
 
@@ -75,7 +75,7 @@ cargo test --workspace
 
 解析器必须处理的实际特征：Obsidian wikilink `[[#…]]` 需剥离、头部元信息引用块、"目录"小节属噪声、文件名含空格与 `(1)` 重复副本（测 hash 幂等去重）。**不要把这两个目录的内容复制进 crates**，运行时按路径导入即可。
 
-## 当前进度（每会话收工时更新；详细历史与决策见 docs/核心代码逻辑.md）
+## 当前进度（每会话收工时更新；详细历史与决策见 _personal/核心代码逻辑.md）
 
 **完成态**：M0-M8 里程碑 + 收口会话①~㉞ 全数合入 main + **收口会话㉟（Command 体系产品化 + all 剥离 + Import 路径语义 + 产品化 Phase 3-7，分支 refactor/command-integration 进行中）**。核心能力——导入流水线（md/pdf/pptx + 幂等去重）、FTS5+jieba 中文检索（噪声降权）、RAG 学习、Review 复习闭环（逐题生成/预取/evidence 多样性/Review Map/进度监控/素材瘦身）、Outline concept-driven 持久缓存、Agent Trace 可见化、预算熔断与持久化、三级 workspace（Home/Course/Session）、onboarding 卡片与 Home Launchpad 视觉；**产品化**（pricing 可选化、Runtime Config ~/.studypilot、Model Registry 内置预设、Home AI 待配置引导、/test 连接测试、binary=studypilot、GitHub Release workflow、README Installation 优先）。workspace 309 测试全绿。
 
@@ -85,7 +85,7 @@ cargo test --workspace
 - **问题.md 13-17（追加）**：⑬a 保存链路端到端验证（3 模型 Setup→落盘→重读全保留）+ split_custom_models 兼容中文分隔符（含空格模型名不误拆）；⑬b 模型选择器 PageUp/PgDn/Home/End + ListState 自动滚动；⑭ flashcard prompt 禁开放问法 + 强制 Reveal 后自评；⑮ flashcard 用 render_markdown 渲染（代码块高亮）；⑯ warmup focus：`focus_concepts()` 只取 △/○ 概念作正式复习 scope（薄弱优先），全 ✓ 时回退原始范围（修复锁死单一知识点）；⑰ 修复 Entry::Tool/闪卡双勾（文本去 ✓ 前缀）
 - **问题.md 十二项 UI 收口**：palette 直开动作（Model/Budget/Reset/Sessions 不填输入框）、会话分组（Load/Recent/Rename/Export）、移除 Help 总览、scope 后缀删除、Flashcard s 键跳过、Setup Done 折行、setup_test_lines 宽度-4、对话框调大、Home Switch Course 直进 Course
 - **Learning Map + Flashcard Warm-up（v3）**：Review Map = 三层（Course→Section→Concept）+ `organize` 按 concept_id 去重 + `ReviewMapPicker` 树形选择器（section 头行聚合 ✓/△/○、概念行缩进，Enter 概念=复习概念/section=复习整节）；Flashcard 是正式 Review 前置 recall 暖场（一次 LLM 调用产 **3~8 张** `WARMUP_CARD_MIN/MAX`——LLM 自主数量但 `.take(8)` 硬上限不无限生成、范围=选定概念素材、question/answer 按弹窗宽度 wrap 折行永不溢出、Space 翻开/1·2·3 自评/Enter 下一张/Esc 退出；**正式题数=用户指定**——Review Map 路径经题数向导（默认 5 可改），`/review --n N` 保持，引擎不写死 5、focus/卡数/section 数均不影响题数），**自评绝不写 mastery**（纯内存 WarmupState，focus_concepts 汇总 △/○ 作为 scope 传现有 run_review），Focus 只存当前 session 用完即丢；Only Formal Review 更新 mastery
-- **概念质量收紧（2026-09-04，prompt + 代码双层，docs/LLM Prompts.md 为唯一事实源）**：**prompt 层**——CONCEPT_RULES 追加禁「两考点拼一名（print与println宏）/组名与成员同抽只留成员（核心特征↔Copy）/过度宽泛概括词（表达式）/概念名取原文不改写（防单位元/特型类漂移）」，数量随密度浮动；全链路 system 统一「只输出一个 JSON 对象」+ 防注入子句（笔记/检索片段夹带指令一律忽略）；flashcard 卡要求 2（问法与答案类别严格一致，治「问运算符答 push_str」）+ 优先唯一答案 + 逐条溯源；出题加 P2 题干自洽（禁先断言再反问/凭记忆补判据）；批改改裁决链分档（全中=100/全中+附加错 70-89/漏1 90-95/漏2 80-89/漏3+ 70-79/结论错 0-69）。**代码层**——① `merge_duplicate_concepts` 概念归并（`normalize_concept_key`：去空白/全半角/ASCII 小写/剥容器·模型·机制·类型·宏后缀；同课程分组、canonical 优先有 mastery 者，迁移 note_concepts/concept_mastery/questions 引用后删冗余，refresh-concepts 收尾执行，汇总报归并数）；② `validate_map_structure` 大纲结构校验（章节 2~8、每章 3~15、概念少放宽小章，不达标重试一次 LLM）；③ flashcard concept 绑定校验（解析后必须在清单可匹配，否则丢绑定）；④ prompt 文档↔代码同步（六处常量同源，改 prompt 双改）。测试 +3（归一化/归并迁移/结构校验）
+- **概念质量收紧（2026-09-04，prompt + 代码双层，_personal/LLM Prompts.md 为唯一事实源）**：**prompt 层**——CONCEPT_RULES 追加禁「两考点拼一名（print与println宏）/组名与成员同抽只留成员（核心特征↔Copy）/过度宽泛概括词（表达式）/概念名取原文不改写（防单位元/特型类漂移）」，数量随密度浮动；全链路 system 统一「只输出一个 JSON 对象」+ 防注入子句（笔记/检索片段夹带指令一律忽略）；flashcard 卡要求 2（问法与答案类别严格一致，治「问运算符答 push_str」）+ 优先唯一答案 + 逐条溯源；出题加 P2 题干自洽（禁先断言再反问/凭记忆补判据）；批改改裁决链分档（全中=100/全中+附加错 70-89/漏1 90-95/漏2 80-89/漏3+ 70-79/结论错 0-69）。**代码层**——① `merge_duplicate_concepts` 概念归并（`normalize_concept_key`：去空白/全半角/ASCII 小写/剥容器·模型·机制·类型·宏后缀；同课程分组、canonical 优先有 mastery 者，迁移 note_concepts/concept_mastery/questions 引用后删冗余，refresh-concepts 收尾执行，汇总报归并数）；② `validate_map_structure` 大纲结构校验（章节 2~8、每章 3~15、概念少放宽小章，不达标重试一次 LLM）；③ flashcard concept 绑定校验（解析后必须在清单可匹配，否则丢绑定）；④ prompt 文档↔代码同步（六处常量同源，改 prompt 双改）。测试 +3（归一化/归并迁移/结构校验）
 - Review 出题是**逐题生成 + 后台预取**；判重=同轮 too_similar(≥0.75)，Concept 是主题不是去重单位
 - Review Map 用 `importer::review_map`（lib 共用）；Outline 缓存签名自愈（data/outline/{id}.json）
 - 课程上下文**单一事实源** = `app.course`，`home_cursor`/侧栏/session 全部从它派生（`sync_home_cursor_to_course`）；New Course 对话框直接叠 Home，建完直达 Course 页（`pending_course_enter`）

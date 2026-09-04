@@ -171,7 +171,7 @@ async fn log_usage(store: &Arc<storage::Store>, cfg: &ProviderConfig, usage: &Us
 }
 
 /// 概念定义规则（导入抽取与概念刷新共用一份，防两处漂移）。
-/// 同步自 docs/LLM Prompts.md §2（该文档为唯一事实源，改 prompt 必须两边一致）。
+/// 同步自 _personal/LLM Prompts.md §2（该文档为唯一事实源，改 prompt 必须两边一致）。
 const CONCEPT_RULES: &str = "\
 # 概念定义（严格遵守）\n\
 每个概念必须是：\n\

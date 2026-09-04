@@ -1,6 +1,6 @@
 //! M0 风险验证实验：rusqlite `bundled` feature 下 FTS5 + jieba 中文检索。
 //!
-//! 验证点（对应决策 D1，机制见 docs/核心代码逻辑.md）：
+//! 验证点（对应决策 D1，机制见 _personal/核心代码逻辑.md）：
 //! 1. bundled 构建确实带 FTS5；
 //! 2. 默认 unicode61 tokenizer 把连续中文当一个 token，直接 MATCH 子词不可用；
 //! 3. 入库/查询都过同一条 jieba 分词管线后，中文检索可命中；
