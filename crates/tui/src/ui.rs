@@ -1780,7 +1780,7 @@ fn draw_command_palette(f: &mut Frame, app: &mut App) {
                 let style = if is_sel {
                     Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
                 } else {
-                    Style::new().fg(theme::MUTED)
+                    Style::new().fg(theme::DEFAULT)
                 };
                 ListItem::new(Span::styled(label, style))
             }
