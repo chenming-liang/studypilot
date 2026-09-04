@@ -109,7 +109,10 @@ pub(crate) fn resolve_import_path(input: &str) -> Result<ImportTarget, ImportPat
             Some(h) => PathBuf::from(h),
             None => PathBuf::from(trimmed),
         }
-    } else if let Some(rest) = trimmed.strip_prefix("~/").or_else(|| trimmed.strip_prefix("~\\")) {
+    } else if let Some(rest) = trimmed
+        .strip_prefix("~/")
+        .or_else(|| trimmed.strip_prefix("~\\"))
+    {
         match std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
             Some(h) => PathBuf::from(h).join(rest),
             None => PathBuf::from(trimmed),
