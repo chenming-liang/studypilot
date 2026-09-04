@@ -1,180 +1,155 @@
 # StudyPilot
 
-> **Your AI study agent for course materials.**
+**本地优先的 AI 学习助手**——导入课程资料、基于笔记问答、主动出题复习，帮你在终端里把一门课真正学明白。
 
-一个用 Rust 实现的本地优先学习 Agent——导入课程资料、基于笔记辅导问答、主动出题复习并追踪掌握度。（仓库目录沿用 agent）
+一个 TUI 应用，支持 **14 家 LLM Provider**，数据全部保存在本地。
 
+---
 
+## 为什么用 StudyPilot
 
-## 核心功能
+- **不搬运笔记，讲给你听**：基于你自己的课程笔记做问答，AI 像老师一样重新讲解，关键事实标注 `[1]` 引用来源；笔记没覆盖的部分明确标注「（笔记外补充）」
+- **学了会忘？让它考你**：根据笔记自动出题（选择题 + 简答题），逐题作答、即时批改，掌握薄弱的概念自动优先再考
+- **知识有结构**：自动把散落的概念组织成「章节 → 概念」的复习地图，一眼看到哪些已掌握（✓）、哪些需巩固（△）、哪些还没碰（○）
+- **本地优先**：笔记、会话、掌握度都存在本地 SQLite；API key 与配置分离，可放心提交代码
+- **能用你已有的模型**：DeepSeek、Qwen、GLM、Kimi、MiniMax、Doubao、Hunyuan、ERNIE、OpenAI、Anthropic、Gemini、Grok、OpenRouter、Ollama 及任意 OpenAI-compatible 服务
 
-### 三种模式（对应知识生命周期：输入 → 消化 → 巩固）
+---
 
-| 模式 | 功能 |
-|-|-|
-| **导入 (Import)** | 批量导入 md/pdf/pptx，LLM 自动归类到课程、提取概念、chunk 化入库；进度条可 Ctrl+C 中断 |
-| **学习 (Study)** | 知识问答（RAG 检索 + agent loop 自动调度 + `[n]` 引用标注）；课程大纲生成（缩进树 + Markdown 导出） |
-| **复习 (Review)** | LLM 基于笔记出题（选择题+简答题）；选择题本地判分、简答题 LLM 批改；掌握度闭环（薄弱概念优先出题） |
+## 快速开始
 
-### 技术亮点
+### 1. 安装
 
-- **Chunk 级 RAG**：笔记按 `##` 标题拆分为 300-800 token 的 chunk，FTS5 检索降到 chunk 粒度——搜"借用"只命中"借用"章节，不被其他章节词频稀释
-- **jieba 中文分词 + FTS5**：入库与查询共用同一条分词管线（决策 D1），AND → OR 降级 + bm25 排序
-- **Agent Loop**：LLM 自主决定是否检索、检索几次（最多 3 次不同关键词），而非固定管道
-- **D4 JSON 降级链**：所有 LLM 结构化输出共用 `json_object → prompt 约束 + 正则提取 → 重试一次 → 跳过`
-- **R6 成本统计**：覆盖 chat/import/review/outline/grade 全部外部 AI 调用，预算熔断
-- **D2 异步纪律**：rusqlite 同步 API + `spawn_blocking`，不阻塞 TUI 渲染
+下载最新 release 即可，无需安装 Rust：
 
-## 安装
+| 平台 | 下载 |
+|---|---|
+| Windows x64 | `StudyPilot-windows-x64.zip`（解压双击 `studypilot.exe`） |
+| Linux x64 | `StudyPilot-linux-x64.tar.gz`（解压运行 `./studypilot`） |
 
-### 下载（推荐）
+### 2. 首次启动
 
-下载最新 release 即可使用，无需安装 Rust / Cargo。
+第一次打开会自动进入 **AI Setup**，跟着向导走：
 
-- **Windows x64**：`StudyPilot-windows-x64.zip`
-- **Linux x64**：`StudyPilot-linux-x64.tar.gz`
-
-Windows：解压后双击 `studypilot.exe`。
-Linux：解压后运行 `./studypilot`。
-
-### 首次启动（AI 配置）
-
-第一次启动会自动进入 AI Setup（无需编辑任何配置文件）：
-
-1. 选择 AI Provider（DeepSeek / GLM / OpenAI / Custom OpenAI-compatible）
+1. 选择 Provider（如 DeepSeek）
 2. 选择 Model
 3. 输入 API Key
-4. Test Connection
-5. Ready → Home
+4. Test Connection → Ready
 
-之后随时可用 `Ctrl+K → Model` 重新配置，或 `/test` 测试连接。
+> 之后随时按 `Ctrl+K` 重新配置，或输入 `/test` 测试连接。
 
-### 开发环境
+### 3. 导入资料并开始学习
 
-```bash
-# Rust 工具链
-rustup default stable
-
-# Python 3 + pymupdf（PDF 提取）
-pip install pymupdf
-# Debian/Ubuntu (PEP 668): pip install --break-system-packages pymupdf
-# 或用 venv: python3 -m venv .venv && source .venv/bin/activate && pip install pymupdf
-
-# 剪贴板工具（可选，拖选复制用）
-sudo apt install xclip   # X11
-# 或 wl-clipboard         # Wayland
+```
+/import ~/我的课程资料 --course 数据库原理    ← 导入 md/pdf/pptx，自动归类、提取概念
+/course 数据库原理                          ← 进入课程
+> 什么是 B+ 树索引？                         ← 直接提问，AI 基于笔记回答
+/outline                                    ← 生成复习地图
+/review                                     ← 出题复习
 ```
 
-### 构建（开发者）
+---
 
-```bash
-git clone <repo-url> && cd agent
-cargo build --release
-```
+## 功能一览
 
-### 运行时配置
+### 导入（把资料变成知识库）
 
-配置保存在 `~/.studypilot/config.toml`（自动创建）。开发者可回退使用仓库根 `config.toml`（已被 .gitignore 忽略，不会提交）。
+- 批量导入 **md / pdf / pptx**，按目录或文件路径均可
+- 自动提取概念、按章节拆分为检索单元，重复导入自动去重
+- 进度可实时查看，`Ctrl+C` 中断
 
-## 使用
+### 学习（理解知识）
 
-```bash
-cargo run --release -p tui
-```
+- **RAG 问答**：AI 检索你的笔记后回答，自动判断要不要查、查几次
+- **引用标注**：关键事实后带 `[1]`，对应来源笔记；笔记外的补充明确标注
+- **课程大纲**：一键生成「章节 → 概念」结构，可导出 Markdown
 
-### 命令一览
+### 复习（巩固知识）
+
+- **自动出题**：选择题（本地判分）+ 简答题（AI 批改打分）
+- **复习地图**：Course → Section → Concept 三层，按掌握度着色
+- **闪卡暖场**：正式复习前先过一遍 recall 卡片，自评哪里不熟再重点考
+- **掌握度追踪**：每道题记入学习历史，薄弱概念自动优先
+
+### 模型管理
+
+- **14 家 Provider** 预设 + 自定义 OpenAI-compatible（任意 Base URL / Model）
+- **Model Role**：把不同任务分配到不同模型——便宜快的跑导入/出题，强的跑批改/推理，日常问答用均衡模型
+- **角色配置**：`/model` 面板里给 fast / balanced / reasoning 各选一个模型，未配置的角色自动用当前模型
+
+---
+
+## 命令参考
 
 | 命令 | 说明 |
-|-|-|
-| `/help` | 命令列表 |
-| `/course` | 列出课程 |
-| `/course <名>` | 切换分区 |
+|---|---|
+| `/course` | 列出 / 切换课程 |
 | `/course -new <名>` | 新建课程 |
-| `/course -delete <名>` | 删除课程（笔记回落 all） |
-| `/model` | 弹窗选择模型 |
+| `/course -delete <名>` | 删除课程 |
+| `/import <路径> [--course <名>]` | 导入资料（md/pdf/pptx，文件或目录） |
+| `/notes` | 浏览当前课程笔记（可搜索、多选、移动/删除） |
+| `/outline [--export]` | 生成课程复习地图 / 导出 Markdown |
+| `/review-map` | 打开复习地图选择器 |
+| `/review [概念] [--n N]` | 出题复习（默认 5 题） |
+| `/refresh-concepts` | 重新抽取课程概念 |
+| `/model` | 切换模型 / 配置角色 |
+| `/test` | 测试当前 Provider 连接 |
 | `/new` | 开启新会话 |
-| `/sessions` | 列出历史会话 |
-| `/open <id>` | 恢复历史会话 |
+| `/sessions` | 历史会话 |
+| `/open <id>` | 恢复会话 |
 | `/rename <标题>` | 重命名当前会话 |
-| `/export` | 导出当前会话 JSON |
-| `/load <文件>` | 加载导出的会话 |
-| `/import <目录> [--course <名>]` | 导入语料（md/pdf/pptx） |
-| `/notes` | 列出当前课程笔记 |
-| `/delete <id>` | 删除笔记 |
-| `/delete --course <名>` | 批量删除课程笔记 |
-| `/move <id> <课程>` | 迁移笔记 |
-| `/outline [课程] [--export]` | 生成课程大纲 |
-| `/review <课程> [概念] [--n N]` | 生成复习题 |
-| `/budget` | 查看预算 |
-| `/budget <金额>` | 设置上限 |
-| `/budget reset` | 清零累计花费 |
-| `v` | 鼠标拖选复制聊天内容 |
-| `Ctrl+C` / `Esc` | 中断请求 / 退出 |
-| `PageUp/Down` | 滚动聊天流 |
+| `/export` · `/load <文件>` | 导出 / 加载会话 |
+| `/budget [金额] [reset]` | 查看 / 设置预算上限 / 清零累计花费 |
+| `/help` | 帮助 |
 
-### 快速开始
+快捷键：`Ctrl+K` 命令面板 · `Ctrl+C` 中断 · `Esc` 退出/返回 · `v` 拖选复制 · `PageUp/Down` 滚动
 
-```
-# 1. 导入课程语料
-/import 程序设计实践-rust --course rust
-/import CSAPP --course csapp
+---
 
-# 2. 切换课程并提问
-/course rust
-> 什么是所有权？              # AI 检索笔记后回答，带 [1] 引用
+## 配置
 
-# 3. 跨课程提问
-/course all
-> ownership vs 虚拟内存       # 检索两门课的笔记
+配置文件在 `~/.studypilot/`（首次启动自动创建）：
 
-# 4. 生成大纲
-/outline rust
-/outline csapp --export       # 导出 Markdown
+- `config.toml` — Provider / Model 列表与默认模型
+- `auth.toml` — API Key（权限 0600，与代码配置分离）
 
-# 5. 复习
-/review rust 所有权           # 出 5 道题
-# 选择题按 1-4 作答，简答题输入后 Enter
+开发者也可以把 `config.toml` 放在仓库根目录（已被 .gitignore 忽略，不会提交）。
 
-# 6. 查看费用
-/budget
-```
+---
 
 ## 架构
 
 ```
 crates/
-├── core/        Agent Loop、Tool trait、Provider trait、MockProvider
-├── providers/   OpenAI-compatible LLM 客户端（reqwest + chat_json）
-├── storage/     rusqlite（同步 API + spawn_blocking）+ FTS5(jieba) + chunk 级检索
-├── importer/    导入流水线：walkdir → 解析(md/pdf/pptx) → LLM 概念抽取 → chunk 入库
-├── tools/       search_notes（chunk 级 FTS5）/ list_courses
-└── tui/         ratatui App shell + mpsc 事件通道 + 复习模式 + 鼠标拖选复制
+├── core/         Agent Loop、工具与 Provider 抽象
+├── providers/    LLM 客户端（14 家 Provider + 统一 OpenAI-compatible 协议）
+├── storage/      SQLite + FTS5 全文检索（jieba 中文分词）
+├── importer/     导入流水线（md/pdf/pptx 解析 → 概念抽取 → 入库）
+├── tools/        检索工具（search_notes / list_courses）
+└── tui/          ratatui 终端界面
 ```
 
-### 技术决策（机制详见 docs/核心代码逻辑.md）
+技术细节与设计决策见 [docs/核心代码逻辑.md](docs/核心代码逻辑.md)。
 
-| 编号 | 决策 |
-|-|-|
-| D1 | jieba 预分词 + FTS5（chunk 级，AND→OR 降级 + bm25） |
-| D2 | rusqlite 同步 API + spawn_blocking |
-| D3 | pymupdf 子进程提取 PDF |
-| D4 | JSON mode 统一降级链 |
-| D5 | 课程唯一主分类 |
-| D6 | 命令直连流水线，仅检索工具进 agent loop |
-| D7 | reasoning_content/reasoning 双变体兼容 |
+---
 
-## 项目结构
+## 开发
 
-- `config.toml` — provider 配置（gitignore）
-- `scripts/pdf_extract.py` — pymupdf PDF 提取脚本
-- `data/` — SQLite 数据库 + 日志 + 导出文件（gitignore）
-- `CSAPP/` — 真实测试语料（17 篇笔记 + 课件）
-- `程序设计实践-rust/` — 真实测试语料（3 讲笔记 + 3 个 PDF 课件）
+```bash
+# 依赖
+rustup default stable
+pip install pymupdf            # PDF 提取
+sudo apt install xclip         # 剪贴板（可选，拖选复制用）
 
-## 技术栈
+# 构建 & 运行
+cargo build --release
+cargo run --release -p tui
 
-Rust · ratatui · crossterm · rusqlite (FTS5) · jieba-rs · reqwest · tokio · walkdir · zip · regex · pymupdf
+# 测试 & 检查
+cargo test
+cargo clippy --all-targets --all-features -- -D warnings
+```
 
 ## License
 
-MIT
+[MIT](LICENSE)
