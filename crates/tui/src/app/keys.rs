@@ -127,9 +127,8 @@ impl App {
         if self.palette.is_some() && self.handle_palette_key(key) {
             return;
         }
-        // 弹窗打开时按键优先由弹窗处理
-        if self.model_picker.is_some() {
-            self.handle_picker_key(key);
+        // 弹窗打开时按键优先由弹窗处理（返回 false 的编辑键落入普通输入路径作过滤词）
+        if self.model_picker.is_some() && self.handle_picker_key(key) {
             return;
         }
         // Ctrl+K 打开命令面板（接管聊天框输入作过滤缓冲）
@@ -160,12 +159,14 @@ impl App {
             KeyCode::Backspace => {
                 self.cursor_pos = delete_before(&mut self.input, self.cursor_pos);
                 self.sync_palette_filter();
+                self.sync_picker_filter();
                 self.sync_browser_search();
                 self.sync_session_browser_search();
             }
             KeyCode::Delete => {
                 delete_at(&mut self.input, self.cursor_pos);
                 self.sync_palette_filter();
+                self.sync_picker_filter();
                 self.sync_browser_search();
                 self.sync_session_browser_search();
             }
@@ -174,6 +175,7 @@ impl App {
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.cursor_pos = insert_char(&mut self.input, self.cursor_pos, c);
                 self.sync_palette_filter();
+                self.sync_picker_filter();
                 self.sync_browser_search();
                 self.sync_session_browser_search();
             }
@@ -208,6 +210,14 @@ impl App {
     /// 面板打开期间，聊天框缓冲即过滤串——编辑后同步过滤结果。
     fn sync_palette_filter(&mut self) {
         if let Some(p) = &mut self.palette {
+            let input = self.input.clone();
+            p.refilter(&input);
+        }
+    }
+
+    /// 模型弹窗搜索栏：共享 App.input，编辑键改动后重过滤。
+    pub(crate) fn sync_picker_filter(&mut self) {
+        if let Some(p) = &mut self.model_picker {
             let input = self.input.clone();
             p.refilter(&input);
         }
@@ -1326,46 +1336,55 @@ impl App {
         }
     }
 
-    /// 弹窗按键：↑↓/j/k 移动、数字直选、Enter 确认、Esc 关闭。
+    /// 弹窗按键：↑↓/j/k 移动、数字直选、Enter 确认、Esc 关闭；编辑键（字母等）
+    /// 返回 false 落入普通输入路径作搜索词（共享 App.input 过滤）。
     /// 模型多时支持 PageUp/PageDown 翻页（问题 13b）。
-    pub(crate) fn handle_picker_key(&mut self, key: KeyEvent) {
+    pub(crate) fn handle_picker_key(&mut self, key: KeyEvent) -> bool {
         let picker = self.model_picker.as_mut().unwrap();
-        let len = picker.options.len();
+        let len = picker.filtered.len();
         match key.code {
             KeyCode::Up | KeyCode::Char('k') => {
                 picker.selected = picker.selected.saturating_sub(1);
+                true
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 if len > 0 {
                     picker.selected = (picker.selected + 1).min(len - 1);
                 }
+                true
             }
             KeyCode::PageUp => {
                 picker.selected = picker.selected.saturating_sub(10);
+                true
             }
             KeyCode::PageDown => {
                 if len > 0 {
                     picker.selected = (picker.selected + 10).min(len - 1);
                 }
+                true
             }
             KeyCode::Home => {
                 picker.selected = 0;
+                true
             }
             KeyCode::End => {
                 if len > 0 {
                     picker.selected = len - 1;
                 }
+                true
             }
-            KeyCode::Esc | KeyCode::Char('q') => {
+            KeyCode::Esc => {
                 self.model_picker = None;
+                self.restore_input_backup();
+                true
             }
             KeyCode::Enter => {
                 let sel = picker.selected;
+                let idx = picker.filtered.get(sel).copied();
                 // 角色模式：选定模型 → 绑定到该角色（落盘 roles，不切换当前模型）
                 if let Some(role) = picker.role.clone() {
-                    let chosen = picker
-                        .options
-                        .get(sel)
+                    let chosen = idx
+                        .and_then(|i| picker.options.get(i))
                         .map(|o| (o.provider.clone(), o.model.clone()));
                     if let Some((p, m)) = chosen {
                         self.apply_role_assign(&role, &p, &m);
@@ -1375,6 +1394,8 @@ impl App {
                         );
                     }
                     // 绑定完成后返回角色面板（不关闭），光标落回刚配置的角色行便于继续
+                    self.input.clear();
+                    self.cursor_pos = 0;
                     let mut back = ModelPicker::from_providers(
                         &self.all_providers,
                         &self.provider_cfg.name,
@@ -1383,37 +1404,42 @@ impl App {
                     );
                     back.select_role(&role);
                     self.model_picker = Some(back);
-                    return;
+                    return true;
                 }
                 // 普通模式：角色行 → 进入角色模型选择；模型行 → 切换当前模型
-                if picker.selected_is_role() {
-                    if let Some(o) = picker.options.get(sel) {
-                        let role = o.model_display.clone();
+                if let Some(i) = idx {
+                    let is_role = picker.options[i].is_role;
+                    if is_role {
+                        let role = picker.options[i].model_display.clone();
                         if ["fast", "balanced", "reasoning"].contains(&role.as_str()) {
+                            // 进入角色模式前清掉搜索词（从全量模型里挑）
+                            self.input.clear();
+                            self.cursor_pos = 0;
                             picker.enter_role(&role);
                         }
+                        return true;
                     }
-                    return;
-                }
-                let chosen = picker
-                    .options
-                    .get(sel)
-                    .map(|o| (o.provider.clone(), o.model.clone()));
-                self.model_picker = None;
-                if let Some((p, m)) = chosen {
+                    let p = picker.options[i].provider.clone();
+                    let m = picker.options[i].model.clone();
+                    self.model_picker = None;
+                    self.drop_input_backup();
                     self.apply_model_switch(&p, &m);
+                    return true;
                 }
+                true
             }
             KeyCode::Char(c @ '1'..='9') => {
                 let idx = (c as u8 - b'1') as usize;
-                if idx < len {
-                    let o = picker.options[idx].provider.clone();
-                    let m = picker.options[idx].model.clone();
+                if let Some(&fi) = picker.filtered.get(idx) {
+                    let p = picker.options[fi].provider.clone();
+                    let m = picker.options[fi].model.clone();
                     self.model_picker = None;
-                    self.apply_model_switch(&o, &m);
+                    self.drop_input_backup();
+                    self.apply_model_switch(&p, &m);
                 }
+                true
             }
-            _ => {}
+            _ => false,
         }
     }
 }

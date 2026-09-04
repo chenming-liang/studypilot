@@ -497,6 +497,7 @@ impl App {
     /// `/model fast|balanced|reasoning`：打开该角色的模型选择（配到 config.toml `[roles]`）。
     pub(crate) fn handle_model_command(&mut self, arg: &str) {
         if arg.is_empty() {
+            self.take_input_for_overlay(); // 聊天框缓冲即搜索栏（fzf 风格）
             self.model_picker = Some(ModelPicker::from_providers(
                 &self.all_providers,
                 &self.provider_cfg.name,
@@ -508,6 +509,7 @@ impl App {
         // role 配置：/model fast|balanced|reasoning → 进入该角色模型选择
         let roles = ["fast", "balanced", "reasoning"];
         if roles.contains(&arg) {
+            self.take_input_for_overlay();
             let mut picker = ModelPicker::from_providers(
                 &self.all_providers,
                 &self.provider_cfg.name,
@@ -1189,6 +1191,58 @@ pub(crate) mod course_delete_tests {
         );
     }
 
+    /// 模型弹窗搜索过滤：编辑键落回普通输入路径（App.input 即搜索栏），refilter 实时缩窄；
+    /// 空输入恢复全量；角色行也可被匹配。
+    #[test]
+    fn model_picker_filter_narrows_by_query() {
+        let mut app = test_app();
+        app.all_providers.push(agent_providers::ProviderConfig {
+            name: "deepseek".into(),
+            endpoint: "https://api.deepseek.com/v1".into(),
+            api_key: Some("k".into()),
+            api_key_env: None,
+            model: "deepseek-v4-pro".into(),
+            models: vec![agent_providers::ModelConfig {
+                id: "deepseek-v4-pro".into(),
+                name: Some("DeepSeek V4 Pro".into()),
+                price_prompt: Some(4.0),
+                price_completion: Some(16.0),
+                price_prompt_cached: None,
+                context_length: 65536,
+                thinking: true,
+            }],
+            price_prompt: Some(4.0),
+            price_completion: Some(16.0),
+            price_prompt_cached: None,
+            context_length: 65536,
+            thinking: true,
+        });
+        app.handle_model_command("");
+        let total = app.model_picker.as_ref().unwrap().filtered.len();
+        assert_eq!(total, 5, "3 角色行 + test/m + deepseek/v4-pro");
+        let key =
+            |code| crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE);
+        // 输入 "pro" → 只剩匹配的模型行（deepseek-v4-pro），角色行被过滤掉
+        for c in "pro".chars() {
+            app.handle_key(key(crossterm::event::KeyCode::Char(c)));
+        }
+        let picker = app.model_picker.as_ref().unwrap();
+        assert_eq!(picker.filtered.len(), 1, "只命中 v4-pro");
+        assert_eq!(picker.options[picker.filtered[0]].model, "deepseek-v4-pro");
+        // 空输入 → 恢复全量
+        app.input.clear();
+        app.sync_picker_filter();
+        assert_eq!(app.model_picker.as_ref().unwrap().filtered.len(), 5);
+        // 输入角色名 "fast" → 命中 fast 角色行
+        for c in "fast".chars() {
+            app.handle_key(key(crossterm::event::KeyCode::Char(c)));
+        }
+        let picker = app.model_picker.as_ref().unwrap();
+        assert_eq!(picker.filtered.len(), 1, "只命中 fast 角色行");
+        assert!(picker.options[picker.filtered[0]].is_role);
+        assert_eq!(picker.options[picker.filtered[0]].model_display, "fast");
+    }
+
     /// role_client：role 命中 roles 表 → 独立 client（不同模型）；未命中 → 当前 client。
     #[test]
     fn role_client_switches_model_only_when_configured() {
@@ -1337,6 +1391,7 @@ pub(crate) mod course_delete_tests {
                 is_role: false,
             })
             .collect();
+        picker.filtered = (0..30).collect();
         picker.selected = 0;
         app.model_picker = Some(picker);
 

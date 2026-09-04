@@ -90,6 +90,8 @@ pub struct ModelPicker {
     pub role: Option<String>,
     /// config.toml `[roles]` 当前绑定（角色行渲染 + 角色模式初始定位）
     pub roles: std::collections::BTreeMap<String, String>,
+    /// 过滤后可见的 options 下标（共享 App.input 作搜索栏，空输入 = 全量）
+    pub filtered: Vec<usize>,
 }
 
 impl ModelPicker {
@@ -134,11 +136,13 @@ impl ModelPicker {
             }
         }
         let n = options.len();
+        let filtered: Vec<usize> = (0..n).collect();
         Self {
             options,
             selected: selected.min(n.saturating_sub(1)),
             role: None,
             roles: roles.clone(),
+            filtered,
         }
     }
 
@@ -166,15 +170,31 @@ impl ModelPicker {
         }
         self.role = Some(role.to_string());
         self.options = models;
+        self.filtered = (0..self.options.len()).collect();
         self.selected = selected.min(self.options.len().saturating_sub(1));
     }
 
-    /// 当前选中行是否角色配置行。
-    pub fn selected_is_role(&self) -> bool {
-        self.options
-            .get(self.selected)
-            .map(|o| o.is_role)
-            .unwrap_or(false)
+    /// 按输入过滤（共享 App.input 搜索栏，fzf 风格）：匹配 provider / provider_display /
+    /// model / model_display（大小写不敏感 substring）；空输入恢复全量。角色配置行也参与匹配
+    /// （打 "fast" 直达 fast 行）。
+    pub fn refilter(&mut self, input: &str) {
+        let f = input.trim().to_lowercase();
+        self.filtered = self
+            .options
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| {
+                f.is_empty()
+                    || o.provider.to_lowercase().contains(&f)
+                    || o.provider_display.to_lowercase().contains(&f)
+                    || o.model.to_lowercase().contains(&f)
+                    || o.model_display.to_lowercase().contains(&f)
+            })
+            .map(|(idx, _)| idx)
+            .collect();
+        if self.selected >= self.filtered.len() {
+            self.selected = self.filtered.len().saturating_sub(1);
+        }
     }
 
     /// 光标定位到指定角色配置行（绑定后返回角色面板时落在此处，便于继续配置下一角色）。

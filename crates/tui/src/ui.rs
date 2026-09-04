@@ -2576,7 +2576,8 @@ fn draw_model_picker(
 
     let mut items: Vec<ListItem> = Vec::new();
     let mut last_provider: Option<&str> = None;
-    for (i, o) in picker.options.iter().enumerate() {
+    for (i, &oi) in picker.filtered.iter().enumerate() {
+        let o = &picker.options[oi];
         // 角色配置行：显示角色名 + 已绑定模型（未配置 = 用当前模型）
         if o.is_role {
             let bound = picker
@@ -2656,12 +2657,13 @@ fn draw_model_picker(
         items.push(ListItem::new(Span::styled(label, style)));
     }
 
+    let n_visible = picker.filtered.len();
     let title: String = if let Some(role) = &picker.role {
-        format!(" 角色 `{role}` 用哪个模型？(Enter 绑定 · Esc 返回) ")
-    } else if picker.options.len() > (height.saturating_sub(2)) as usize {
-        " AI Models (↑↓ · PgUp/PgDn 翻页 · Enter 切换 / 配置角色 · Esc 取消) ".into()
+        format!(" 角色 `{role}` 用哪个模型？(输入过滤 · Enter 绑定 · Esc 返回) ")
     } else {
-        " AI Models (↑↓ · Enter 切换 / 配置角色 · Esc 取消) ".into()
+        format!(
+            " AI Models (输入过滤 · ↑↓ 移动 · Enter 切换 / 配置角色 · Esc 取消)  {n_visible} 项 "
+        )
     };
     let mut state = ratatui::widgets::ListState::default().with_selected(Some(picker.selected));
     f.render_stateful_widget(
