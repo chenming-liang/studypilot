@@ -83,31 +83,25 @@ StudyPilot 把任务分为几类角色（fast / balanced / reasoning），每类
 
 ## Installation
 
-### 使用 Release 版本
-
-到本项目的 Releases 页面下载对应平台的压缩包，解压即可运行，无需安装 Rust：
-
-- **Windows**：`StudyPilot-windows-x64.zip`，解压后运行 `studypilot.exe`
-- **Linux**：`StudyPilot-linux-x64.tar.gz`，解压后运行 `./studypilot`
-- **macOS**：`StudyPilot-macos-aarch64.tar.gz`（Apple Silicon）或 `StudyPilot-macos-x64.tar.gz`（Intel），解压后运行 `./studypilot`
-
-> 若导入的资料包含 PDF，需先安装 PDF 提取所需依赖（Release 版本同样需要）。运行一次安装脚本即可：
->
-> - **Windows**：双击或运行 `scripts/install-deps.ps1`
-> - **Linux / macOS**：运行 `bash scripts/install-deps.sh`
-
 ### 从源码构建
 
 ```bash
-git clone <repo-url>
-cd <repo-dir>
-# 先安装 PDF 提取所需依赖（仅在导入 PDF 时需要）：
-#   Windows:  scripts/install-deps.ps1
-#   Linux/macOS: bash scripts/install-deps.sh
+git clone https://git.tsinghua.edu.cn/rust-course/2026/agent/agent-liangcm25.git
+cd agent-liangcm25
 cargo build --release
 ```
 
 构建需要 **Rust**（stable 工具链）。
+
+若导入的资料包含 PDF，需先安装 PDF 提取所需依赖（构建后导入 PDF 时需要）。运行一次安装脚本即可：
+
+- **Windows**：`scripts/install-deps.ps1`
+- **Linux / macOS**：`bash scripts/install-deps.sh`
+
+```bash
+# 构建产物
+./target/release/studypilot
+```
 
 ---
 
