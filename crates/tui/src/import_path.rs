@@ -240,7 +240,7 @@ mod tests {
         let _g = CWD_LOCK.lock().unwrap();
         let root = tmp_root("parrel");
         let cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&root.join("materials")).unwrap();
+        std::env::set_current_dir(root.join("materials")).unwrap();
         let t = resolve_import_path("../materials").unwrap();
         assert_eq!(t.path, root.join("materials"));
         std::env::set_current_dir(&cwd).unwrap();

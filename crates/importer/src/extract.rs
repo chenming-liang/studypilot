@@ -345,39 +345,6 @@ pub async fn extract_concepts(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_clean_json() {
-        let json = r#"{"title":"所有权","course":"rust","summary":"Rust所有权","concepts":[{"name":"所有权"},{"name":"移动语义"}]}"#;
-        let r = parse_json(json).unwrap();
-        assert_eq!(r.title.as_deref(), Some("所有权"));
-        assert_eq!(r.course.as_deref(), Some("rust"));
-        assert_eq!(r.concepts, vec!["所有权", "移动语义"]);
-    }
-
-    #[test]
-    fn parse_markdown_wrapped_json() {
-        let json = "```json\n{\"title\":\"T\",\"concepts\":[]}\n```";
-        let r = parse_json(json).unwrap();
-        assert_eq!(r.title.as_deref(), Some("T"));
-    }
-
-    #[test]
-    fn parse_json_with_noise() {
-        let json = "好的，这是结果：\n{\"title\":\"T\",\"concepts\":[{\"name\":\"C\"}]}\n以上。";
-        let r = parse_json(json).unwrap();
-        assert_eq!(r.concepts, vec!["C"]);
-    }
-
-    #[test]
-    fn parse_garbage_returns_none() {
-        assert!(parse_json("这不是JSON").is_none());
-    }
-}
-
 /// 课程级概念刷新（/refresh-concepts 后端，2026-08-30）。
 /// 唯一输入 = DB 存储的笔记全文（canonical content，不依赖源文件）。
 /// 逐篇：unlink 旧关联 → LLM 重抽 → link 新概念；收尾清理「零关联零历史」概念
@@ -473,4 +440,37 @@ pub async fn refresh_course_concepts(
         merged,
         after.join("、"),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_clean_json() {
+        let json = r#"{"title":"所有权","course":"rust","summary":"Rust所有权","concepts":[{"name":"所有权"},{"name":"移动语义"}]}"#;
+        let r = parse_json(json).unwrap();
+        assert_eq!(r.title.as_deref(), Some("所有权"));
+        assert_eq!(r.course.as_deref(), Some("rust"));
+        assert_eq!(r.concepts, vec!["所有权", "移动语义"]);
+    }
+
+    #[test]
+    fn parse_markdown_wrapped_json() {
+        let json = "```json\n{\"title\":\"T\",\"concepts\":[]}\n```";
+        let r = parse_json(json).unwrap();
+        assert_eq!(r.title.as_deref(), Some("T"));
+    }
+
+    #[test]
+    fn parse_json_with_noise() {
+        let json = "好的，这是结果：\n{\"title\":\"T\",\"concepts\":[{\"name\":\"C\"}]}\n以上。";
+        let r = parse_json(json).unwrap();
+        assert_eq!(r.concepts, vec!["C"]);
+    }
+
+    #[test]
+    fn parse_garbage_returns_none() {
+        assert!(parse_json("这不是JSON").is_none());
+    }
 }

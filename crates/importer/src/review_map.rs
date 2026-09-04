@@ -769,7 +769,7 @@ mod tests {
 
     #[test]
     fn with_refreshed_status_keeps_structure() {
-        let mut map = ReviewMap {
+        let map = ReviewMap {
             course: "rust".into(),
             sections: vec![OutlineSection {
                 title: "s".into(),

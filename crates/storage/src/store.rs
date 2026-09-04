@@ -1365,5 +1365,9 @@ mod concept_merge_tests {
             store.list_concept_names_by_course(cid).unwrap(),
             vec!["& str".to_string(), "所有权".to_string()]
         );
+        assert!(
+            store.get_concept_mastery(id3).unwrap().is_none(),
+            "所有权无学习记录，独立保留"
+        );
     }
 }

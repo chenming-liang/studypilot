@@ -414,7 +414,9 @@ impl ModelRole {
 }
 
 /// 解析 `provider/model` canonical 字符串为 (provider, model)。
-fn split_canonical(full: &str) -> Option<(&str, &str)> {
+/// 注意：`split_once` 只拆第一个 `/`——OpenRouter 模型名自带 `/`（如
+/// `anthropic/claude-3.7-sonnet`），剩余部分整体作为 model，天然兼容。
+pub(crate) fn split_canonical(full: &str) -> Option<(&str, &str)> {
     match full.split_once('/') {
         Some((p, m)) if !p.is_empty() && !m.is_empty() => Some((p, m)),
         _ => None,

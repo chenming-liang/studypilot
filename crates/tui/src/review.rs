@@ -1396,9 +1396,11 @@ mod warmup_tests {
     /// 卡数范围（文档 §二 澄清）：LLM 自主决定但限 3~8，不无限生成。
     #[test]
     fn warmup_card_bounds() {
-        assert!(WARMUP_CARD_MIN >= 3);
-        assert!(WARMUP_CARD_MAX <= 8);
-        assert!(WARMUP_CARD_MIN <= WARMUP_CARD_MAX);
+        const _: () = {
+            assert!(WARMUP_CARD_MIN >= 3);
+            assert!(WARMUP_CARD_MAX <= 8);
+            assert!(WARMUP_CARD_MIN <= WARMUP_CARD_MAX);
+        };
     }
 
     /// 文档 §二.4：Focus Concepts = 评 △/○ 的概念（✓ 不算），去重保留顺序。
@@ -1629,7 +1631,7 @@ mod diversity_tests {
     /// 回归 2：同 concept + 同义改写 → 拒绝
     #[test]
     fn paraphrase_of_same_question_is_rejected() {
-        let asked = vec![ctx(
+        let asked = [ctx(
             "choice",
             Some("变量遮蔽"),
             "在 Rust 中，关于变量遮蔽的说法正确的是：A 遮蔽只能改变值 B 遮蔽可以改变类型 C 遮蔽要求 mut D 遮蔽不创建新绑定",
@@ -1668,7 +1670,7 @@ mod diversity_tests {
     /// 回归 4：不同 concept + 题型模板相似 → 不因模板词拒绝
     #[test]
     fn template_similarity_across_concepts_is_allowed() {
-        let asked = vec![ctx(
+        let asked = [ctx(
             "choice",
             Some("生命周期"),
             "在 Rust 中，关于生命周期参数的说法正确的是：A 'a 表示引用存活期 B 生命周期影响实际存活 C 每个引用都需要标注 D 静态生命周期不可变",
@@ -1757,11 +1759,7 @@ mod diversity_tests {
             concept_list: "c".into(),
         };
         let messages = build_question_messages(&ctx_pack, 0, 5, &QType::Choice, &[], &[], false);
-        let text = messages[1]
-            .content
-            .as_ref()
-            .map(|s| s.as_str())
-            .unwrap_or("");
+        let text = messages[1].content.as_deref().unwrap_or("");
         assert!(text.contains("不是禁止重复的主题"));
         assert!(text.contains("换皮改写"));
         assert!(text.contains("aspect"));
@@ -1829,10 +1827,12 @@ mod material_measure_tests {
         // 瘦身前同场景 ≈ 9000 字符 prompt（素材 8400）——预期省 ~40%
         // deepseek 中文 ≈ 0.6 token/字（1 token ≈ 1.6 中文字符）
         println!("  估算 tokens: {:.0}", total as f64 * 0.6);
-        // 断言：素材占 prompt 的绝对大头（瘦身的靶子）
+        // 断言：素材占 prompt 的绝对大头（瘦身的靶子）。
+        // 2026-09-04 prompt 收紧（P1-P4 扩展/自检/防注入/课程适配总则）后固定指令变长，
+        // 素材占比由 >50% 降至 ~46%——仍是大头，阈值放宽到 40% 防过度挤压。
         assert!(
-            mat * 100 / total > 50,
-            "素材应占 >50%（实测 {:.0}%）",
+            mat * 100 / total > 40,
+            "素材应占 >40%（实测 {:.0}%）",
             mat * 100 / total
         );
     }
