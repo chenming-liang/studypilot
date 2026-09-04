@@ -113,7 +113,7 @@ pub struct QuizContext {
 }
 
 /// Flashcard（正式 Review 前的快速 recall 卡片）。
-/// LLM 一次生成一批（One LLM call → 5~8 张，文档 §二.8），本地逐张展示。
+/// LLM 一次生成一批（One LLM call → 固定 5 张，本地逐张展示）。
 #[derive(Debug, Clone)]
 pub struct Flashcard {
     pub question: String,
@@ -121,6 +121,11 @@ pub struct Flashcard {
     /// 绑定概念名（focus 汇总用；None = 跨概念卡）
     pub concept: Option<String>,
 }
+
+/// Flashcard Warm-up 固定卡片数（文档：固定 5 张，LLM 不决定数量）。
+pub const WARMUP_CARD_COUNT: usize = 5;
+/// 暖场后正式 Review 固定题数（调用方显式指定，LLM 不决定数量）。
+pub const FORMAL_REVIEW_COUNT: usize = 5;
 
 /// Flashcard 自评（非 mastery，只影响本轮 focus signal）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -500,7 +505,7 @@ pub async fn generate_warmup_cards(
         .collect();
     let prompt = format!(
         "你是《{course_name}》课程的学习导师。学生马上要开始正式复习，请为本次复习范围\
-         生成 5~8 张快速自评卡片（Flashcard），用来先做一次 recall 检查。\n\n\
+         生成恰好 {WARMUP_CARD_COUNT} 张快速自评卡片（Flashcard），用来先做一次 recall 检查。\n\n\
          本次复习范围：{scope_text}\n\n\
          相关笔记素材：\n{material}\n\n\
          课程概念及掌握度：\n{}\n\n\
@@ -583,6 +588,8 @@ pub async fn generate_warmup_cards(
             })
         })
         .collect();
+    // 硬上限：即使 LLM 输出更多，也只保留固定 5 张（确定性，文档 §二）
+    let cards: Vec<Flashcard> = cards.into_iter().take(WARMUP_CARD_COUNT).collect();
     if cards.is_empty() {
         return Err("Flashcard 生成失败：输出为空或解析失败".into());
     }
@@ -1317,6 +1324,13 @@ mod warmup_tests {
             course_name: "rust".into(),
             n: 5,
         }
+    }
+
+    /// 固定数量（文档 §二）：Warm-up 恒 5 张卡、正式 Review 恒 5 题——LLM 不决定数量。
+    #[test]
+    fn counts_are_fixed() {
+        assert_eq!(WARMUP_CARD_COUNT, 5);
+        assert_eq!(FORMAL_REVIEW_COUNT, 5);
     }
 
     /// 文档 §二.4：Focus Concepts = 评 △/○ 的概念（✓ 不算），去重保留顺序。

@@ -171,19 +171,10 @@ impl App {
         self.take_input_for_overlay(); // 备份聊天内容 + 清空
     }
 
-    /// `/review-map [数量]` —— 自愈式出题入口：缓存命中秒开；签名变化自动重跑 LLM。
-    /// 数量 = 选择器普通行出题的 --n（默认 5；「优先巩固」批量项数量 = 待巩固概念数）。
-    /// 参数支持 `3` 或 `--n 3` 两种写法。
-    pub(crate) fn handle_review_map_command(&mut self, arg: &str) {
+    /// `/review-map` —— 自愈式出题入口：缓存命中秒开；签名变化自动重跑 LLM。
+    /// 数量恒固定（正式 Review = 5 题），数量参数已弃用。
+    pub(crate) fn handle_review_map_command(&mut self, _arg: &str) {
         self.enter_session_workspace();
-        let trimmed = arg.trim();
-        let n = trimmed
-            .strip_prefix("--n")
-            .map(str::trim)
-            .unwrap_or(trimmed)
-            .parse::<usize>()
-            .unwrap_or(0);
-        self.review_map_n = n;
         let name = self.course.clone();
         if name == "all" {
             self.push_entry(Entry::Error("复习地图需指定具体课程，不能为 all".into()));

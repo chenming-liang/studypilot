@@ -168,8 +168,6 @@ pub struct App {
     pub review: Option<review::ReviewState>,
     /// 最近一次生成的复习地图（选择器重开数据源）
     pub review_map: Option<crate::outline_render::ReviewMap>,
-    /// 复习地图选择器出题数量（/review-map [数量]，0 = 默认 5；批量项仍按概念数）
-    pub review_map_n: usize,
     /// 简答题批改进行中（防并发提交错位）
     review_grading: bool,
     /// 复习追问回答生成中（防并发；Esc 可中断，留在反馈停留态）
@@ -462,7 +460,6 @@ impl App {
             inflight: None,
             review_gen: None,
             review_map: None,
-            review_map_n: 0,
             import_cancel: None,
             review: None,
             review_grading: false,

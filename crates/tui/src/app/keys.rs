@@ -1155,11 +1155,9 @@ impl App {
                 let Some(row) = p.rows.get(p.selected) else {
                     return true;
                 };
-                let (scope, n) = match row {
-                    MapRow::Concept { name, .. } => (name.clone(), p_n(self)),
-                    MapRow::Section { concept_names, .. } => {
-                        (concept_names.join("、"), concept_names.len())
-                    }
+                let scope = match row {
+                    MapRow::Concept { name, .. } => name.clone(),
+                    MapRow::Section { concept_names, .. } => concept_names.join("、"),
                 };
                 // 找到当前课程 id（pick 只出现在具体课程下）
                 let Some(course_id) = self
@@ -1173,8 +1171,8 @@ impl App {
                 let course_name = self.course.clone();
                 self.review_map_picker = None;
                 self.drop_input_backup();
-                // 进入 Flashcard Warm-up，随后正式 Review（focus 概念优先）
-                self.start_warmup(scope, Some(course_id), course_name, n);
+                // 进入 Flashcard Warm-up，随后正式 Review（focus 概念优先；题数固定 5）
+                self.start_warmup(scope, Some(course_id), course_name);
                 true
             }
             _ => false,
@@ -1328,13 +1326,4 @@ impl App {
 /// 列表选择器当前可见条目数（按共享输入缓冲过滤后）。
 fn lp_visible_len(lp: &Option<crate::palette::ListPicker>, input: &str) -> usize {
     lp.as_ref().map(|p| p.visible(input).len()).unwrap_or(0)
-}
-
-/// 复习地图单概念的默认出题数（/review-map 数量 可调；0 = 默认 5）。
-fn p_n(app: &App) -> usize {
-    if app.review_map_n > 0 {
-        app.review_map_n
-    } else {
-        5
-    }
 }
