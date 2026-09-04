@@ -1081,6 +1081,44 @@ pub(crate) mod course_delete_tests {
         assert!(picker.options[1].thinking, "V4 Pro thinking 元数据");
     }
 
+    /// 问题 13b：模型多时可用 ↑↓/PgUp/PgDn 翻页——selected 能越过视口到达屏外选项，
+    /// 渲染由 ListState 自动滚动跟随。
+    #[test]
+    fn model_picker_pages_beyond_viewport() {
+        let mut app = test_app();
+        let mut picker = crate::palette::ModelPicker::from_providers(&[], "p", "m");
+        // 造 30 个选项（> 视口高 24-2）
+        picker.options = (0..30)
+            .map(|i| crate::palette::ModelOption {
+                provider: "p".into(),
+                provider_display: "P".into(),
+                model: format!("m{i}"),
+                model_display: format!("M{i}"),
+                known_pricing: true,
+                thinking: false,
+            })
+            .collect();
+        picker.selected = 0;
+        app.model_picker = Some(picker);
+
+        let key =
+            |code| crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE);
+        // Down ×10：逐行移动，应到达第 10 个
+        for _ in 0..10 {
+            app.handle_picker_key(key(crossterm::event::KeyCode::Down));
+        }
+        assert_eq!(app.model_picker.as_ref().unwrap().selected, 10);
+        // PageDown：再跳 10 个 → 20
+        app.handle_picker_key(key(crossterm::event::KeyCode::PageDown));
+        assert_eq!(app.model_picker.as_ref().unwrap().selected, 20);
+        // End：直达末尾
+        app.handle_picker_key(key(crossterm::event::KeyCode::End));
+        assert_eq!(app.model_picker.as_ref().unwrap().selected, 29);
+        // Home：回到开头
+        app.handle_picker_key(key(crossterm::event::KeyCode::Home));
+        assert_eq!(app.model_picker.as_ref().unwrap().selected, 0);
+    }
+
     #[tokio::test]
     async fn delete_current_course_switches_to_all() {
         let mut app = test_app();

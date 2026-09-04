@@ -1134,18 +1134,25 @@ fn append_entry_lines(entry: &Entry, width: usize, out: &mut Vec<Line<'static>>)
                     Span::styled(format!("    {text}"), Style::new().fg(theme::FG)),
                 ])
             };
+            // 单行小结（问题 4）：`✓ 已掌握：A，B`——状态词用语义色，概念内容默认色
+            let summary_line =
+                |mark: &'static str, color: ratatui::style::Color, items: &[String]| {
+                    Line::from(vec![
+                        Span::styled("▎ ", Style::new().fg(theme::PRIMARY)),
+                        Span::styled(
+                            format!("  {mark}"),
+                            Style::new().fg(color).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(items.join("，"), Style::new().fg(theme::FG)),
+                    ])
+                };
             out.push(head("── 复习小结 ──", theme::PRIMARY));
+            // 单行汇总（问题 4）：`已掌握：A，B`——状态词用语义色，内容默认色
             if !mastered.is_empty() {
-                out.push(head("✓ 已掌握", theme::SUCCESS));
-                for t in mastered {
-                    out.push(item(t));
-                }
+                out.push(summary_line("✓ 已掌握：", theme::SUCCESS, mastered));
             }
             if !consolidate.is_empty() {
-                out.push(head("△ 需巩固", theme::USER));
-                for t in consolidate {
-                    out.push(item(t));
-                }
+                out.push(summary_line("△ 需巩固：", theme::WARNING, consolidate));
             }
             if let Some(n) = next
                 && !n.trim().is_empty()

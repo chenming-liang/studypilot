@@ -451,7 +451,7 @@ pub async fn start_review(
         };
 
     // ④ 生成第 1 题（与后续题共用同一套生成逻辑；失败即整体失败）
-    let qtype = pick_qtype(n, 0, 0);
+    let qtype = pick_qtype(n, 0);
     let Some((mut q1, concept_name)) = generate_one(
         &store,
         &provider,
@@ -653,14 +653,12 @@ pub struct QuestionContext {
     pub aspect: Option<String>,
 }
 
-/// 题型分配：选择/简答各半（choice 向上取整），剩余多者优先，持平选选择。
-pub fn pick_qtype(planned: usize, done_choice: usize, done_short: usize) -> QType {
-    let choice_rem = planned.div_ceil(2).saturating_sub(done_choice);
-    let short_rem = (planned / 2).saturating_sub(done_short);
-    if choice_rem >= short_rem && choice_rem > 0 {
-        QType::Choice
-    } else {
+/// 题型分配：简答占 1/5（上取整），其余全选（问题 3：减少简答题量）。
+pub fn pick_qtype(planned: usize, done_short: usize) -> QType {
+    if done_short < planned.div_ceil(5) {
         QType::ShortAnswer
+    } else {
+        QType::Choice
     }
 }
 
@@ -1459,6 +1457,22 @@ mod warmup_tests {
 #[cfg(test)]
 mod quiz_parse_tests {
     use super::*;
+
+    /// 问题 3：简答只占 1/5（上取整），其余全选择。
+    #[test]
+    fn short_answer_ratio_is_one_fifth() {
+        // 5 题 → 简答 1 个（5/5 上取整=1）
+        assert_eq!(pick_qtype(5, 0), QType::ShortAnswer);
+        assert_eq!(pick_qtype(5, 1), QType::Choice, "简答满额后全选择");
+        // 6 题 → 简答 2 个（6/5 上取整=2）
+        assert_eq!(pick_qtype(6, 0), QType::ShortAnswer);
+        assert_eq!(pick_qtype(6, 1), QType::ShortAnswer);
+        assert_eq!(pick_qtype(6, 2), QType::Choice);
+        // 10 题 → 简答 2 个
+        assert_eq!(pick_qtype(10, 0), QType::ShortAnswer);
+        assert_eq!(pick_qtype(10, 1), QType::ShortAnswer);
+        assert_eq!(pick_qtype(10, 2), QType::Choice);
+    }
 
     #[test]
     fn normalize_converts_double_escaped_newline() {

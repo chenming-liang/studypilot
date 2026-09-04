@@ -426,7 +426,14 @@ impl App {
             .zip(rs.results.iter())
             .map(|(q, r)| {
                 let short = q.question.chars().take(60).collect::<String>();
-                (q.concept_id, short, r.correct, r.score, r.missing.clone())
+                (
+                    q.concept_id,
+                    q.concept_name.clone(),
+                    short,
+                    r.correct,
+                    r.score,
+                    r.missing.clone(),
+                )
             })
             .collect();
 
@@ -438,11 +445,13 @@ impl App {
                 .and_then(|r| r.ok())
                 .unwrap_or_default();
             let mut per_question = String::new();
-            for (i, (cid, q, ok, score, missing)) in rows.iter().enumerate() {
+            for (i, (cid, cname, q, ok, score, missing)) in rows.iter().enumerate() {
+                // 优先用 DB 概念名，其次用题面自报的概念名（问题 2：查不到时不得回显 "?"）
                 let cname = cid
                     .and_then(|id| names.get(&id))
                     .map(String::as_str)
-                    .unwrap_or("?");
+                    .or(cname.as_deref())
+                    .unwrap_or("（未标注概念）");
                 let mark = if *ok { "✓" } else { "✗" };
                 let score_txt = score.map(|s| format!("（{s}/100）")).unwrap_or_default();
                 per_question.push_str(&format!(
@@ -531,22 +540,24 @@ impl App {
         });
         // 小结建议分组着色（✓绿/△黄/→蓝），解析失败静默降级为 Markdown 块
         let parse = |line: &str| line.trim_start_matches("- ").to_owned();
+        let clean = |s: &str| {
+            let s = s.trim();
+            // 过滤解析失败留下的 "?"/占位（问题 2：概念名查不到时不应回显成 ?）
+            if s.is_empty() || s == "?" || s == "-" {
+                None
+            } else {
+                Some(parse(s))
+            }
+        };
+        // 分隔符容错：LLM 可能输出 `、`（中文顿号）或 `,`（ASCII 逗号）
+        let split_items =
+            |s: &str| -> Vec<String> { s.split(['、', ',']).filter_map(clean).collect() };
         let (mut mastered, mut consolidate, mut next) = (Vec::new(), Vec::new(), None);
         for line in text.lines() {
             if let Some(v) = line.strip_prefix("✓ 已掌握: ") {
-                mastered = v
-                    .split('、')
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(parse)
-                    .collect();
+                mastered = split_items(v);
             } else if let Some(v) = line.strip_prefix("△ 需巩固: ") {
-                consolidate = v
-                    .split('、')
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(parse)
-                    .collect();
+                consolidate = split_items(v);
             } else if let Some(v) = line.strip_prefix("→ 下一步: ") {
                 next = Some(v.to_owned());
             }
@@ -625,11 +636,6 @@ impl App {
             if rs.next_pending || rs.questions.len() >= rs.planned {
                 return;
             }
-            let done_choice = rs
-                .questions
-                .iter()
-                .filter(|q| q.q_type == QType::Choice)
-                .count();
             let done_short = rs
                 .questions
                 .iter()
@@ -684,7 +690,7 @@ impl App {
                 rs.planned,
                 rs.quiz_id,
                 std::sync::Arc::clone(&rs.ctx),
-                review::pick_qtype(rs.planned, done_choice, done_short),
+                review::pick_qtype(rs.planned, done_short),
                 same_round,
             )
         };
@@ -784,8 +790,15 @@ impl App {
     }
 }
 
-/// 单题结果快照：(concept_id, 题面摘要, 答对, 得分, 缺失要点)。
-type QuestionSnapshot = (Option<i64>, String, bool, Option<i64>, Vec<String>);
+/// 单题结果快照：(concept_id, 题面自带概念名, 题面摘要, 答对, 得分, 缺失要点)。
+type QuestionSnapshot = (
+    Option<i64>,
+    Option<String>,
+    String,
+    bool,
+    Option<i64>,
+    Vec<String>,
+);
 
 /// 复习小结 LLM 输出（掌握度总结 + 下一步建议）。
 #[derive(Debug, Deserialize)]
@@ -796,4 +809,34 @@ struct ReviewAdvice {
     consolidate: Vec<String>,
     #[serde(default)]
     next: Option<String>,
+}
+
+#[cfg(test)]
+mod review_advice_tests {
+    use super::*;
+
+    /// 问题 2：LLM 回显的 "?" / 空概念不应进入小结。
+    #[test]
+    fn advice_filters_question_mark_and_empty() {
+        let mut app = crate::app::commands::course_delete_tests::test_app();
+        app.on_review_advice(
+            "✓ 已掌握: 移动语义, ? , \n△ 需巩固: ?, 非词法生命周期, -\n→ 下一步: 先复习 NLL".into(),
+        );
+        let advice = app.entries.iter().rev().find_map(|e| match e {
+            Entry::Advice {
+                mastered,
+                consolidate,
+                next,
+            } => Some((mastered.clone(), consolidate.clone(), next.clone())),
+            _ => None,
+        });
+        let (mastered, consolidate, next) = advice.expect("应产生 Advice 条目");
+        assert_eq!(mastered, vec!["移动语义"], "? 和空项应被过滤: {mastered:?}");
+        assert_eq!(
+            consolidate,
+            vec!["非词法生命周期"],
+            "? 与 - 应被过滤: {consolidate:?}"
+        );
+        assert!(next.is_some(), "下一步建议保留");
+    }
 }
