@@ -1645,6 +1645,12 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
                     Style::new().fg(DIM),
                 ))));
             }
+            // 添加成功的明确信号：Test 全 ✓ 才走到 Done（已落盘 config.toml + auth.toml）
+            items.push(ListItem::new(Line::default()));
+            items.push(ListItem::new(Line::from(Span::styled(
+                "  ✓ 已保存（config.toml + auth.toml）",
+                Style::new().fg(theme::SUCCESS).add_modifier(Modifier::BOLD),
+            ))));
             (
                 "AI Setup · Ready".to_owned(),
                 "Enter → Start Learning".into(),
