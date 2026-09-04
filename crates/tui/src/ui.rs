@@ -1548,24 +1548,33 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
                 "Test connection",
                 Style::new().fg(DIM),
             ))));
-            let provider = s.provider.as_deref().unwrap_or("-");
-            let model = s
-                .model
-                .as_deref()
-                .or(if s.provider.as_deref() == Some("custom") {
-                    Some(s.custom_model.as_str())
-                } else {
-                    None
-                })
-                .unwrap_or("-");
+            // Provider 显示用户输入名（custom 不再显示内部 id "custom"）
+            let provider = if s.provider.as_deref() == Some("custom") {
+                s.custom_display_name()
+            } else {
+                s.provider.clone().unwrap_or_else(|| "-".into())
+            };
             items.push(ListItem::new(Line::from(Span::styled(
                 format!("  Provider: {provider}"),
                 Style::new().fg(Color::Gray),
             ))));
-            items.push(ListItem::new(Line::from(Span::styled(
-                format!("  Model: {model}"),
-                Style::new().fg(Color::Gray),
-            ))));
+            // 模型逐行显示（custom 多模型逗号拆分）
+            let models: Vec<String> = if s.provider.as_deref() == Some("custom") {
+                let list = s.custom_model_list();
+                if list.is_empty() {
+                    vec![s.model.clone().unwrap_or_else(|| "-".into())]
+                } else {
+                    list
+                }
+            } else {
+                vec![s.model.clone().unwrap_or_else(|| "-".into())]
+            };
+            for m in models {
+                items.push(ListItem::new(Line::from(Span::styled(
+                    format!("  Model: {m}"),
+                    Style::new().fg(Color::Gray),
+                ))));
+            }
             items.push(ListItem::new(Line::default()));
             if s.testing {
                 items.push(ListItem::new(Line::from(Span::styled(
@@ -1593,12 +1602,24 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
                 "You're ready.",
                 Style::new().fg(theme::SUCCESS).add_modifier(Modifier::BOLD),
             ))));
+            // 显示用户输入的 provider 名（custom 显示 custom_name 而非 "custom"）
+            let provider = if s.provider.as_deref() == Some("custom") {
+                s.custom_display_name()
+            } else {
+                s.provider.clone().unwrap_or_else(|| "-".into())
+            };
+            let model = if s.provider.as_deref() == Some("custom") {
+                let list = s.custom_model_list();
+                if list.is_empty() {
+                    s.model.clone().unwrap_or_else(|| "-".into())
+                } else {
+                    list.join("、")
+                }
+            } else {
+                s.model.clone().unwrap_or_else(|| "-".into())
+            };
             items.push(ListItem::new(Line::from(Span::styled(
-                format!(
-                    "  Provider: {} · Model: {}",
-                    s.provider.as_deref().unwrap_or("-"),
-                    s.model.as_deref().unwrap_or("-")
-                ),
+                format!("  Provider: {provider} · Model: {model}"),
                 Style::new().fg(DIM),
             ))));
             (

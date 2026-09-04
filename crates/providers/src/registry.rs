@@ -161,6 +161,37 @@ pub fn custom_provider(name: &str, endpoint: &str, model: &str) -> ProviderConfi
     cfg
 }
 
+/// 构造自定义 provider 的多模型配置（Setup 的 Custom 输入逗号分隔多个 model）。
+/// 第一个 model 为当前活动模型；pricing 未知。
+pub fn custom_provider_multi(name: &str, endpoint: &str, models: &[&str]) -> ProviderConfig {
+    let models: Vec<crate::config::ModelConfig> = models
+        .iter()
+        .map(|m| crate::config::ModelConfig {
+            id: m.to_string(),
+            name: None,
+            price_prompt: None,
+            price_completion: None,
+            price_prompt_cached: None,
+            context_length: 8192,
+            thinking: false,
+        })
+        .collect();
+    let model = models.first().map(|m| m.id.clone()).unwrap_or_default();
+    ProviderConfig {
+        name: name.to_string(),
+        endpoint: endpoint.to_string(),
+        api_key: None,
+        api_key_env: None,
+        model,
+        models,
+        price_prompt: None,
+        price_completion: None,
+        price_prompt_cached: None,
+        context_length: 8192,
+        thinking: false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

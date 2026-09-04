@@ -9,5 +9,6 @@ pub use client::{OpenAiClient, parse_response, with_cancel};
 pub use config::{AuthConfig, Config, ModelConfig, ProviderAuth, ProviderConfig};
 pub use cost::estimate_cost;
 pub use registry::{
-    ModelPreset, PRESETS, ProviderPreset, custom_provider, preset, provider_from_preset,
+    ModelPreset, PRESETS, ProviderPreset, custom_provider, custom_provider_multi, preset,
+    provider_from_preset,
 };

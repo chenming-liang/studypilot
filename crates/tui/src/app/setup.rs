@@ -72,7 +72,31 @@ impl Default for SetupState {
     }
 }
 
+/// Custom 模型输入按逗号拆分并 trim 空白（`A, B,C` → ["A","B","C"]；空项丢弃）。
+pub(crate) fn split_custom_models(input: &str) -> Vec<String> {
+    input
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 impl SetupState {
+    /// Custom provider 的用户可见名称（内部 id "custom" 不作为显示名）。
+    pub(crate) fn custom_display_name(&self) -> String {
+        if self.custom_name.trim().is_empty() {
+            "custom".to_string()
+        } else {
+            self.custom_name.trim().to_string()
+        }
+    }
+
+    /// Custom provider 的模型列表（逗号拆分后 trim；空则返回空列表）。
+    pub(crate) fn custom_model_list(&self) -> Vec<String> {
+        split_custom_models(&self.custom_model)
+    }
+
     /// Provider 列表（registry 展示名 + Custom）。
     pub(crate) fn provider_options(&self) -> Vec<(&'static str, &'static str)> {
         let mut v: Vec<_> = agent_providers::PRESETS
@@ -446,23 +470,24 @@ impl App {
         let selected_models = s.selected_models.clone();
         match s.provider.as_deref() {
             Some("custom") => {
-                let mut cfg = agent_providers::custom_provider(
-                    if s.custom_name.is_empty() {
-                        "custom"
-                    } else {
-                        &s.custom_name
-                    },
-                    if s.custom_base_url.is_empty() {
-                        "https://api.openai.com/v1"
-                    } else {
-                        &s.custom_base_url
-                    },
-                    if s.custom_model.is_empty() {
-                        s.model.as_deref().unwrap_or("")
-                    } else {
-                        &s.custom_model
-                    },
-                );
+                let name = s.custom_display_name();
+                let endpoint = if s.custom_base_url.trim().is_empty() {
+                    "https://api.openai.com/v1".to_string()
+                } else {
+                    s.custom_base_url.trim().to_string()
+                };
+                let models = s.custom_model_list();
+                let models_refs: Vec<&str> = models.iter().map(String::as_str).collect();
+                // 逗号分隔的多个 model → 多个独立 ModelConfig（文档 §二：一个 key 多个 model）
+                let mut cfg = if models_refs.is_empty() {
+                    agent_providers::custom_provider(
+                        &name,
+                        &endpoint,
+                        s.model.as_deref().unwrap_or(""),
+                    )
+                } else {
+                    agent_providers::custom_provider_multi(&name, &endpoint, &models_refs)
+                };
                 cfg.api_key = Some(s.api_key.clone());
                 cfg
             }
@@ -705,6 +730,111 @@ mod tests {
         assert_eq!(cfg.endpoint, "http://localhost:8000/v1");
         assert_eq!(cfg.model, "model-x");
         assert_eq!(cfg.api_key.as_deref(), Some("sk-custom"));
+    }
+
+    /// 问题 1：用户输入的 Custom provider 名（如 paratera）必须保留，不能回退为 "custom"。
+    #[test]
+    fn custom_provider_name_paratera_is_preserved() {
+        let mut app = test_app();
+        app.start_setup();
+        {
+            let s = app.setup.as_mut().unwrap();
+            s.provider = Some("custom".into());
+            s.custom_name = "paratera".into();
+            s.custom_base_url = "https://api.paratera.cn/v1".into();
+            s.custom_model = "Qwen3.7-Plus, Deepseek-V4-Flash-0731, GLM-5.3-Flash".into();
+            s.api_key = "sk-paratera".into();
+        }
+        let cfg = app.build_pending_config();
+        assert_eq!(cfg.name, "paratera", "provider 名必须为用户输入值");
+        assert_eq!(cfg.endpoint, "https://api.paratera.cn/v1");
+        assert!(!cfg.name.contains("custom"), "不得残留内部 id");
+        // Test Connection 用的 cfg：name=paratera、model=第一个实际模型
+        assert_eq!(cfg.model, "Qwen3.7-Plus", "活动模型应为第一个");
+        assert_eq!(cfg.api_key.as_deref(), Some("sk-paratera"));
+    }
+
+    /// 问题 2：逗号分隔的多个模型 → 拆成独立 ModelConfig（trim 空白），而非含逗号单串。
+    #[test]
+    fn custom_provider_multi_models_split_and_trim() {
+        let mut app = test_app();
+        app.start_setup();
+        let raw_model = {
+            let s = app.setup.as_mut().unwrap();
+            s.provider = Some("custom".into());
+            s.custom_name = "paratera".into();
+            s.custom_base_url = "https://api.paratera.cn/v1".into();
+            s.custom_model = " Qwen3.7-Plus ,Deepseek-V4-Flash-0731,  GLM-5.3-Flash ,".into();
+            s.api_key = "sk-paratera".into();
+            s.custom_model.clone()
+        };
+        let list = split_custom_models(&raw_model);
+        assert_eq!(
+            list,
+            vec!["Qwen3.7-Plus", "Deepseek-V4-Flash-0731", "GLM-5.3-Flash"],
+            "逗号拆分 + trim + 空项丢弃"
+        );
+        let cfg = app.build_pending_config();
+        assert_eq!(cfg.models.len(), 3, "保存 3 个独立 models");
+        let ids: Vec<&str> = cfg.models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["Qwen3.7-Plus", "Deepseek-V4-Flash-0731", "GLM-5.3-Flash"],
+            "每个 model id 独立且已 trim"
+        );
+        assert_eq!(cfg.model, "Qwen3.7-Plus", "活动模型 = 第一个");
+        assert_eq!(
+            cfg.models.iter().filter(|m| m.id.contains(',')).count(),
+            0,
+            "不得有含逗号的 model id"
+        );
+    }
+
+    /// 问题 3 配置落盘回归：config.toml 写入后重读，name 与 models 保持。
+    /// （模拟 on_setup_test_done 的 persist 结构；api_key 剥离到 auth.toml 不落 config）
+    #[test]
+    fn custom_config_persist_and_reload_keeps_name_and_models() {
+        let mut app = test_app();
+        app.start_setup();
+        {
+            let s = app.setup.as_mut().unwrap();
+            s.provider = Some("custom".into());
+            s.custom_name = "paratera".into();
+            s.custom_base_url = "https://api.paratera.cn/v1".into();
+            s.custom_model = "Qwen3.7-Plus, Deepseek-V4-Flash-0731, GLM-5.3-Flash".into();
+            s.api_key = "sk-paratera".into();
+        }
+        let cfg = app.build_pending_config();
+        let name = cfg.name.clone();
+        let persist = agent_providers::Config {
+            default_provider: name.clone(),
+            default_model: format!("{}/{}", name, cfg.model),
+            max_cost: app.max_cost,
+            providers: vec![cfg.clone()],
+        };
+        let ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!("sp-setup-custom-{ns}.toml"));
+        persist.save(&path).unwrap();
+        let reloaded = agent_providers::Config::load(&path).unwrap();
+        assert_eq!(reloaded.default_provider, "paratera");
+        let p = reloaded.default_provider().unwrap();
+        assert_eq!(p.name, "paratera", "重读后 provider 名仍为 paratera");
+        assert_eq!(p.models.len(), 3);
+        let ids: Vec<&str> = p.models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["Qwen3.7-Plus", "Deepseek-V4-Flash-0731", "GLM-5.3-Flash"]
+        );
+        assert_eq!(p.model, "Qwen3.7-Plus");
+        // canonical id：provider/model
+        assert_eq!(
+            reloaded.resolve_default_model().unwrap(),
+            "paratera/Qwen3.7-Plus"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 
     /// Esc 逐级回退 Custom 输入步。
