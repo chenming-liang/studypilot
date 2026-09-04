@@ -1,155 +1,104 @@
 # StudyPilot
 
-**本地优先的 AI 学习助手**——导入课程资料、基于笔记问答、主动出题复习，帮你在终端里把一门课真正学明白。
+**本地优先的 AI 学习助手**——导入课程资料、基于笔记问答、自动出题复习，帮你在终端里把一门课真正学明白。
 
-一个 TUI 应用，支持 **14 家 LLM Provider**，数据全部保存在本地。
-
----
-
-## 为什么用 StudyPilot
-
-- **不搬运笔记，讲给你听**：基于你自己的课程笔记做问答，AI 像老师一样重新讲解，关键事实标注 `[1]` 引用来源；笔记没覆盖的部分明确标注「（笔记外补充）」
-- **学了会忘？让它考你**：根据笔记自动出题（选择题 + 简答题），逐题作答、即时批改，掌握薄弱的概念自动优先再考
-- **知识有结构**：自动把散落的概念组织成「章节 → 概念」的复习地图，一眼看到哪些已掌握（✓）、哪些需巩固（△）、哪些还没碰（○）
-- **本地优先**：笔记、会话、掌握度都存在本地 SQLite；API key 与配置分离，可放心提交代码
-- **能用你已有的模型**：DeepSeek、Qwen、GLM、Kimi、MiniMax、Doubao、Hunyuan、ERNIE、OpenAI、Anthropic、Gemini、Grok、OpenRouter、Ollama 及任意 OpenAI-compatible 服务
+一个终端应用，支持 **14 家 AI 服务商**，你的所有笔记和进度都存在本地。
 
 ---
 
-## 快速开始
+## 它能做什么
 
-### 1. 安装
+- **问它问题，它基于你的笔记回答**——像老师一样讲给你听，关键点标注来源；笔记里没有的会明确告诉你「这是笔记外的补充」
+- **学完自动考你**——根据笔记出题（选择 + 简答），做完即时批改，总做错的概念下次优先考
+- **知识结构一目了然**——自动把笔记整理成「章节 → 知识点」地图，标记已掌握 / 需巩固 / 没学过
+- **本地保存**——笔记、对话、学习进度都在自己电脑上，API Key 单独存放、不会写进代码
 
-下载最新 release 即可，无需安装 Rust：
+---
 
-| 平台 | 下载 |
+## 下载
+
+到本项目的 Releases 页面下载最新版本：
+
+| 你的系统 | 下载哪个 |
 |---|---|
-| Windows x64 | `StudyPilot-windows-x64.zip`（解压双击 `studypilot.exe`） |
-| Linux x64 | `StudyPilot-linux-x64.tar.gz`（解压运行 `./studypilot`） |
+| Windows | `StudyPilot-windows-x64.zip` |
+| Linux | `StudyPilot-linux-x64.tar.gz` |
 
-### 2. 首次启动
-
-第一次打开会自动进入 **AI Setup**，跟着向导走：
-
-1. 选择 Provider（如 DeepSeek）
-2. 选择 Model
-3. 输入 API Key
-4. Test Connection → Ready
-
-> 之后随时按 `Ctrl+K` 重新配置，或输入 `/test` 测试连接。
-
-### 3. 导入资料并开始学习
-
-```
-/import ~/我的课程资料 --course 数据库原理    ← 导入 md/pdf/pptx，自动归类、提取概念
-/course 数据库原理                          ← 进入课程
-> 什么是 B+ 树索引？                         ← 直接提问，AI 基于笔记回答
-/outline                                    ← 生成复习地图
-/review                                     ← 出题复习
-```
+不需要安装任何编程环境。
 
 ---
 
-## 功能一览
+## 安装
 
-### 导入（把资料变成知识库）
+### Windows
 
-- 批量导入 **md / pdf / pptx**，按目录或文件路径均可
-- 自动提取概念、按章节拆分为检索单元，重复导入自动去重
-- 进度可实时查看，`Ctrl+C` 中断
+1. 解压下载的 zip 文件
+2. 双击里面的 `studypilot.exe` 即可运行
 
-### 学习（理解知识）
+### Linux
 
-- **RAG 问答**：AI 检索你的笔记后回答，自动判断要不要查、查几次
-- **引用标注**：关键事实后带 `[1]`，对应来源笔记；笔记外的补充明确标注
-- **课程大纲**：一键生成「章节 → 概念」结构，可导出 Markdown
-
-### 复习（巩固知识）
-
-- **自动出题**：选择题（本地判分）+ 简答题（AI 批改打分）
-- **复习地图**：Course → Section → Concept 三层，按掌握度着色
-- **闪卡暖场**：正式复习前先过一遍 recall 卡片，自评哪里不熟再重点考
-- **掌握度追踪**：每道题记入学习历史，薄弱概念自动优先
-
-### 模型管理
-
-- **14 家 Provider** 预设 + 自定义 OpenAI-compatible（任意 Base URL / Model）
-- **Model Role**：把不同任务分配到不同模型——便宜快的跑导入/出题，强的跑批改/推理，日常问答用均衡模型
-- **角色配置**：`/model` 面板里给 fast / balanced / reasoning 各选一个模型，未配置的角色自动用当前模型
+1. 解压：`tar -xzf StudyPilot-linux-x64.tar.gz`
+2. 运行：`./studypilot`
 
 ---
 
-## 命令参考
+## 第一次使用
 
-| 命令 | 说明 |
+打开后会自动弹出 **AI 配置向导**，按提示做就行：
+
+1. **选择服务商**（DeepSeek、GLM、OpenAI……选你有的）
+2. **选择模型**
+3. **填 API Key**（在服务商官网申请）
+4. **测试连接** → 通过后进入主界面
+
+> 之后想换模型或改配置：按 `Ctrl+K` 打开命令面板，选「Model」即可。
+
+---
+
+## 怎么开始学习
+
+```
+1. 导入资料
+   输入：/import 你的资料文件夹路径 --course 课程名
+   （支持 md / pdf / pptx，导入后自动整理）
+
+2. 进入课程
+   输入：/course 课程名
+
+3. 提问
+   直接打字提问，例如：什么是所有权？
+
+4. 出题复习
+   输入：/review
+```
+
+### 常用命令
+
+| 你想做什么 | 输入 |
 |---|---|
-| `/course` | 列出 / 切换课程 |
-| `/course -new <名>` | 新建课程 |
-| `/course -delete <名>` | 删除课程 |
-| `/import <路径> [--course <名>]` | 导入资料（md/pdf/pptx，文件或目录） |
-| `/notes` | 浏览当前课程笔记（可搜索、多选、移动/删除） |
-| `/outline [--export]` | 生成课程复习地图 / 导出 Markdown |
-| `/review-map` | 打开复习地图选择器 |
-| `/review [概念] [--n N]` | 出题复习（默认 5 题） |
-| `/refresh-concepts` | 重新抽取课程概念 |
-| `/model` | 切换模型 / 配置角色 |
-| `/test` | 测试当前 Provider 连接 |
-| `/new` | 开启新会话 |
-| `/sessions` | 历史会话 |
-| `/open <id>` | 恢复会话 |
-| `/rename <标题>` | 重命名当前会话 |
-| `/export` · `/load <文件>` | 导出 / 加载会话 |
-| `/budget [金额] [reset]` | 查看 / 设置预算上限 / 清零累计花费 |
-| `/help` | 帮助 |
-
-快捷键：`Ctrl+K` 命令面板 · `Ctrl+C` 中断 · `Esc` 退出/返回 · `v` 拖选复制 · `PageUp/Down` 滚动
+| 导入资料 | `/import 路径 --course 课程名` |
+| 切换到某门课 | `/course 课程名` |
+| 提问 | 直接输入问题 |
+| 出题复习 | `/review` |
+| 看复习地图 | `/review-map` |
+| 切换模型 | `/model` |
+| 查看/设置费用上限 | `/budget` |
+| 查看所有命令 | `/help` |
 
 ---
 
-## 配置
+## 常见问题
 
-配置文件在 `~/.studypilot/`（首次启动自动创建）：
+**要装 Rust 吗？** 不用。下载解压就能用。
 
-- `config.toml` — Provider / Model 列表与默认模型
-- `auth.toml` — API Key（权限 0600，与代码配置分离）
+**API Key 安全吗？** 存在 `~/.studypilot/auth.toml`，和代码分开，不会提交到任何仓库。
 
-开发者也可以把 `config.toml` 放在仓库根目录（已被 .gitignore 忽略，不会提交）。
+**支持哪些 AI 服务商？** DeepSeek、通义千问、智谱 GLM、Kimi、MiniMax、豆包、混元、文心一言、OpenAI、Claude、Gemini、Grok、OpenRouter、Ollama，以及其他任何兼容 OpenAI 接口的服务。
 
----
-
-## 架构
-
-```
-crates/
-├── core/         Agent Loop、工具与 Provider 抽象
-├── providers/    LLM 客户端（14 家 Provider + 统一 OpenAI-compatible 协议）
-├── storage/      SQLite + FTS5 全文检索（jieba 中文分词）
-├── importer/     导入流水线（md/pdf/pptx 解析 → 概念抽取 → 入库）
-├── tools/        检索工具（search_notes / list_courses）
-└── tui/          ratatui 终端界面
-```
-
-技术细节与设计决策见 [docs/核心代码逻辑.md](docs/核心代码逻辑.md)。
+**资料放哪里？** 放哪都行，导入时告诉它路径。笔记不会从你原来的位置删掉。
 
 ---
-
-## 开发
-
-```bash
-# 依赖
-rustup default stable
-pip install pymupdf            # PDF 提取
-sudo apt install xclip         # 剪贴板（可选，拖选复制用）
-
-# 构建 & 运行
-cargo build --release
-cargo run --release -p tui
-
-# 测试 & 检查
-cargo test
-cargo clippy --all-targets --all-features -- -D warnings
-```
 
 ## License
 
-[MIT](LICENSE)
+MIT
