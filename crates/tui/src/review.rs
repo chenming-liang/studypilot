@@ -183,46 +183,6 @@ impl WarmupState {
         }
         out
     }
-
-    /// 正式 Review 的概念范围（问题 16）：
-    /// - 有 focus（△/○）：全部带入；再随机补一些已掌握（✓）概念，focus:✓ 比例 ≈ 2:1
-    ///   （下限保证至少带 1 个已掌握，上限最多等于 focus 数，避免全是不懂的概念）
-    /// - 全部 ✓：从已掌握概念里抽取（上限 n 个），保证即使全过也会继续提问
-    ///
-    /// 返回「概念名」列表（空 = 无任何概念，调用方回退原始 scope）。
-    pub fn review_scope(&self) -> Vec<String> {
-        let mut focus: Vec<String> = Vec::new();
-        let mut mastered: Vec<String> = Vec::new();
-        for (card, rating) in self.cards.iter().zip(self.ratings.iter()) {
-            let Some(c) = &card.concept else { continue };
-            let name = c.clone();
-            match rating {
-                Some(WarmupRating::Shaky | WarmupRating::DontKnow) if !focus.contains(&name) => {
-                    focus.push(name)
-                }
-                Some(WarmupRating::GotIt) if !mastered.contains(&name) => mastered.push(name),
-                _ => {}
-            }
-        }
-        // 伪随机但稳定：从可抽样集合里取前 k 个（复习会话内一致，不依赖外部 RNG）
-        let take =
-            |list: &[String], k: usize| -> Vec<String> { list.iter().take(k).cloned().collect() };
-        if focus.is_empty() {
-            // 全 ✓：抽取已掌握概念（≤ n），空则回退空（由调用方用原始 scope）
-            let k = self.n.max(1).min(mastered.len());
-            return take(&mastered, k);
-        }
-        // 有 focus：全带 + 补 ✓（比例 ≈ 2:1，至少 1 个、至多 focus 数）
-        let mut out = focus.clone();
-        let k = focus.len().div_ceil(2);
-        let k = k.max(1).min(mastered.len());
-        for m in take(&mastered, k) {
-            if !out.contains(&m) {
-                out.push(m);
-            }
-        }
-        out
-    }
 }
 
 /// 一轮追问（问，答）。answer 为 None 表示回答生成中（workspace 显示思考行）；
@@ -1436,50 +1396,6 @@ mod warmup_tests {
         assert!(w.all_rated());
         w.ratings[1] = None;
         assert!(!w.all_rated(), "未评完不算");
-    }
-
-    /// 问题 16：有 focus 时全带 △/○ + 补 ✓（比例 2:1）；全 ✓ 也抽取概念（≤n）。
-    #[test]
-    fn review_scope_prioritizes_focus_and_mixes_mastered() {
-        // 有 focus：△ 借用 + ○ 生命周期 全带，再补 ✓ 所有权（2:1 → 1 个）
-        let w = state_with(&[
-            (Some(WarmupRating::GotIt), "所有权"),
-            (Some(WarmupRating::Shaky), "借用"),
-            (Some(WarmupRating::DontKnow), "生命周期"),
-            (Some(WarmupRating::GotIt), "移动语义"),
-        ]);
-        let scope = w.review_scope();
-        assert!(scope.contains(&"借用".to_string()), "focus 必须全带");
-        assert!(scope.contains(&"生命周期".to_string()), "focus 必须全带");
-        assert!(scope.len() >= 3, "focus + 至少补 1 个 ✓: {scope:?}");
-        assert!(
-            scope
-                .iter()
-                .filter(|c| **c == "所有权" || **c == "移动语义")
-                .count()
-                >= 1,
-            "应补 ✓ 概念: {scope:?}"
-        );
-    }
-
-    #[test]
-    fn review_scope_all_mastered_still_sampled() {
-        // 全 ✓：也应抽取概念（≤ n），保证全过后继续提问
-        let w = state_with(&[
-            (Some(WarmupRating::GotIt), "所有权"),
-            (Some(WarmupRating::GotIt), "借用"),
-            (Some(WarmupRating::GotIt), "生命周期"),
-        ]);
-        let scope = w.review_scope();
-        assert!(!scope.is_empty(), "全过也应抽概念提问");
-        assert!(scope.len() <= w.n, "抽取上限 = n（5）");
-    }
-
-    #[test]
-    fn review_scope_all_unrated_falls_back_empty() {
-        // 一张都未评（s 键跳过）：review_scope 空 → 调用方回退原始 scope
-        let w = state_with(&[(None, "所有权"), (None, "借用")]);
-        assert!(w.review_scope().is_empty(), "未评不应产生 scope");
     }
 }
 

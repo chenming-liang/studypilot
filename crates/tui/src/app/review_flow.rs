@@ -97,16 +97,17 @@ impl App {
     pub(crate) fn finish_warmup(&mut self) {
         let Some(w) = self.warmup.take() else { return };
         let focus = w.focus_concepts();
-        let scoped = w.review_scope();
-        let scope: Option<String> = if scoped.is_empty() {
-            // 无任何概念名：回退原始范围正常复习（问题 16：全过也提问）
+        // 只把「需巩固」（△/○）的概念传给正式复习优先出题；
+        // 全部 ✓（无 focus）→ 回退用户原始范围（整节/课程），让正式复习在
+        // 大范围内出题——避免"闪卡全对后正式复习锁死在同一个知识点"。
+        let scope: Option<String> = if focus.is_empty() {
             Some(w.scope_text.clone())
         } else {
-            Some(scoped.join("、"))
+            Some(focus.join("、"))
         };
         let mut focus_msg = String::from("Warm-up complete\n\nFocus:");
         if focus.is_empty() {
-            focus_msg.push_str(" 全部 ✓ 通过");
+            focus_msg.push_str(" 全部 ✓ 通过（正式复习将覆盖原始范围）");
         } else {
             for c in &focus {
                 focus_msg.push_str(&format!("\n△ {c}"));
