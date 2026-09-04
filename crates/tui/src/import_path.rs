@@ -93,6 +93,7 @@ fn dir_has_supported_files(dir: &Path) -> bool {
 
 /// 统一的导入路径解析：
 /// - trim + 剥用户输入引号
+/// - `~`（前缀）→ `$HOME` 展开（用户习惯的绝对路径写法）
 /// - `PathBuf::from`；绝对路径原样使用，相对路径相对 current_dir() 解析
 /// - 校验：存在 → 文件/目录 → 支持类型/空目录
 ///
@@ -102,7 +103,21 @@ pub(crate) fn resolve_import_path(input: &str) -> Result<ImportTarget, ImportPat
     if trimmed.is_empty() {
         return Err(ImportPathError::NotFound(PathBuf::new()));
     }
-    let raw = PathBuf::from(trimmed);
+    // `~` 前缀展开为 HOME（仅裸 `~` 或 `~/...`；普通相对名/绝对路径不受影响）
+    let expanded = if trimmed == "~" {
+        match std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            Some(h) => PathBuf::from(h),
+            None => PathBuf::from(trimmed),
+        }
+    } else if let Some(rest) = trimmed.strip_prefix("~/").or_else(|| trimmed.strip_prefix("~\\")) {
+        match std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+            Some(h) => PathBuf::from(h).join(rest),
+            None => PathBuf::from(trimmed),
+        }
+    } else {
+        PathBuf::from(trimmed)
+    };
+    let raw = expanded;
     let path = if raw.is_absolute() {
         raw
     } else {
@@ -286,6 +301,27 @@ mod tests {
             resolve_import_path("  "),
             Err(ImportPathError::NotFound(_))
         ));
+    }
+
+    /// `~` 前缀展开为 HOME（用户常见的绝对路径写法；旧 bug：被当相对路径拼 cwd）。
+    #[test]
+    fn tilde_prefix_expands_to_home() {
+        static HOME_LOCK: Mutex<()> = Mutex::new(());
+        let _g = HOME_LOCK.lock().unwrap();
+        let root = tmp_root("tilde");
+        let orig = std::env::var_os("HOME");
+        unsafe {
+            std::env::set_var("HOME", &root);
+        }
+        let t = resolve_import_path("~/materials").unwrap();
+        assert_eq!(t.path, root.join("materials"), "~/x 应展开为 $HOME/x");
+        let t2 = resolve_import_path("~").unwrap();
+        assert_eq!(t2.path, root, "裸 ~ 应展开为 $HOME");
+        match orig {
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+        cleanup(&root);
     }
 
     /// 真实绝对路径（用户语料 ~/rust/test-agent）：验证跨 HOME 的绝对目录导入。

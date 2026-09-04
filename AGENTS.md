@@ -93,7 +93,7 @@ cargo test --workspace
 - Home/Course/Session 是纯 UI state 不入 session history；启动一律进 Home
 - **all 不是 Course，是 Global scope**：Switch Course picker/侧栏只列真实课程、header/Ask/Continue 显示 `Global` 而非 `all`、`/review` `/new` 在 Global 下拒绝引导选课；backend（`/course all` CLI、course_id=NULL、Global 分区）保留
 - **Tool Trace 持久化**：messages 表已存 assistant tool_calls + tool 结果（DB 是长期事实源），`history_to_entries` 恢复时重建紧凑 `✓ search_notes → 3 条`（同一 renderer、不重执行、不存 raw result、不渲染 CoT）
-- **Import 路径统一 resolver（import_path.rs）**：`resolve_import_path` 统一处理绝对/相对路径（相对 cwd、canonicalize 归一化）、单文件与目录、存在性/类型/空目录前置校验；CLI `/import <path>` 与 `/import --dir <path>`、Wizard、Palette、Course 页全部走同一 resolver + `run_import(ImportTarget)`；不依赖 project root，不动 importer 核心
+- **Import 路径统一 resolver（import_path.rs）**：`resolve_import_path` 统一处理绝对/相对路径（`~` 前缀展开 `$HOME`、相对 cwd、canonicalize 归一化）、单文件与目录、存在性/类型/空目录前置校验；CLI `/import <path>` 与 `/import --dir <path>`、Wizard、Palette、Course 页全部走同一 resolver + `run_import(ImportTarget)`；不依赖 project root，不动 importer 核心
 - 会话标题无意义时 fallback `Recent conversation`；`SessionMeta.created_at` 供 Last studied；/sessions 默认当前课；/rename context-aware（Course→课、Session→会话）；all 降格为跨课检索范围
 
 **待办**：
