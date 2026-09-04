@@ -1501,6 +1501,26 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
                 "↑↓ move · Space toggle · Enter done · Esc back".into(),
             )
         }
+        SetupStep::CustomName | SetupStep::CustomBaseUrl | SetupStep::CustomModel => {
+            let (label, title) = match s.step {
+                SetupStep::CustomName => ("Provider Name", "AI Setup · Custom · Name"),
+                SetupStep::CustomBaseUrl => ("Base URL", "AI Setup · Custom · Base URL"),
+                SetupStep::CustomModel => ("Model ID", "AI Setup · Custom · Model"),
+                _ => unreachable!(),
+            };
+            items.push(ListItem::new(Line::from(Span::styled(
+                label,
+                Style::new().fg(DIM),
+            ))));
+            items.push(ListItem::new(Line::from(Span::styled(
+                format!("  {}▍", s.custom_buf),
+                Style::new().fg(Color::Gray),
+            ))));
+            (
+                title.to_owned(),
+                "type value · Enter continue · Esc back".into(),
+            )
+        }
         SetupStep::Credentials => {
             items.push(ListItem::new(Line::from(Span::styled(
                 "API Key",
@@ -1529,7 +1549,15 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
                 Style::new().fg(DIM),
             ))));
             let provider = s.provider.as_deref().unwrap_or("-");
-            let model = s.model.as_deref().unwrap_or("-");
+            let model = s
+                .model
+                .as_deref()
+                .or(if s.provider.as_deref() == Some("custom") {
+                    Some(s.custom_model.as_str())
+                } else {
+                    None
+                })
+                .unwrap_or("-");
             items.push(ListItem::new(Line::from(Span::styled(
                 format!("  Provider: {provider}"),
                 Style::new().fg(Color::Gray),

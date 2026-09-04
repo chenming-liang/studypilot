@@ -14,6 +14,10 @@ use std::sync::Arc;
 pub(crate) enum SetupStep {
     Provider,
     Model,
+    /// Custom provider 输入（name/base_url/model 三步，普通文本非遮罩）
+    CustomName,
+    CustomBaseUrl,
+    CustomModel,
     Credentials,
     Test,
     Done,
@@ -35,6 +39,8 @@ pub(crate) struct SetupState {
     pub(crate) custom_name: String,
     pub(crate) custom_base_url: String,
     pub(crate) custom_model: String,
+    /// Custom 输入缓冲（普通文本；逐字段确认后写入对应字段）
+    pub(crate) custom_buf: String,
     /// API key（遮罩显示）
     pub(crate) api_key: String,
     /// 测试进行中 / 最近测试结果文本 / 是否已通过
@@ -56,6 +62,7 @@ impl Default for SetupState {
             custom_name: String::new(),
             custom_base_url: String::new(),
             custom_model: String::new(),
+            custom_buf: String::new(),
             api_key: String::new(),
             testing: false,
             test_result: None,
@@ -100,6 +107,9 @@ impl App {
         s.step = match s.step {
             SetupStep::Provider => SetupStep::Model,
             SetupStep::Model => SetupStep::Credentials,
+            SetupStep::CustomName => SetupStep::CustomBaseUrl,
+            SetupStep::CustomBaseUrl => SetupStep::CustomModel,
+            SetupStep::CustomModel => SetupStep::Credentials,
             SetupStep::Credentials => {
                 // 新 key 已提交：进入 Test，强制重测
                 s.test_passed = false;
@@ -119,10 +129,17 @@ impl App {
                 return;
             }
             SetupStep::Model => SetupStep::Provider,
+            SetupStep::CustomName => SetupStep::Provider,
+            SetupStep::CustomBaseUrl => SetupStep::CustomName,
+            SetupStep::CustomModel => SetupStep::CustomBaseUrl,
             SetupStep::Credentials => {
-                // 回到 Model：清空输入缓冲，避免带回旧 key
+                // 回到 Model/CustomModel：清空输入缓冲，避免带回旧 key
                 s.secret_buf.clear();
-                SetupStep::Model
+                if s.provider.as_deref() == Some("custom") {
+                    SetupStep::CustomModel
+                } else {
+                    SetupStep::Model
+                }
             }
             SetupStep::Test => {
                 // 回 Credentials：保留旧 key（渲染提示），新输入直接替换；标记重测
@@ -205,6 +222,59 @@ impl App {
                     }
                     KeyCode::Esc => {
                         self.setup_back();
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            SetupStep::CustomName | SetupStep::CustomBaseUrl | SetupStep::CustomModel => {
+                // 普通文本输入（name/base_url/model；Enter 确认写入字段并进下一步）
+                match key.code {
+                    KeyCode::Esc => {
+                        self.setup_back();
+                        true
+                    }
+                    KeyCode::Backspace => {
+                        if let Some(s) = &mut self.setup {
+                            s.custom_buf.pop();
+                        }
+                        true
+                    }
+                    KeyCode::Delete => {
+                        if let Some(s) = &mut self.setup {
+                            s.custom_buf.clear();
+                        }
+                        true
+                    }
+                    KeyCode::Enter => {
+                        let (value, next) = {
+                            let s = self.setup.as_mut().unwrap();
+                            let value = std::mem::take(&mut s.custom_buf);
+                            let next = match s.step {
+                                SetupStep::CustomName => {
+                                    s.custom_name = value.clone();
+                                    SetupStep::CustomBaseUrl
+                                }
+                                SetupStep::CustomBaseUrl => {
+                                    s.custom_base_url = value.clone();
+                                    SetupStep::CustomModel
+                                }
+                                SetupStep::CustomModel => {
+                                    s.custom_model = value.clone();
+                                    SetupStep::Credentials
+                                }
+                                _ => unreachable!(),
+                            };
+                            (value, next)
+                        };
+                        let _ = value;
+                        self.setup.as_mut().unwrap().step = next;
+                        true
+                    }
+                    KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        if let Some(s) = &mut self.setup {
+                            s.custom_buf.push(c);
+                        }
                         true
                     }
                     _ => false,
@@ -331,10 +401,14 @@ impl App {
                 if let Some(id) = id {
                     s.provider = Some(id.clone());
                     s.selected_models.clear();
-                    if id != "custom" {
+                    if id == "custom" {
+                        // Custom：进入 name/base_url/model 文本输入（文档：一等能力）
+                        s.custom_buf.clear();
+                        s.step = SetupStep::CustomName;
+                    } else {
                         s.model = s.model_options().first().cloned();
+                        s.step = SetupStep::Model;
                     }
-                    s.step = SetupStep::Model;
                 }
             }
             SetupStep::Model => {
@@ -568,6 +642,89 @@ mod tests {
         assert_eq!(cfg.model, "model-x");
         assert_eq!(cfg.api_key.as_deref(), Some("sk-test"));
         assert!(!cfg.known_pricing(), "自定义 provider pricing 可选");
+    }
+
+    /// Custom provider 四步 UI 输入（Provider → Name → Base URL → Model → Credentials）。
+    fn type_chars(app: &mut App, s: &str) {
+        for c in s.chars() {
+            app.handle_setup_key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char(c),
+                crossterm::event::KeyModifiers::NONE,
+            ));
+        }
+    }
+    fn enter(app: &mut App) {
+        app.handle_setup_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+    }
+
+    #[test]
+    fn custom_provider_ui_walkthrough() {
+        let mut app = test_app();
+        app.start_setup();
+        // Provider 步：光标移到 Custom OpenAI-compatible（最后一个）→ Enter
+        {
+            let opts = app.setup.as_ref().unwrap().provider_options();
+            let custom_idx = opts.len() - 1;
+            app.setup.as_mut().unwrap().cursor = custom_idx;
+        }
+        enter(&mut app);
+        assert_eq!(
+            app.setup.as_ref().unwrap().step,
+            SetupStep::CustomName,
+            "选 Custom 进 Name 输入"
+        );
+        // Name
+        type_chars(&mut app, "my-llm");
+        enter(&mut app);
+        assert_eq!(app.setup.as_ref().unwrap().custom_name, "my-llm");
+        assert_eq!(app.setup.as_ref().unwrap().step, SetupStep::CustomBaseUrl);
+        // Base URL
+        type_chars(&mut app, "http://localhost:8000/v1");
+        enter(&mut app);
+        assert_eq!(
+            app.setup.as_ref().unwrap().custom_base_url,
+            "http://localhost:8000/v1"
+        );
+        assert_eq!(app.setup.as_ref().unwrap().step, SetupStep::CustomModel);
+        // Model
+        type_chars(&mut app, "model-x");
+        enter(&mut app);
+        assert_eq!(app.setup.as_ref().unwrap().custom_model, "model-x");
+        assert_eq!(app.setup.as_ref().unwrap().step, SetupStep::Credentials);
+        // Key → Test
+        type_chars(&mut app, "sk-custom");
+        enter(&mut app);
+        assert_eq!(app.setup.as_ref().unwrap().api_key, "sk-custom");
+        assert_eq!(app.setup.as_ref().unwrap().step, SetupStep::Test);
+        // pending config 已带完整 custom 字段
+        let cfg = app.build_pending_config();
+        assert_eq!(cfg.name, "my-llm");
+        assert_eq!(cfg.endpoint, "http://localhost:8000/v1");
+        assert_eq!(cfg.model, "model-x");
+        assert_eq!(cfg.api_key.as_deref(), Some("sk-custom"));
+    }
+
+    /// Esc 逐级回退 Custom 输入步。
+    #[test]
+    fn custom_esc_back_walks_steps() {
+        let mut app = test_app();
+        app.start_setup();
+        app.setup.as_mut().unwrap().step = SetupStep::CustomModel;
+        let esc = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        app.handle_setup_key(esc);
+        assert_eq!(app.setup.as_ref().unwrap().step, SetupStep::CustomBaseUrl);
+        app.handle_setup_key(esc);
+        assert_eq!(app.setup.as_ref().unwrap().step, SetupStep::CustomName);
+        app.handle_setup_key(esc);
+        assert_eq!(app.setup.as_ref().unwrap().step, SetupStep::Provider);
+        app.handle_setup_key(esc);
+        assert!(app.setup.is_none(), "Provider 再 Esc 回 Home");
     }
 
     /// 回归：坏 key 测试失败 → 改好 key → 成功必须能离开 Test 步。
