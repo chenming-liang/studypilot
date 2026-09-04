@@ -24,6 +24,10 @@ impl App {
         if self.setup.is_some() && self.handle_setup_key(key) {
             return;
         }
+        // Flashcard Warm-up：正式 Review 前置覆盖层（Space reveal / 1·2·3 自评 / Enter next / Esc 退出）
+        if self.warmup.is_some() && self.handle_warmup_key(key) {
+            return;
+        }
         // Home / Course workspace：导航键（↑↓ Enter Esc）由顶层路由消费；
         // 其余键入打开命令面板（Home 没有输入框，命令入口 = 面板）
         if self.workspace != super::Workspace::Session
@@ -105,6 +109,10 @@ impl App {
         // 列表选择器（面板 Pick 动作唤起）：编辑键透传（共享输入缓冲 = 搜索栏），
         // 导航/确认键被消费
         if self.list_picker.is_some() && self.handle_list_picker_key(key) {
+            return;
+        }
+        // 复习地图树形选择器（Learning Map）：↑↓ 移动 / Enter 复习 / Esc 关闭
+        if self.review_map_picker.is_some() && self.handle_review_map_picker_key(key) {
             return;
         }
         // 笔记浏览器：Search 模式编辑键落入普通路径（共享输入缓冲）
@@ -990,27 +998,6 @@ impl App {
                     .collect();
                 ("切换课程分区".to_owned(), items)
             }
-            K::ReviewMap => {
-                let Some(map) = &self.review_map else {
-                    return;
-                };
-                let n = if self.review_map_n > 0 {
-                    self.review_map_n
-                } else {
-                    5
-                };
-                (
-                    format!("选择知识点开始复习（出题数 {n}，/review-map 数量 可调）"),
-                    map.picker_items(self.review_map_n)
-                        .into_iter()
-                        .map(|(label, command)| ListChoice {
-                            label,
-                            command,
-                            action: None,
-                        })
-                        .collect(),
-                )
-            }
             K::CourseDelete => (
                 "删除课程（其笔记回落 all 区）".to_owned(),
                 self.courses
@@ -1122,6 +1109,134 @@ impl App {
         }
     }
 
+    /// 复习地图树形选择器按键：↑↓ 移动（section 头行也可选中）、Enter 复习、
+    /// Esc 关闭。概念 = 复习该概念；section = 复习整节（scope 拼接节内概念）。
+    pub(crate) fn handle_review_map_picker_key(&mut self, key: KeyEvent) -> bool {
+        if key.kind != KeyEventKind::Press {
+            return false;
+        }
+        match key.code {
+            KeyCode::Esc => {
+                self.review_map_picker = None;
+                self.restore_input_backup();
+                true
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(p) = &mut self.review_map_picker {
+                    p.selected = p.selected.saturating_sub(1);
+                }
+                true
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(p) = &mut self.review_map_picker
+                    && !p.is_empty()
+                {
+                    p.selected = (p.selected + 1).min(p.len() - 1);
+                }
+                true
+            }
+            KeyCode::PageUp => {
+                if let Some(p) = &mut self.review_map_picker {
+                    p.selected = p.selected.saturating_sub(10);
+                }
+                true
+            }
+            KeyCode::PageDown => {
+                if let Some(p) = &mut self.review_map_picker {
+                    p.selected = (p.selected + 10).min(p.len().saturating_sub(1));
+                }
+                true
+            }
+            KeyCode::Enter => {
+                use crate::palette::MapRow;
+                let Some(p) = &self.review_map_picker else {
+                    return false;
+                };
+                let Some(row) = p.rows.get(p.selected) else {
+                    return true;
+                };
+                let (scope, n) = match row {
+                    MapRow::Concept { name, .. } => (name.clone(), p_n(self)),
+                    MapRow::Section { concept_names, .. } => {
+                        (concept_names.join("、"), concept_names.len())
+                    }
+                };
+                // 找到当前课程 id（pick 只出现在具体课程下）
+                let Some(course_id) = self
+                    .courses
+                    .iter()
+                    .find(|(_, n)| *n == self.course.as_str())
+                    .map(|(id, _)| *id)
+                else {
+                    return true;
+                };
+                let course_name = self.course.clone();
+                self.review_map_picker = None;
+                self.drop_input_backup();
+                // 进入 Flashcard Warm-up，随后正式 Review（focus 概念优先）
+                self.start_warmup(scope, Some(course_id), course_name, n);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Flashcard Warm-up 按键：Space 翻开 / 1·2·3 自评 / Enter 下一张 / Esc 退出。
+    /// 自评只进内存（不写 mastery）；最后一张评完后 Enter 收束进正式 Review。
+    pub(crate) fn handle_warmup_key(&mut self, key: KeyEvent) -> bool {
+        if key.kind != KeyEventKind::Press {
+            return false;
+        }
+        let Some(w) = &mut self.warmup else {
+            return false;
+        };
+        match key.code {
+            KeyCode::Esc => {
+                self.warmup = None;
+                self.push_entry(Entry::Info(
+                    "已退出 Flashcard Warm-up（不进入正式复习）".into(),
+                ));
+                true
+            }
+            KeyCode::Char(' ') => {
+                if w.current < w.cards.len() {
+                    w.revealed = true;
+                }
+                true
+            }
+            KeyCode::Char(c @ '1'..='3') => {
+                let rating = match c {
+                    '1' => crate::review::WarmupRating::GotIt,
+                    '2' => crate::review::WarmupRating::Shaky,
+                    _ => crate::review::WarmupRating::DontKnow,
+                };
+                // 先定位目标下标，再调用（避免 borrow 冲突）
+                let idx = w.current;
+                if idx < w.cards.len()
+                    && let Some(r) = w.ratings.get_mut(idx)
+                {
+                    *r = Some(rating);
+                }
+                true
+            }
+            KeyCode::Enter | KeyCode::Right => {
+                let advance = w.current + 1 < w.cards.len();
+                let done = !advance && w.all_rated();
+                if advance {
+                    w.current += 1;
+                    w.revealed = false;
+                    true
+                } else if done {
+                    self.finish_warmup();
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
     /// 向导导航键（编辑键由普通聊天框路径处理——共享输入缓冲）。
     /// 返回 true 表示该键已被向导消费。
     pub(crate) fn handle_wizard_key(&mut self, key: KeyEvent) -> bool {
@@ -1213,4 +1328,13 @@ impl App {
 /// 列表选择器当前可见条目数（按共享输入缓冲过滤后）。
 fn lp_visible_len(lp: &Option<crate::palette::ListPicker>, input: &str) -> usize {
     lp.as_ref().map(|p| p.visible(input).len()).unwrap_or(0)
+}
+
+/// 复习地图单概念的默认出题数（/review-map 数量 可调；0 = 默认 5）。
+fn p_n(app: &App) -> usize {
+    if app.review_map_n > 0 {
+        app.review_map_n
+    } else {
+        5
+    }
 }

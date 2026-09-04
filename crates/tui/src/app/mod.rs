@@ -194,6 +194,10 @@ pub struct App {
     pub wizard: Option<Wizard>,
     /// 列表选择器；Some 时按键路由给选择器
     pub list_picker: Option<ListPicker>,
+    /// 复习地图（Learning Map）树形选择器；Some 时按键路由给它
+    pub review_map_picker: Option<crate::palette::ReviewMapPicker>,
+    /// Flashcard Warm-up（正式 Review 前置）；Some 时按键路由给暖场
+    pub warmup: Option<review::WarmupState>,
     /// First-run AI Setup Wizard；Some 时进入 Setup 覆盖层
     pub setup: Option<crate::app::setup::SetupState>,
     /// 笔记浏览器（Search→Select→Act）；Some 时按键路由给浏览器
@@ -473,6 +477,8 @@ impl App {
             palette: None,
             wizard: None,
             list_picker: None,
+            review_map_picker: None,
+            warmup: None,
             setup: None,
             note_browser: None,
             session_browser: None,
@@ -1042,6 +1048,7 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
                     Err(e) => app.push_entry(Entry::Error(format!("复习地图加载失败: {e}"))),
                 }
             }
+            AppEvent::WarmupReady(result) => app.on_warmup_ready(result),
             AppEvent::ConceptsRefreshed(result) => {
                 app.inflight = None;
                 app.request_cost_sync();

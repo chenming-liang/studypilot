@@ -1,6 +1,68 @@
 //! 命令面板、列表选择器与模型弹窗的数据结构。
 
+use crate::outline_render::ReviewMap;
 use agent_providers::ProviderConfig;
+
+/// 复习地图（Learning Map）树形选择器：section 头行 + 缩进概念行（键盘 ↑↓/Enter/Esc）。
+/// 选中概念 → 复习该概念；选中 section → 复习整节（scope = 节内全部概念）。
+pub struct ReviewMapPicker {
+    pub title: String,
+    pub rows: Vec<MapRow>,
+    pub selected: usize,
+}
+
+/// 地图中的一行（扁平化；渲染时 section 作分组头，概念行缩进）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum MapRow {
+    Section {
+        title: String,
+        /// 聚合状态 (已掌握, 需巩固, 未复习)
+        counts: (usize, usize, usize),
+        /// 节内概念名（Enter = 复习整节 scope）
+        concept_names: Vec<String>,
+    },
+    Concept {
+        name: String,
+        /// 状态标记 ✓/△/○
+        mark: char,
+        attempts: usize,
+        correct: usize,
+    },
+}
+
+impl ReviewMapPicker {
+    pub fn from_map(map: &ReviewMap) -> Self {
+        let mut rows: Vec<MapRow> = Vec::new();
+        for (s, counts) in map.sections.iter().zip(map.section_counts()) {
+            rows.push(MapRow::Section {
+                title: s.title.clone(),
+                counts,
+                concept_names: s.nodes.iter().map(|n| n.name.clone()).collect(),
+            });
+            for n in &s.nodes {
+                rows.push(MapRow::Concept {
+                    name: n.name.clone(),
+                    mark: n.status().mark().chars().next().unwrap_or('○'),
+                    attempts: n.attempts,
+                    correct: n.correct,
+                });
+            }
+        }
+        Self {
+            title: format!("{} · Learning Map", map.course),
+            rows,
+            selected: 0,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+}
 
 /// 模型选择弹窗中的一行：一个 (provider, model) 可选项。
 pub struct ModelOption {
@@ -114,8 +176,6 @@ pub enum PickKind {
     CourseSwitch,
     /// 删除课程（仅现有课程）
     CourseDelete,
-    /// 复习地图：选知识点开复习
-    ReviewMap,
 }
 
 /// 命令面板条目：行为直接绑在条目上（不再是命令字符串前缀分流）。
@@ -457,6 +517,92 @@ impl CommandPalette {
 #[cfg(test)]
 mod picker_filter_tests {
     use super::*;
+
+    /// Learning Map 树形选择器：section 头行 + 缩进概念行，聚合状态与状态标记正确。
+    #[test]
+    fn review_map_picker_flattens_sections_and_concepts() {
+        use importer::review_map::{ConceptNode, OutlineSection};
+        let map = ReviewMap {
+            course: "rust".into(),
+            sections: vec![
+                OutlineSection {
+                    title: "所有权与借用".into(),
+                    nodes: vec![
+                        ConceptNode {
+                            concept_id: Some(1),
+                            name: "所有权".into(),
+                            attempts: 2,
+                            correct: 2,
+                        },
+                        ConceptNode {
+                            concept_id: Some(2),
+                            name: "借用".into(),
+                            attempts: 2,
+                            correct: 1,
+                        },
+                        ConceptNode {
+                            concept_id: Some(3),
+                            name: "移动语义".into(),
+                            attempts: 0,
+                            correct: 0,
+                        },
+                    ],
+                    refs: vec![],
+                },
+                OutlineSection {
+                    title: "类型系统".into(),
+                    nodes: vec![ConceptNode {
+                        concept_id: Some(4),
+                        name: "Trait".into(),
+                        attempts: 1,
+                        correct: 1,
+                    }],
+                    refs: vec![],
+                },
+            ],
+            unresolved: 0,
+            titles: vec![],
+            today_attempts: 0,
+            today_reviewed: vec![],
+        };
+        let p = ReviewMapPicker::from_map(&map);
+        assert_eq!(p.title, "rust · Learning Map");
+        // 行 = section1 头 + 3 概念 + section2 头 + 1 概念
+        assert_eq!(p.len(), 6);
+        match &p.rows[0] {
+            MapRow::Section {
+                title,
+                counts,
+                concept_names,
+            } => {
+                assert_eq!(title, "所有权与借用");
+                assert_eq!(*counts, (1, 1, 1), "聚合 ✓1·△1·○1");
+                assert_eq!(concept_names.len(), 3);
+            }
+            _ => panic!("首行应为 section 头"),
+        }
+        match &p.rows[1] {
+            MapRow::Concept { name, mark, .. } => {
+                assert_eq!(name, "所有权");
+                assert_eq!(*mark, '✓');
+            }
+            _ => panic!("概念行缩进"),
+        }
+        match &p.rows[2] {
+            MapRow::Concept { name, mark, .. } => {
+                assert_eq!(name, "借用");
+                assert_eq!(*mark, '△');
+            }
+            _ => panic!("概念行缩进"),
+        }
+        match &p.rows[4] {
+            MapRow::Section { title, counts, .. } => {
+                assert_eq!(title, "类型系统");
+                assert_eq!(*counts, (1, 0, 0));
+            }
+            _ => panic!("第二个 section 头"),
+        }
+    }
 
     fn picker() -> ListPicker {
         ListPicker {

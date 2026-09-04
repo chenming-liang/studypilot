@@ -115,6 +115,24 @@ impl ReviewMap {
         (total, reviewed, weak)
     }
 
+    /// 每个 section 的聚合状态（(已掌握, 需巩固, 未复习)）——Learning Map 的节级概览。
+    pub fn section_counts(&self) -> Vec<(usize, usize, usize)> {
+        self.sections
+            .iter()
+            .map(|s| {
+                let (mut mastered, mut weak, mut unreviewed) = (0, 0, 0);
+                for n in &s.nodes {
+                    match n.status() {
+                        ReviewStatus::Mastered => mastered += 1,
+                        ReviewStatus::Weak => weak += 1,
+                        ReviewStatus::Unreviewed => unreviewed += 1,
+                    }
+                }
+                (mastered, weak, unreviewed)
+            })
+            .collect()
+    }
+
     /// markdown 渲染（屏幕显示与 --export 共用）。
     pub fn markdown(&self) -> String {
         let (total, reviewed, weak) = self.stats();
@@ -402,23 +420,53 @@ pub async fn build_review_map(
             sections: Vec::new(),
         });
 
+    let (sections, unresolved) = organize(&parsed, &concepts, &concept_notes);
+    if sections.is_empty() {
+        return Err("大纲为空：LLM 输出与概念清单不匹配".into());
+    }
+    Ok(ReviewMap {
+        course: course_name,
+        sections,
+        unresolved,
+        titles,
+        today_attempts: 0, // 调用方经 with_refreshed_status/with_today_reviewed 回填
+        today_reviewed: Vec::new(),
+    })
+}
+
+/// 把 LLM 的章节输出组织成三段结构。纯函数（可单测）。
+///
+/// 保证：
+/// - concept 必须是已有实体（concept_id 直接引用）
+/// - 每个 concept 在整张地图只出现一次（按 id 去重；重复归到首次出现的章节）
+/// - unresolved = LLM 输出对不上概念清单的名字数
+fn organize(
+    parsed: &OutlineResponse,
+    concepts: &[storage::ConceptMastery],
+    concept_notes: &HashMap<i64, Vec<usize>>,
+) -> (Vec<OutlineSection>, usize) {
     let by_name: HashMap<&str, &storage::ConceptMastery> =
         concepts.iter().map(|c| (c.name.as_str(), c)).collect();
     let mut sections: Vec<OutlineSection> = Vec::new();
     let mut unresolved = 0usize;
-    for raw in parsed.sections {
-        let title = raw.title.unwrap_or_else(|| "(未命名)".into());
+    let mut placed: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    for raw in &parsed.sections {
+        let title = raw.title.clone().unwrap_or_else(|| "(未命名)".into());
         let mut nodes: Vec<ConceptNode> = Vec::new();
         let mut refs: Vec<usize> = Vec::new();
-        for name in raw.concepts {
+        for name in &raw.concepts {
             let m = by_name.get(name.as_str()).copied().or_else(|| {
                 // LLM 偶发改名：包含匹配兜底
                 concepts
                     .iter()
-                    .find(|c| c.name.contains(&name) || name.contains(&c.name))
+                    .find(|c| c.name.contains(name.as_str()) || name.contains(c.name.as_str()))
             });
             match m {
                 Some(c) => {
+                    // 去重：已归入其他章节的概念不再出现（文档：一个 concept 只出现一次）
+                    if !placed.insert(c.concept_id) {
+                        continue;
+                    }
                     if let Some(list) = concept_notes.get(&c.concept_id) {
                         for r in list {
                             if !refs.contains(r) {
@@ -443,17 +491,7 @@ pub async fn build_review_map(
             sections.push(OutlineSection { title, nodes, refs });
         }
     }
-    if sections.is_empty() {
-        return Err("大纲为空：LLM 输出与概念清单不匹配".into());
-    }
-    Ok(ReviewMap {
-        course: course_name,
-        sections,
-        unresolved,
-        titles,
-        today_attempts: 0, // 调用方经 with_refreshed_status/with_today_reviewed 回填
-        today_reviewed: Vec::new(),
-    })
+    (sections, unresolved)
 }
 
 /// R6：outline LLM 调用记账（D2 spawn_blocking）。
@@ -490,6 +528,86 @@ mod tests {
             attempts,
             correct,
         }
+    }
+
+    /// 文档 §一.1/§一.3：LLM 只能 organize 已有概念，一个概念只出现一次。
+    /// 去重按 concept_id（不是字符串）：同名概念跨节出现 → 归首节，其余丢弃。
+    #[test]
+    fn organize_dedups_concepts_across_sections() {
+        let parsed = OutlineResponse {
+            sections: vec![
+                OutlineSectionRaw {
+                    title: Some("基础".into()),
+                    concepts: vec!["所有权".into(), "借用".into()],
+                },
+                OutlineSectionRaw {
+                    title: Some("进阶".into()),
+                    // 所有权在另一节再次出现（LLM 重复）→ 应去重丢弃；移动语义保留
+                    concepts: vec!["借用".into(), "所有权".into(), "移动语义".into()],
+                },
+            ],
+        };
+        let concepts = vec![
+            storage::ConceptMastery {
+                concept_id: 10,
+                name: "所有权".into(),
+                attempts: 2,
+                correct: 2,
+            },
+            storage::ConceptMastery {
+                concept_id: 11,
+                name: "借用".into(),
+                attempts: 1,
+                correct: 0,
+            },
+            storage::ConceptMastery {
+                concept_id: 12,
+                name: "移动语义".into(),
+                attempts: 0,
+                correct: 0,
+            },
+        ];
+        let notes = std::collections::HashMap::new();
+        let (sections, unresolved) = organize(&parsed, &concepts, &notes);
+        assert_eq!(unresolved, 0, "全部概念应解析成功");
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].nodes.len(), 2, "首节拿到所有权+借用");
+        assert_eq!(
+            sections[1].nodes.len(),
+            1,
+            "重复的借用/所有权被去重，只剩移动语义"
+        );
+        assert_eq!(sections[1].nodes[0].name, "移动语义");
+        // 每节概念直接引用已有 concept_id
+        let ids: Vec<i64> = sections
+            .iter()
+            .flat_map(|s| s.nodes.iter().filter_map(|n| n.concept_id))
+            .collect();
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, vec![10, 11, 12], "每个概念实体只出现一次");
+    }
+
+    /// 文档 §一.4/§一.5：状态只经 concept_id → concept_mastery，Section 聚合状态正确。
+    #[test]
+    fn section_counts_aggregates_status() {
+        let map = ReviewMap {
+            course: "rust".into(),
+            sections: vec![OutlineSection {
+                title: "所有权".into(),
+                nodes: vec![
+                    node("所有权", 2, 2),   // ✓
+                    node("借用", 2, 1),     // △
+                    node("移动语义", 0, 0), // ○
+                ],
+                refs: vec![],
+            }],
+            unresolved: 0,
+            titles: vec![],
+            today_attempts: 0,
+            today_reviewed: Vec::new(),
+        };
+        assert_eq!(map.section_counts(), vec![(1, 1, 1)]);
     }
 
     #[test]

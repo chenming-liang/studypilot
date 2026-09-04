@@ -112,6 +112,74 @@ pub struct QuizContext {
     pub concept_list: String,
 }
 
+/// Flashcard（正式 Review 前的快速 recall 卡片）。
+/// LLM 一次生成一批（One LLM call → 5~8 张，文档 §二.8），本地逐张展示。
+#[derive(Debug, Clone)]
+pub struct Flashcard {
+    pub question: String,
+    pub answer: String,
+    /// 绑定概念名（focus 汇总用；None = 跨概念卡）
+    pub concept: Option<String>,
+}
+
+/// Flashcard 自评（非 mastery，只影响本轮 focus signal）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WarmupRating {
+    /// ✓ Got it
+    GotIt,
+    /// △ Shaky
+    Shaky,
+    /// ○ Don't know
+    DontKnow,
+}
+
+impl WarmupRating {
+    pub fn mark(self) -> &'static str {
+        match self {
+            Self::GotIt => "✓",
+            Self::Shaky => "△",
+            Self::DontKnow => "○",
+        }
+    }
+}
+
+/// Flashcard Warm-up 运行时状态（只存在当前 Review Session；结果不写 mastery）。
+#[derive(Debug, Clone)]
+pub struct WarmupState {
+    pub cards: Vec<Flashcard>,
+    pub current: usize,
+    /// 当前卡是否已翻面（Reveal 后显示答案）
+    pub revealed: bool,
+    /// 已评分（与 cards 对齐；None = 未评）
+    pub ratings: Vec<Option<WarmupRating>>,
+    /// 原始范围（概念名/section 名，传给正式 Review 的 scope）
+    pub scope_text: String,
+    pub course_id: Option<i64>,
+    pub course_name: String,
+    pub n: usize,
+}
+
+impl WarmupState {
+    /// 全部卡片是否已评分。
+    pub fn all_rated(&self) -> bool {
+        !self.cards.is_empty() && self.ratings.iter().all(|r| r.is_some())
+    }
+
+    /// Focus Concepts：评 △/○ 的概念（去重，保留顺序）——传给正式 Review 优先出题。
+    pub fn focus_concepts(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for (card, rating) in self.cards.iter().zip(self.ratings.iter()) {
+            if matches!(rating, Some(WarmupRating::Shaky | WarmupRating::DontKnow))
+                && let Some(c) = &card.concept
+                && !out.contains(c)
+            {
+                out.push(c.clone());
+            }
+        }
+        out
+    }
+}
+
 /// 一轮追问（问，答）。answer 为 None 表示回答生成中（workspace 显示思考行）；
 /// Err 是获取失败（渲染红色，不喂回 LLM）。citations = [n] → 笔记来源（渲染脚注）。
 #[derive(Debug, Clone)]
@@ -373,6 +441,152 @@ pub async fn start_review(
         next_pending: false,
         ctx,
     })));
+}
+
+/// Flashcard Warm-up 生成：一次 LLM 调用产出 5~8 张卡（文档 §二.8，不逐张调用）。
+/// 范围 = 本次复习范围（概念名/section 名，FTS 检索取素材）；结果不写 mastery。
+pub async fn generate_warmup_cards(
+    store: Arc<Store>,
+    provider: Arc<OpenAiClient>,
+    provider_cfg: ProviderConfig,
+    course_id: Option<i64>,
+    course_name: String,
+    scope_text: String,
+    cancel: CancellationToken,
+) -> Result<Vec<Flashcard>, String> {
+    if cancel.is_cancelled() {
+        return Err("已取消".into());
+    }
+    // ① 素材：scope 文本检索，命中率远高于课程名（与 start_review scope 路径一致）
+    let store_clone = Arc::clone(&store);
+    let scope_owned = scope_text.clone();
+    let (material, concepts) = tokio::task::spawn_blocking(
+        move || -> storage::Result<(String, Vec<storage::ConceptMastery>)> {
+            let concepts = store_clone.list_concepts_with_mastery(course_id)?;
+            let hits = store_clone.search_chunks(&scope_owned, course_id, 8)?;
+            let chunks = if hits.is_empty() {
+                store_clone.chunks_by_course(course_id, 24)?
+            } else {
+                hits
+            };
+            let material: String = chunks
+                .iter()
+                .take(8)
+                .enumerate()
+                .map(|(i, h)| {
+                    let preview: String = h.content.chars().take(200).collect();
+                    format!(
+                        "[{}] 《{}》 > {}\n{preview}",
+                        i + 1,
+                        h.note_title,
+                        h.heading
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n---\n");
+            Ok((material, concepts))
+        },
+    )
+    .await
+    .map_err(|e| format!("任务错误: {e}"))?
+    .map_err(|e| e.to_string())?;
+
+    if material.is_empty() {
+        return Err("该课程还没有笔记，先 /import 导入资料".into());
+    }
+    let concept_list: Vec<String> = concepts
+        .iter()
+        .map(|c| format!("{}({}/{})", c.name, c.correct, c.attempts))
+        .collect();
+    let prompt = format!(
+        "你是《{course_name}》课程的学习导师。学生马上要开始正式复习，请为本次复习范围\
+         生成 5~8 张快速自评卡片（Flashcard），用来先做一次 recall 检查。\n\n\
+         本次复习范围：{scope_text}\n\n\
+         相关笔记素材：\n{material}\n\n\
+         课程概念及掌握度：\n{}\n\n\
+         卡片要求：\n\
+         1. 每张卡是一个简洁的 recall 问题（术语定义/原理一句话/关系辨析），不要选择题\n\
+         2. 答案一两句话，来自素材，避免编造\n\
+         3. 范围严格限定在本课程概念内，禁止跑题\n\
+         4. 每张卡绑定一个概念名（取自概念清单，逐字一致）\n\n\
+         输出 JSON：{{\"cards\": [{{\"question\": \"...\", \"answer\": \"...\", \"concept\": \"概念名\"}}]}}",
+        concept_list.join("、"),
+    );
+    let messages = [
+        Message::system("只输出 JSON，不要 markdown 代码块。"),
+        Message::user(&prompt),
+    ];
+    // D4 降级链：json_object → prompt 约束 + 正则提取 → 跳过
+    let resp = match agent_providers::with_cancel(provider.chat_json(&messages), &cancel).await {
+        Some(Ok(r)) => r,
+        Some(Err(e)) if e.is_json_mode_unsupported() => {
+            match agent_providers::with_cancel(provider.chat(&messages, &[]), &cancel).await {
+                Some(Ok(r)) => r,
+                _ => return Err("Flashcard 生成失败（LLM 无响应）".into()),
+            }
+        }
+        Some(Err(e)) => return Err(format!("Flashcard 生成失败: {e}")),
+        None => return Err("已取消".into()),
+    };
+    // R6 记账
+    let cost = estimate_cost(&provider_cfg, &resp.usage);
+    let store_usage = Arc::clone(&store);
+    let pc_usage = provider_cfg.clone();
+    let u = resp.usage;
+    let pc_name = pc_usage.name.clone();
+    let pc_model = pc_usage.model.clone();
+    tokio::spawn(async move {
+        let _ = tokio::task::spawn_blocking(move || {
+            store_usage.append_usage(
+                &pc_name,
+                &pc_model,
+                "review",
+                u.prompt_tokens,
+                u.completion_tokens,
+                cost,
+            )
+        })
+        .await;
+    });
+
+    #[derive(Debug, Deserialize)]
+    struct CardsOut {
+        #[serde(default)]
+        cards: Vec<CardOut>,
+    }
+    #[derive(Debug, Deserialize)]
+    struct CardOut {
+        question: Option<String>,
+        answer: Option<String>,
+        #[serde(default)]
+        concept: Option<String>,
+    }
+    let parsed: CardsOut = serde_json::from_str(resp.content.trim())
+        .ok()
+        .or_else(|| {
+            agent_core::first_json_block(&resp.content).and_then(|b| serde_json::from_str(b).ok())
+        })
+        .unwrap_or(CardsOut { cards: Vec::new() });
+    let cards: Vec<Flashcard> = parsed
+        .cards
+        .into_iter()
+        .filter_map(|c| {
+            let question = c.question.unwrap_or_default().trim().to_owned();
+            let answer = c.answer.unwrap_or_default().trim().to_owned();
+            if question.is_empty() || answer.is_empty() {
+                return None;
+            }
+            Some(Flashcard {
+                question,
+                answer,
+                concept: c.concept.filter(|s| !s.is_empty()),
+            })
+        })
+        .collect();
+    if cards.is_empty() {
+        return Err("Flashcard 生成失败：输出为空或解析失败".into());
+    }
+    Ok(cards)
 }
 
 /// 一道已出题目的上下文（下一题生成的 evidence history）。
@@ -1078,6 +1292,67 @@ fn weighted_sample(weights: &[f64], k: usize, rng: &mut Prng) -> Vec<usize> {
         remaining.swap_remove(pos);
     }
     chosen
+}
+
+#[cfg(test)]
+mod warmup_tests {
+    use super::*;
+
+    fn state_with(ratings: &[(Option<WarmupRating>, &str)]) -> WarmupState {
+        let cards: Vec<Flashcard> = ratings
+            .iter()
+            .map(|(_, concept)| Flashcard {
+                question: "q".into(),
+                answer: "a".into(),
+                concept: Some((*concept).into()),
+            })
+            .collect();
+        WarmupState {
+            cards,
+            current: 0,
+            revealed: true,
+            ratings: ratings.iter().map(|(r, _)| *r).collect(),
+            scope_text: "借用、所有权".into(),
+            course_id: Some(1),
+            course_name: "rust".into(),
+            n: 5,
+        }
+    }
+
+    /// 文档 §二.4：Focus Concepts = 评 △/○ 的概念（✓ 不算），去重保留顺序。
+    #[test]
+    fn focus_concepts_only_shaky_and_dontknow() {
+        let w = state_with(&[
+            (Some(WarmupRating::GotIt), "所有权"),
+            (Some(WarmupRating::Shaky), "借用"),
+            (Some(WarmupRating::DontKnow), "生命周期"),
+            (Some(WarmupRating::GotIt), "移动语义"),
+        ]);
+        let focus = w.focus_concepts();
+        assert_eq!(focus, vec!["借用", "生命周期"]);
+    }
+
+    #[test]
+    fn focus_concepts_dedup_and_ignore_unrated() {
+        let w = state_with(&[
+            (Some(WarmupRating::Shaky), "借用"),
+            (Some(WarmupRating::DontKnow), "借用"),
+            (None, "所有权"),
+        ]);
+        let focus = w.focus_concepts();
+        assert_eq!(focus, vec!["借用"], "同一概念去重");
+    }
+
+    #[test]
+    fn all_rated_requires_every_card() {
+        let mut w = state_with(&[
+            (Some(WarmupRating::GotIt), "所有权"),
+            (Some(WarmupRating::Shaky), "借用"),
+        ]);
+        assert!(w.all_rated());
+        w.ratings[1] = None;
+        assert!(!w.all_rated(), "未评完不算");
+    }
 }
 
 #[cfg(test)]

@@ -78,6 +78,8 @@ pub enum AppEvent {
     ConceptsRefreshed(Result<String, String>),
     /// /review-map 完成：状态重读后的复习地图（渲染 + 弹选择器）
     ReviewMapReady(Result<crate::outline_render::ReviewMap, String>),
+    /// Flashcard Warm-up 生成完成（一次 LLM 调用产出 5~8 张卡）
+    WarmupReady(Result<Vec<review::Flashcard>, String>),
     /// 简答题批改完成：(题目索引, (score, missing, comment))
     ReviewGraded(usize, Result<(i64, Vec<String>, Option<String>), String>),
     /// 整轮复习结束后的 LLM 小结建议（已格式化文本，多行）

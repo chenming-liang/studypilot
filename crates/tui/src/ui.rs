@@ -80,6 +80,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if let Some(lp) = &app.list_picker {
         draw_list_picker(f, lp, &app.input);
     }
+    if let Some(rp) = &app.review_map_picker {
+        draw_review_map_picker(f, rp);
+    }
+    if app.warmup.is_some() {
+        draw_warmup(f, app);
+    }
     if app.wizard.is_some() {
         draw_wizard(f, app);
     }
@@ -1794,6 +1800,177 @@ fn draw_list_picker(f: &mut Frame, lp: &ListPicker, input: &str) {
         ),
         pop,
         &mut state,
+    );
+}
+
+/// 复习地图（Learning Map）树形选择器：section 头行 + 聚合状态 + 缩进概念行。
+fn draw_review_map_picker(f: &mut Frame, p: &crate::palette::ReviewMapPicker) {
+    use crate::palette::MapRow;
+    let area = f.area();
+    let height = (p.len() as u16 + 5).min(area.height.saturating_sub(2));
+    let width = 56u16.min(area.width.saturating_sub(2));
+    let x = area.x + (area.width - width) / 2;
+    let y = area.y + (area.height - height) / 2;
+    let pop = Rect::new(x, y, width, height);
+
+    f.render_widget(ratatui::widgets::Clear, pop);
+
+    let items: Vec<ListItem> = p
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let sel = i == p.selected;
+            let style = if sel {
+                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+            } else {
+                Style::new()
+            };
+            match row {
+                MapRow::Section {
+                    title,
+                    counts: (mastered, weak, unreviewed),
+                    ..
+                } => {
+                    let mut agg: Vec<String> = Vec::new();
+                    if *mastered > 0 {
+                        agg.push(format!("{mastered} ✓"));
+                    }
+                    if *weak > 0 {
+                        agg.push(format!("{weak} △"));
+                    }
+                    if *unreviewed > 0 {
+                        agg.push(format!("{unreviewed} ○"));
+                    }
+                    let agg = if agg.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  {}", agg.join(" · "))
+                    };
+                    ListItem::new(Line::from(vec![
+                        Span::styled(if sel { "▾ " } else { "▸ " }, style),
+                        Span::styled(format!("{title}{agg}"), style),
+                    ]))
+                }
+                MapRow::Concept {
+                    name,
+                    mark,
+                    attempts,
+                    correct,
+                } => {
+                    let m = if *attempts > 0 {
+                        format!("（做对 {correct} / 共 {attempts} 题）")
+                    } else {
+                        String::new()
+                    };
+                    ListItem::new(Line::from(vec![
+                        Span::styled(if sel { "  ▸ " } else { "    " }, style),
+                        Span::styled(format!("{mark} {name}{m}"), style),
+                    ]))
+                }
+            }
+        })
+        .collect();
+
+    let mut state = ratatui::widgets::ListState::default().with_selected(Some(p.selected));
+    f.render_stateful_widget(
+        List::new(items).block(
+            Block::new()
+                .borders(Borders::ALL)
+                .title(Span::styled(
+                    format!(" {} ", p.title),
+                    Style::new().fg(ACCENT),
+                ))
+                .title_bottom(
+                    Span::styled(
+                        " ↑↓ Navigate · Enter Review · Esc Back ",
+                        Style::new().fg(DIM),
+                    )
+                    .into_centered_line(),
+                ),
+        ),
+        pop,
+        &mut state,
+    );
+}
+
+/// Flashcard Warm-up 覆盖层：当前卡 + 翻面答案 + 自评（✓ Got it / △ Shaky / ○ Don't know）。
+fn draw_warmup(f: &mut Frame, app: &mut App) {
+    let Some(w) = &app.warmup else {
+        return;
+    };
+    let area = f.area();
+    let width = 60u16.min(area.width.saturating_sub(4));
+    let height = 14u16.min(area.height.saturating_sub(2));
+    let x = area.x + (area.width - width) / 2;
+    let y = area.y + (area.height - height) / 2;
+    let pop = Rect::new(x, y, width, height);
+    f.render_widget(ratatui::widgets::Clear, pop);
+
+    let mut items: Vec<ListItem> = Vec::new();
+    items.push(ListItem::new(Line::from(Span::styled(
+        "Flashcard Warm-up",
+        Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+    ))));
+    if w.cards.is_empty() {
+        items.push(ListItem::new(Line::from(Span::styled(
+            "  生成中…",
+            Style::new().fg(theme::PRIMARY),
+        ))));
+    } else {
+        items.push(ListItem::new(Line::from(Span::styled(
+            format!("  {} / {}", w.current + 1, w.cards.len()),
+            Style::new().fg(DIM),
+        ))));
+        items.push(ListItem::new(Line::default()));
+        let card = &w.cards[w.current];
+        items.push(ListItem::new(Line::from(Span::styled(
+            format!("  {}", card.question),
+            Style::new().fg(theme::FG).add_modifier(Modifier::BOLD),
+        ))));
+        items.push(ListItem::new(Line::default()));
+        if w.revealed {
+            items.push(ListItem::new(Line::from(Span::styled(
+                format!("  {}", card.answer),
+                Style::new().fg(theme::FG),
+            ))));
+            if let Some(c) = &card.concept {
+                items.push(ListItem::new(Line::from(Span::styled(
+                    format!("  （概念: {c}）"),
+                    Style::new().fg(DIM),
+                ))));
+            }
+            items.push(ListItem::new(Line::default()));
+            let rated = w.ratings.get(w.current).copied().flatten();
+            items.push(ListItem::new(Line::from(Span::styled(
+                match rated {
+                    Some(r) => format!("  ✓ 已评: {}", r.mark()),
+                    None => "  [1] Got it  [2] Shaky  [3] Don't know".to_string(),
+                },
+                Style::new().fg(if rated.is_some() {
+                    theme::SUCCESS
+                } else {
+                    theme::USER
+                }),
+            ))));
+        } else {
+            items.push(ListItem::new(Line::from(Span::styled(
+                "  [Space] Reveal",
+                Style::new().fg(DIM),
+            ))));
+        }
+    }
+    f.render_widget(
+        List::new(items).block(
+            Block::new().borders(Borders::ALL).title_bottom(
+                Span::styled(
+                    " Space reveal · 1/2/3 rate · Enter next · Esc exit ",
+                    Style::new().fg(DIM),
+                )
+                .into_centered_line(),
+            ),
+        ),
+        pop,
     );
 }
 

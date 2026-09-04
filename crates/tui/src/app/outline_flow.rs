@@ -156,11 +156,19 @@ impl App {
         });
     }
 
-    /// 复习地图选择器（复用 ListPicker，Enter = 对该概念出题）。
+    /// 复习地图（Learning Map）树形选择器：section 头行 + 缩进概念行，
+    /// Enter 概念 = 复习该概念，Enter section = 复习整节（文档 §一.6/§一.7）。
     pub(crate) fn open_review_map_picker(&mut self) {
-        if self.review_map.is_some() {
-            self.open_list_picker(crate::palette::PickKind::ReviewMap);
+        let Some(map) = &self.review_map else {
+            return;
+        };
+        let picker = crate::palette::ReviewMapPicker::from_map(map);
+        if picker.is_empty() {
+            self.push_entry(Entry::Info("复习地图为空：先 /import 导入资料".into()));
+            return;
         }
+        self.review_map_picker = Some(picker);
+        self.take_input_for_overlay(); // 备份聊天内容 + 清空
     }
 
     /// `/review-map [数量]` —— 自愈式出题入口：缓存命中秒开；签名变化自动重跑 LLM。

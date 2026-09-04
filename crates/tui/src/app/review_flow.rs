@@ -5,11 +5,117 @@ use std::sync::Arc;
 use agent_core::{Message, Provider};
 use serde::Deserialize;
 use tokio::task::spawn_blocking;
+use tokio_util::sync::CancellationToken;
 use tools::SearchNotesTool;
 
 use super::{App, AppEvent, Entry};
 use crate::review;
 impl App {
+    /// 启动 Flashcard Warm-up（正式 Review 前置）：生成卡片期间挂 inflight，
+    /// 事件 WarmupReady 回流后进入暖场覆盖层。范围 = 本次复习选中的概念/section。
+    pub(crate) fn start_warmup(
+        &mut self,
+        scope_text: String,
+        course_id: Option<i64>,
+        course_name: String,
+        n: usize,
+    ) {
+        if self.review.is_some() {
+            self.push_entry(Entry::Error("复习进行中，请先完成或 Esc 退出".into()));
+            return;
+        }
+        // 预算熔断（R6）
+        if self.total_cost >= self.max_cost {
+            self.push_entry(Entry::Error(format!(
+                "已达预算上限 ¥{:.2}（累计 ¥{:.4}），拒绝出题。可用 /budget 调高上限",
+                self.max_cost, self.total_cost
+            )));
+            return;
+        }
+        let store = Arc::clone(&self.store);
+        let provider = self.provider.clone();
+        let provider_cfg = self.provider_cfg.clone();
+        let tx = self.tx.clone();
+        let cancel = CancellationToken::new();
+        self.inflight = Some(cancel.clone());
+        // 先建空暖场状态（卡片到达后填充）：覆盖层即时出现（"生成中…"），
+        // scope/course/n 先记录，供 finish_warmup 传给正式 Review。
+        self.warmup = Some(review::WarmupState {
+            cards: Vec::new(),
+            current: 0,
+            revealed: false,
+            ratings: Vec::new(),
+            scope_text: scope_text.clone(),
+            course_id,
+            course_name: course_name.clone(),
+            n,
+        });
+        self.push_entry(Entry::Info(format!(
+            "Flashcard Warm-up · 范围「{scope_text}」生成中…"
+        )));
+        tokio::spawn(async move {
+            let result = review::generate_warmup_cards(
+                store,
+                provider,
+                provider_cfg,
+                course_id,
+                course_name,
+                scope_text,
+                cancel,
+            )
+            .await;
+            let _ = tx.send(AppEvent::WarmupReady(result));
+        });
+    }
+
+    /// Warm-up 卡片回流：填充暖场状态（覆盖层渲染第一张）。
+    pub(crate) fn on_warmup_ready(&mut self, result: Result<Vec<review::Flashcard>, String>) {
+        self.inflight = None;
+        self.request_cost_sync();
+        match result {
+            Ok(cards) => {
+                let n_cards = cards.len();
+                if let Some(w) = &mut self.warmup {
+                    w.cards = cards;
+                    w.ratings = vec![None; n_cards];
+                    w.current = 0;
+                    w.revealed = false;
+                }
+                self.push_entry(Entry::Info(format!(
+                    "Warm-up: {n_cards} 张卡片 · Space 翻开 · 1/2/3 自评 · Enter 下一张"
+                )));
+            }
+            Err(e) => {
+                self.warmup = None;
+                self.push_entry(Entry::Error(format!("Flashcard 生成失败: {e}")));
+            }
+        }
+    }
+
+    /// 暖场完成：计算 Focus Concepts（△/○）→ 传给正式 Review（复用现有引擎）。
+    /// Flashcard 绝不写 mastery（不调 update_concept_mastery）。
+    pub(crate) fn finish_warmup(&mut self) {
+        let Some(w) = self.warmup.take() else { return };
+        let focus = w.focus_concepts();
+        let scope: Option<String> = if focus.is_empty() {
+            // 全部 Got it：回到原始范围正常复习
+            Some(w.scope_text.clone())
+        } else {
+            Some(focus.join("、"))
+        };
+        let mut focus_msg = String::from("Warm-up complete\n\nFocus:");
+        if focus.is_empty() {
+            focus_msg.push_str(" 全部 ✓ 通过");
+        } else {
+            for c in &focus {
+                focus_msg.push_str(&format!("\n△ {c}"));
+            }
+        }
+        self.push_entry(Entry::Markdown(focus_msg));
+        self.push_entry(Entry::Info("Starting review…".into()));
+        self.run_review(w.course_id, w.course_name, scope, w.n);
+    }
+
     /// 完成一道题：记录 attempt + 更新掌握度 + 进入反馈停留态。
     /// （Workspace 渲染直接读 ReviewState；不再向聊天流逐题输出）
     pub(crate) fn finish_review_question(
