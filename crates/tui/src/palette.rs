@@ -176,6 +176,17 @@ impl ModelPicker {
             .map(|o| o.is_role)
             .unwrap_or(false)
     }
+
+    /// 光标定位到指定角色配置行（绑定后返回角色面板时落在此处，便于继续配置下一角色）。
+    pub fn select_role(&mut self, role: &str) {
+        if let Some(idx) = self
+            .options
+            .iter()
+            .position(|o| o.is_role && o.model_display == role)
+        {
+            self.selected = idx;
+        }
+    }
 }
 
 /// 面板分组（渲染为组头分隔行；过滤时隐藏）。顺序即显示顺序。

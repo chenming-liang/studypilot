@@ -9,7 +9,7 @@ use crossterm::event::{
 use super::{App, Entry, Wizard};
 use crate::clipboard::copy_to_clipboard;
 use crate::input_edit::{delete_at, delete_before, insert_char};
-use crate::palette::CommandPalette;
+use crate::palette::{CommandPalette, ModelPicker};
 use crate::review;
 
 impl App {
@@ -1367,10 +1367,22 @@ impl App {
                         .options
                         .get(sel)
                         .map(|o| (o.provider.clone(), o.model.clone()));
-                    self.model_picker = None;
                     if let Some((p, m)) = chosen {
                         self.apply_role_assign(&role, &p, &m);
+                        self.set_toast(
+                            format!("角色 {role} = {p}/{m}，可继续配置其他角色（Esc 退出）"),
+                            false,
+                        );
                     }
+                    // 绑定完成后返回角色面板（不关闭），光标落回刚配置的角色行便于继续
+                    let mut back = ModelPicker::from_providers(
+                        &self.all_providers,
+                        &self.provider_cfg.name,
+                        &self.provider_cfg.model,
+                        &self.roles,
+                    );
+                    back.select_role(&role);
+                    self.model_picker = Some(back);
                     return;
                 }
                 // 普通模式：角色行 → 进入角色模型选择；模型行 → 切换当前模型

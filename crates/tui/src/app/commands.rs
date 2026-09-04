@@ -1135,12 +1135,23 @@ pub(crate) mod course_delete_tests {
             crossterm::event::KeyCode::Enter,
             crossterm::event::KeyModifiers::NONE,
         ));
-        assert!(app.model_picker.is_none(), "确认后关闭面板");
         assert_eq!(app.roles.get("fast").unwrap(), "deepseek/deepseek-v4-pro");
         assert_eq!(
             app.provider_cfg.model, "deepseek-v4-flash",
             "角色绑定不改当前对话模型"
         );
+        // 绑定后返回角色面板（不关闭），光标落回 fast 行，可继续配置其他角色
+        let back = app.model_picker.as_ref().unwrap();
+        assert_eq!(back.role, None, "回到普通模式");
+        assert_eq!(
+            back.selected, 0,
+            "光标定位回刚配置的 fast 角色行（便于继续）"
+        );
+        assert!(
+            back.options.iter().take(3).all(|o| o.is_role),
+            "面板仍显示三个角色行"
+        );
+        assert!(app.toast.is_some(), "绑定成功有 toast 提示");
         assert!(
             app.entries
                 .iter()
