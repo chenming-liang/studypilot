@@ -121,7 +121,6 @@ impl App {
         use importer::ImportEvent::*;
         match ev {
             Started { total, course } => {
-                self.import_progress = Some((0, total, String::new(), String::new()));
                 self.push_entry(Entry::Info(format!(
                     "导入开始: 共 {total} 个文件{}",
                     course
@@ -131,17 +130,11 @@ impl App {
                 )));
             }
             FileStart { name, index, total } => {
-                self.import_progress = Some((index, total, name.clone(), String::new()));
                 self.push_entry(Entry::Info(format!("[{index}/{total}] 导入: {name}")));
             }
             FileProgress { name, phase } => {
-                // 单文件阶段进度（问题 1）：更新当前阶段；保持 index/total
-                let (idx, total) = self
-                    .import_progress
-                    .as_ref()
-                    .map(|(i, t, _, _)| (*i, *t))
-                    .unwrap_or((0, 1));
-                self.import_progress = Some((idx, total, name, phase.label().to_owned()));
+                // 对话栏逐阶段报告（问题 1 对齐）：解析 → 抽取概念 → 入库
+                self.push_entry(Entry::Info(format!("    ↳ {name} · {}", phase.label())));
             }
             FileDone { name, concepts } => {
                 self.push_entry(Entry::Info(format!("  ✓ {name} → {} 个概念", concepts)));
@@ -164,7 +157,6 @@ impl App {
             }
             Finished { ok, skipped, fail } => {
                 self.import_cancel = None;
-                self.import_progress = None;
                 self.request_sessions_refresh();
                 // 流水线可能在 DB 里新建课程（归类/收编），内存列表必须对齐
                 self.request_courses_refresh();
@@ -176,7 +168,6 @@ impl App {
             }
             Cancelled => {
                 self.import_cancel = None;
-                self.import_progress = None;
                 // 中断前可能已建课/入库，统计同样要对齐
                 self.request_courses_refresh();
                 self.push_entry(Entry::Info("[导入已中断]".into()));

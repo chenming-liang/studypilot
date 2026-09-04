@@ -162,8 +162,6 @@ pub struct App {
     inflight: Option<CancellationToken>,
     /// 导入任务取消令牌
     import_cancel: Option<CancellationToken>,
-    /// 导入进度（当前文件索引, 总数, 当前文件名, 当前阶段）——header 进度条（问题 1）
-    import_progress: Option<(usize, usize, String, String)>,
     /// 复习逐题生成的取消令牌（出题中等待态 Esc 退出时取消）
     review_gen: Option<CancellationToken>,
     /// 复习模式状态；Some 时按键路由给复习逻辑
@@ -463,7 +461,6 @@ impl App {
             review_gen: None,
             review_map: None,
             import_cancel: None,
-            import_progress: None,
             review: None,
             review_grading: false,
             followup_pending: None,
@@ -548,34 +545,8 @@ impl App {
             );
         }
         if self.import_cancel.is_some() {
-            // 导入进度（问题 1）：整体百分比 + 单文件内部阶段进度（解析→抽取→入库）
-            let (idx, total, name, phase) =
-                self.import_progress
-                    .clone()
-                    .unwrap_or((0, 1, String::new(), String::new()));
-            let total = total.max(1);
-            // 单文件内部推进：解析 25% → 抽取 60% → 入库 90%（阶段间平滑增长）
-            let intra = match phase.as_str() {
-                "解析" => 0.25,
-                "抽取概念" => 0.60,
-                "入库" => 0.90,
-                _ => 0.0,
-            };
-            let overall = (((idx.saturating_sub(1)) as f64 + intra) / total as f64).min(1.0);
-            let pct = (overall * 100.0) as usize;
-            let filled = (pct * 10) / 100;
-            let detail = if name.is_empty() {
-                format!("[{idx}/{total}]")
-            } else {
-                format!("{name} · {phase}")
-            };
-            let bar: String = format!(
-                "◌ 导入 {pct}% ▓{}░{} · {detail}",
-                "▓".repeat(filled),
-                "░".repeat(10 - filled),
-            );
-            // 状态栏保留语义色（用户反馈：不要全 muted）——导入=主蓝
-            return (bar, theme::PRIMARY);
+            // 顶部状态栏只留简洁语义色（进度条已移到对话栏，问题 1 对齐）
+            return ("◌ 导入中…".into(), theme::PRIMARY);
         }
         if self.is_inflight() {
             return ("◌ Thinking…".into(), theme::PRIMARY);
