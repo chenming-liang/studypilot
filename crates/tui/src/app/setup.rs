@@ -559,6 +559,9 @@ impl App {
         }
         s.test_passed = true;
         s.step = SetupStep::Done; // 成功直接进 Done，避免停死在 Test 步（回归）
+        // custom 追加语义：本次输入的模型 + 旧 provider 里未重复的模型合并（问题 13），
+        // preset 保持覆盖（多选是显式全量）
+        let is_custom = s.provider.as_deref() == Some("custom");
         // Apply 到当前 provider + 持久化 runtime config
         let cfg = self.build_pending_config();
         let name = cfg.name.clone();
@@ -567,11 +570,34 @@ impl App {
         }
         // 更新 all_providers 中的该 provider（追加而非覆盖，保留已配置的其它 provider）
         if let Some(p) = self.all_providers.iter_mut().find(|p| p.name == name) {
-            *p = cfg.clone();
+            if is_custom {
+                // 合并 models：新模型全保留，旧 provider 里未重复的补上（按 id 去重）
+                let old_models = std::mem::take(&mut p.models);
+                p.models = cfg.models.clone();
+                for m in old_models {
+                    if !p.models.iter().any(|x| x.id == m.id) {
+                        p.models.push(m);
+                    }
+                }
+                // 连接信息以本次输入为准（api_key 内存态，config 序列化剥离）
+                p.endpoint = cfg.endpoint.clone();
+                p.api_key = cfg.api_key.clone();
+                p.api_key_env = cfg.api_key_env.clone();
+                p.model = cfg.model.clone();
+                p.context_length = cfg.context_length;
+                p.thinking = cfg.thinking;
+            } else {
+                *p = cfg.clone();
+            }
         } else {
             self.all_providers.push(cfg.clone());
         }
-        self.provider_cfg = cfg.clone();
+        self.provider_cfg = self
+            .all_providers
+            .iter()
+            .find(|p| p.name == name)
+            .cloned()
+            .unwrap_or(cfg.clone());
         // 持久化凭证到 auth.toml（合并已有 provider 的 key，不覆盖）
         let key = cfg.api_key.clone().unwrap_or_default();
         let auth_path = agent_providers::AuthConfig::auth_path()
@@ -918,6 +944,92 @@ mod tests {
         assert!(!setup_test_all_passed(
             "✗ 连接失败（HTTP 401）: unauthorized"
         ));
+    }
+
+    /// 问题 13 回归：custom provider 再次配置是「追加」而非「覆盖」——
+    /// 第二次只输入新模型，旧模型必须保留（按 id 去重合并）。
+    #[test]
+    fn custom_rerun_appends_models_keeps_old() {
+        let mut app = test_app();
+        static HOME_LOCK2: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _g = HOME_LOCK2.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!(
+            "sp-auth-iso2-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let orig_home = std::env::var_os("HOME");
+        unsafe { std::env::set_var("HOME", &tmp) };
+        let ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let cfg_path = tmp.join(format!("config-{ns}.toml"));
+        app.config_file = cfg_path.clone();
+        let all_ok = |model: &str| {
+            format!("{model} ✓ API reachable · Authentication valid · Model available")
+        };
+        // 第一次：3 个模型
+        app.start_setup();
+        {
+            let s = app.setup.as_mut().unwrap();
+            s.provider = Some("custom".into());
+            s.custom_name = "paratera".into();
+            s.custom_base_url = "https://llmapi.paratera.com/v1".into();
+            s.custom_model = "Qwen3.7-Plus, GLM-5.3-Flash".into();
+            s.api_key = "sk".into();
+        }
+        app.on_setup_test_done(all_ok("Qwen3.7-Plus"));
+        assert_eq!(
+            app.all_providers
+                .iter()
+                .find(|p| p.name == "paratera")
+                .unwrap()
+                .models
+                .len(),
+            2
+        );
+        // 第二次：只输入 1 个新模型 → 应保留旧的 2 个 + 新 1 个 = 3
+        app.start_setup();
+        {
+            let s = app.setup.as_mut().unwrap();
+            s.provider = Some("custom".into());
+            s.custom_name = "paratera".into();
+            s.custom_base_url = "https://llmapi.paratera.com/v1".into();
+            s.custom_model = "DeepSeek-V4-Flash-0731".into();
+            s.api_key = "sk".into();
+        }
+        app.on_setup_test_done(all_ok("DeepSeek-V4-Flash-0731"));
+        let ids: Vec<&str> = app
+            .all_providers
+            .iter()
+            .find(|p| p.name == "paratera")
+            .unwrap()
+            .models
+            .iter()
+            .map(|m| m.id.as_str())
+            .collect();
+        assert_eq!(ids.len(), 3, "追加后应保留全部模型: {ids:?}");
+        assert!(ids.contains(&"Qwen3.7-Plus"));
+        assert!(ids.contains(&"GLM-5.3-Flash"));
+        assert!(ids.contains(&"DeepSeek-V4-Flash-0731"));
+        // 重读 config.toml 也保留
+        let reloaded = agent_providers::Config::load(&cfg_path).unwrap();
+        let rp = reloaded
+            .providers
+            .iter()
+            .find(|p| p.name == "paratera")
+            .unwrap();
+        assert_eq!(rp.models.len(), 3, "config 重读也应保留 3 个模型");
+        // 恢复 HOME + 清理
+        match orig_home {
+            Some(v) => unsafe { std::env::set_var("HOME", v) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// 问题 13a 端到端：首次 Setup 输入 3 个 custom 模型，成功保存后
