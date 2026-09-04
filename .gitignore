@@ -12,3 +12,4 @@ data/
 *.db-journal
 *.db-wal
 *.db-shm
+_personal/
