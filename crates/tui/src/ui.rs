@@ -1488,12 +1488,12 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
                 for (i, m) in opts.iter().enumerate() {
                     let sel = i == s.cursor;
                     let checked = s.selected_models.contains(m);
-                    let mark = if checked {
-                        if sel { "☑ " } else { "✓ " }
-                    } else if sel {
-                        "▸ "
-                    } else {
-                        "  "
+                    // 单一勾标记：勾 = 已选；▸ = 光标所在行（与勾正交，不再混用 ☑/✓ 两种勾）
+                    let mark = match (sel, checked) {
+                        (true, true) => "▸✓ ",
+                        (false, true) => "  ✓ ",
+                        (true, false) => "▸   ",
+                        (false, false) => "    ",
                     };
                     items.push(ListItem::new(Line::from(Span::styled(
                         format!("{mark}{m}"),
