@@ -837,6 +837,55 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// 预设（DeepSeek）多选：空格 toggle 多个模型 → cfg.models 全量保留（非单选）。
+    #[test]
+    fn preset_multi_model_selection_keeps_all_in_config() {
+        let mut app = test_app();
+        app.start_setup();
+        // Provider 步：选 deepseek（第一个预设）
+        {
+            let opts = app.setup.as_ref().unwrap().provider_options();
+            app.setup.as_mut().unwrap().cursor = opts
+                .iter()
+                .position(|(id, _)| *id == "deepseek")
+                .unwrap_or(0);
+        }
+        enter(&mut app); // → Model 步
+        assert_eq!(app.setup.as_ref().unwrap().step, SetupStep::Model);
+        let opts = app.setup.as_ref().unwrap().model_options();
+        assert!(opts.len() >= 2, "deepseek 预设应有多个模型");
+        let space = || {
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char(' '),
+                crossterm::event::KeyModifiers::NONE,
+            )
+        };
+        // 空格逐个选中两个模型（光标 0 与 1）
+        {
+            let s = app.setup.as_mut().unwrap();
+            s.cursor = 0;
+        }
+        app.handle_setup_key(space());
+        {
+            let s = app.setup.as_mut().unwrap();
+            s.cursor = 1;
+        }
+        app.handle_setup_key(space());
+        {
+            let s = app.setup.as_ref().unwrap();
+            assert_eq!(s.selected_models.len(), 2, "两个模型都应选中");
+        }
+        enter(&mut app); // → Credentials
+        // 数据层：cfg.models 必须保留两个选中模型
+        let cfg = app.build_pending_config();
+        let ids: Vec<&str> = cfg.models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids.len(), 2, "保存的 models 应为 2 个独立项");
+        assert!(ids.contains(&"deepseek-reasoner"), "reasoner 保留");
+        assert!(ids.contains(&"deepseek-chat"), "chat 保留");
+        // 活动模型 = 第一个选中（Test 用其连接）
+        assert_eq!(cfg.model, "deepseek-reasoner");
+    }
+
     /// Esc 逐级回退 Custom 输入步。
     #[test]
     fn custom_esc_back_walks_steps() {

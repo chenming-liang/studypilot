@@ -1558,7 +1558,7 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
                 format!("  Provider: {provider}"),
                 Style::new().fg(Color::Gray),
             ))));
-            // 模型逐行显示（custom 多模型逗号拆分）
+            // 模型逐行显示：custom 逗号拆分；preset 显示全部 selected_models（多选可见）
             let models: Vec<String> = if s.provider.as_deref() == Some("custom") {
                 let list = s.custom_model_list();
                 if list.is_empty() {
@@ -1567,7 +1567,12 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
                     list
                 }
             } else {
-                vec![s.model.clone().unwrap_or_else(|| "-".into())]
+                let sel = &s.selected_models;
+                if sel.is_empty() {
+                    vec![s.model.clone().unwrap_or_else(|| "-".into())]
+                } else {
+                    sel.clone()
+                }
             };
             for m in models {
                 items.push(ListItem::new(Line::from(Span::styled(
