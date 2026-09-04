@@ -339,7 +339,8 @@ impl App {
             )));
             return;
         }
-        let (provider, provider_cfg) = self.role_client(agent_providers::ModelRole::Fast);
+        // 正式 Review 出题（含逐题生成）→ Balanced 角色模型
+        let (provider, provider_cfg) = self.role_client(agent_providers::ModelRole::Balanced);
         let store = Arc::clone(&self.store);
         let tx = self.tx.clone();
         // 出题期间挂 inflight：header 显示进行中，Ctrl+C 可取消

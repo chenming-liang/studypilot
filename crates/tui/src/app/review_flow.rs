@@ -413,7 +413,7 @@ impl App {
     /// 失败静默（小结卡已给出足够信息，不让推荐成为新的失败点）。
     fn spawn_review_advice(&mut self, rs: &review::ReviewState) {
         let store = Arc::clone(&self.store);
-        let (provider, provider_cfg) = self.role_client(agent_providers::ModelRole::Reasoning);
+        let (provider, provider_cfg) = self.role_client(agent_providers::ModelRole::Balanced);
         let tx = self.tx.clone();
         let course = self.course.clone();
         let ids: Vec<i64> = rs.questions.iter().filter_map(|q| q.concept_id).collect();
@@ -697,7 +697,7 @@ impl App {
         }
         self.review_gen = Some(cancel.clone());
         let store = Arc::clone(&self.store);
-        let (provider, provider_cfg) = self.role_client(agent_providers::ModelRole::Fast);
+        let (provider, provider_cfg) = self.role_client(agent_providers::ModelRole::Balanced);
         let tx = self.tx.clone();
         tokio::spawn(review::generate_review_question(
             store,
