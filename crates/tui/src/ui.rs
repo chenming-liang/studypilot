@@ -602,7 +602,7 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &mut App) {
             Style::new().fg(theme::USER).add_modifier(Modifier::BOLD),
         ),
         Span::styled("  ·  ", Style::new().fg(theme::MUTED)),
-        Span::styled(type_str, Style::new().fg(theme::SECONDARY)),
+        Span::styled(type_str, Style::new().fg(theme::MUTED)),
     ];
     // ③ 题干
     let mut body: Vec<Line<'static>> = Vec::new();
@@ -929,7 +929,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         Span::raw(" ".repeat(pad)),
         Span::styled(
             format!("{} │ ", app.provider_cfg.model),
-            Style::new().fg(theme::SECONDARY_DIM),
+            Style::new().fg(theme::MUTED),
         ),
         Span::styled(
             format!("¥{:.2}/{:.0} │ ", app.total_cost, app.max_cost),
@@ -1033,7 +1033,7 @@ fn draw_chat(f: &mut Frame, area: Rect, app: &mut App) {
         if app.is_inflight() {
             let spinner = spinner_char(app.tick);
             lines.push(Line::from(vec![
-                Span::styled(format!("{spinner} "), Style::new().fg(theme::USER)),
+                Span::styled(format!("{spinner} "), Style::new().fg(theme::MUTED)),
                 Span::styled("思考中…", Style::new().fg(DIM)),
             ]));
             text_lines.push(format!("{spinner} 思考中…"));
@@ -1183,16 +1183,17 @@ fn append_entry_lines(entry: &Entry, width: usize, out: &mut Vec<Line<'static>>)
             out.push(Line::default());
         }
         Entry::Tool { text, ok } => {
-            // 工具活动：◌ 蓝紫进行中 / ✓ 绿 / ✗ 红
+            // 工具活动（颜色重构）：⟳ muted 蓝灰 / ✓ 绿 / ✗ 红——状态用语义色，
+            // 正文回默认色（不再整行染蓝/绿/红）
             let (mark, color) = match ok {
-                None => ("◌ ", theme::PRIMARY),
+                None => ("⟳ ", theme::MUTED),
                 Some(true) => ("✓ ", theme::SUCCESS),
-                Some(false) => ("✗ ", ERROR),
+                Some(false) => ("✗ ", theme::ERROR),
             };
-            out.push(Line::from(Span::styled(
-                format!("  {mark}{text}"),
-                Style::new().fg(color),
-            )));
+            out.push(Line::from(vec![
+                Span::styled(format!("  {mark}"), Style::new().fg(color)),
+                Span::styled(text.to_owned(), Style::new().fg(theme::DEFAULT)),
+            ]));
         }
         Entry::Citation(text) => {
             // RAG 品牌色：引用来源行整体 Reference 青（同属 AI 块色条）
@@ -1447,7 +1448,7 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
                     if sel {
                         Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
                     } else {
-                        Style::new().fg(Color::Gray)
+                        Style::new().fg(theme::MUTED)
                     },
                 ))));
             }
@@ -1487,7 +1488,7 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
                         if sel {
                             Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
                         } else {
-                            Style::new().fg(Color::Gray)
+                            Style::new().fg(theme::MUTED)
                         },
                     ))));
                 }
@@ -1512,7 +1513,7 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
             for seg in setup_input_lines(&s.custom_buf, width) {
                 items.push(ListItem::new(Line::from(Span::styled(
                     seg,
-                    Style::new().fg(Color::Gray),
+                    Style::new().fg(theme::MUTED),
                 ))));
             }
             let hint = if s.step == SetupStep::CustomModel {
@@ -1530,7 +1531,7 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
             let masked: String = s.secret_buf.chars().map(|_| '•').collect();
             items.push(ListItem::new(Line::from(Span::styled(
                 format!("  {masked}▍"),
-                Style::new().fg(Color::Gray),
+                Style::new().fg(theme::MUTED),
             ))));
             if s.secret_buf.is_empty() && !s.api_key.is_empty() {
                 let n = s.api_key.chars().count();
@@ -1557,7 +1558,7 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
             };
             items.push(ListItem::new(Line::from(Span::styled(
                 format!("  Provider: {provider}"),
-                Style::new().fg(Color::Gray),
+                Style::new().fg(theme::MUTED),
             ))));
             // 模型逐行显示：custom 逗号拆分；preset 显示全部 selected_models（多选可见）
             let models: Vec<String> = if s.provider.as_deref() == Some("custom") {
@@ -1578,7 +1579,7 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
             for m in models {
                 items.push(ListItem::new(Line::from(Span::styled(
                     format!("  Model: {m}"),
-                    Style::new().fg(Color::Gray),
+                    Style::new().fg(theme::MUTED),
                 ))));
             }
             items.push(ListItem::new(Line::default()));
@@ -1772,7 +1773,7 @@ fn draw_command_palette(f: &mut Frame, app: &mut App) {
                 let style = if is_sel {
                     Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
                 } else {
-                    Style::new().fg(Color::Gray)
+                    Style::new().fg(theme::MUTED)
                 };
                 ListItem::new(Span::styled(label, style))
             }
@@ -1891,7 +1892,7 @@ fn draw_review_map_picker(f: &mut Frame, p: &crate::palette::ReviewMapPicker) {
         .enumerate()
         .map(|(i, row)| {
             let sel = i == p.selected;
-            let style = if sel {
+            let selected_style = if sel {
                 Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
             } else {
                 Style::new()
@@ -1902,25 +1903,44 @@ fn draw_review_map_picker(f: &mut Frame, p: &crate::palette::ReviewMapPicker) {
                     counts: (mastered, weak, unreviewed),
                     ..
                 } => {
-                    let mut agg: Vec<String> = Vec::new();
+                    // Section 名称恒用 Primary 蓝（颜色重构：结构=主视觉蓝，不随选中才变色）
+                    let title_style = if sel {
+                        Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::new().fg(theme::PRIMARY)
+                    };
+                    let mut agg_spans: Vec<Span<'static>> = Vec::new();
                     if *mastered > 0 {
-                        agg.push(format!("{mastered} ✓"));
+                        agg_spans.push(Span::styled(
+                            format!("{mastered} ✓"),
+                            Style::new().fg(theme::SUCCESS),
+                        ));
                     }
                     if *weak > 0 {
-                        agg.push(format!("{weak} △"));
+                        agg_spans.push(Span::styled(
+                            format!("{weak} △"),
+                            Style::new().fg(theme::WARNING),
+                        ));
                     }
                     if *unreviewed > 0 {
-                        agg.push(format!("{unreviewed} ○"));
+                        agg_spans.push(Span::styled(
+                            format!("{unreviewed} ○"),
+                            Style::new().fg(theme::MUTED),
+                        ));
                     }
-                    let agg = if agg.is_empty() {
-                        String::new()
-                    } else {
-                        format!("  {}", agg.join(" · "))
-                    };
-                    ListItem::new(Line::from(vec![
-                        Span::styled(if sel { "▾ " } else { "▸ " }, style),
-                        Span::styled(format!("{title}{agg}"), style),
-                    ]))
+                    let mut spans =
+                        vec![Span::styled(if sel { "▾ " } else { "▸ " }, selected_style)];
+                    spans.push(Span::styled(title.clone(), title_style));
+                    if !agg_spans.is_empty() {
+                        spans.push(Span::styled("  ", Style::new().fg(theme::MUTED)));
+                        for (k, span) in agg_spans.into_iter().enumerate() {
+                            if k > 0 {
+                                spans.push(Span::styled(" · ", Style::new().fg(theme::MUTED)));
+                            }
+                            spans.push(span);
+                        }
+                    }
+                    ListItem::new(Line::from(spans))
                 }
                 MapRow::Concept {
                     name,
@@ -1933,9 +1953,17 @@ fn draw_review_map_picker(f: &mut Frame, p: &crate::palette::ReviewMapPicker) {
                     } else {
                         String::new()
                     };
+                    // 状态 mark 语义色：✓绿 / △黄 / ○灰（颜色重构）
+                    let mark_color = match *mark {
+                        '✓' => theme::SUCCESS,
+                        '△' => theme::WARNING,
+                        '○' => theme::MUTED,
+                        _ => theme::DEFAULT,
+                    };
                     ListItem::new(Line::from(vec![
-                        Span::styled(if sel { "  ▸ " } else { "    " }, style),
-                        Span::styled(format!("{mark} {name}{m}"), style),
+                        Span::styled(if sel { "  ▸ " } else { "    " }, selected_style),
+                        Span::styled(mark.to_string(), Style::new().fg(mark_color)),
+                        Span::styled(format!(" {name}{m}"), selected_style),
                     ]))
                 }
             }
@@ -2109,7 +2137,7 @@ fn draw_session_browser(f: &mut Frame, app: &App) {
                 let t = m.title.as_deref().unwrap_or("(未命名)");
                 body.push(Line::from(Span::styled(
                     format!("  #{id} {t} · {course}", id = m.id),
-                    Style::new().fg(Color::Gray),
+                    Style::new().fg(theme::MUTED),
                 )));
             }
             let total = browser.results.len();
@@ -2143,7 +2171,7 @@ fn draw_session_browser(f: &mut Frame, app: &App) {
                 } else if is_current {
                     Style::new().fg(ACCENT)
                 } else {
-                    Style::new().fg(Color::Gray)
+                    Style::new().fg(theme::MUTED)
                 };
                 let cur_mark = if is_current { "（当前）" } else { "" };
                 body.push(Line::from(Span::styled(
@@ -2267,7 +2295,7 @@ fn draw_note_browser(f: &mut Frame, app: &mut App) {
                     .unwrap_or_else(|| "all".into());
                 body.push(Line::from(Span::styled(
                     format!("  {} ({})", n.title, course),
-                    Style::new().fg(Color::Gray),
+                    Style::new().fg(theme::MUTED),
                 )));
             }
             " 输入过滤 · Enter 进入选择 · Esc 关闭 ".into()
@@ -2298,7 +2326,7 @@ fn draw_note_browser(f: &mut Frame, app: &mut App) {
                 } else if browser.selected.contains(&n.id) {
                     Style::new().fg(ACCENT)
                 } else {
-                    Style::new().fg(Color::Gray)
+                    Style::new().fg(theme::MUTED)
                 };
                 body.push(Line::from(Span::styled(
                     format!("{mark}{check}{}", n.title),
@@ -2324,7 +2352,7 @@ fn draw_note_browser(f: &mut Frame, app: &mut App) {
                 let style = if i == browser.pick_cursor {
                     Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
                 } else {
-                    Style::new().fg(Color::Gray)
+                    Style::new().fg(theme::MUTED)
                 };
                 body.push(Line::from(Span::styled(format!("{mark}{name}"), style)));
             }
@@ -2370,7 +2398,7 @@ fn draw_note_browser(f: &mut Frame, app: &mut App) {
             for t in titles.iter().take(8) {
                 body.push(Line::from(Span::styled(
                     format!("  · {t}"),
-                    Style::new().fg(Color::Gray),
+                    Style::new().fg(theme::MUTED),
                 )));
             }
             if n > 8 {

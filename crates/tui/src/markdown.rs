@@ -7,7 +7,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::theme;
-// Markdown 语义：标题=Secondary 紫（层级渐淡）、正文=FG 浅灰、
+// Markdown 语义：标题=Primary 蓝（层级渐淡）、正文=终端默认前景、
 // 行内代码=暖白、[n] 引用=Reference 青（RAG 品牌色）
 const HEAD: Color = theme::SECONDARY;
 const HEAD2: Color = theme::SECONDARY_DIM;

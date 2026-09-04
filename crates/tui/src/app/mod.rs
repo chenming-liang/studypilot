@@ -541,14 +541,14 @@ impl App {
             let cur = (rs.current + 1).min(rs.planned);
             return (
                 format!("◌ Review {cur}/{}{grading}{generating}", rs.planned),
-                theme::USER,
+                theme::MUTED,
             );
         }
         if self.import_cancel.is_some() {
-            return ("◌ Importing…".into(), theme::USER);
+            return ("◌ Importing…".into(), theme::MUTED);
         }
         if self.is_inflight() {
-            return ("◌ Thinking…".into(), theme::USER);
+            return ("◌ Thinking…".into(), theme::MUTED);
         }
         ("● Ready".into(), theme::SUCCESS)
     }
