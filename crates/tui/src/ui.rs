@@ -2594,7 +2594,7 @@ fn draw_model_picker(
                     format!("{role_label:<12}"),
                     style.add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(bound, Style::new().fg(theme::MUTED)),
+                Span::styled(bound, style),
             ])));
             continue;
         }
