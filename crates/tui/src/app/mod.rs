@@ -526,7 +526,7 @@ impl App {
     /// header 状态标签：与按键路由同源的覆盖层状态推导（复习 > 导入 > 请求中 > 选择 > 就绪）。
     /// 让用户随时知道"我现在在哪"，替代隐含状态机。
     pub(crate) fn status_label(&self) -> (String, ratatui::style::Color) {
-        use crate::theme;
+        use crate::theme::{StatusKind, status_color};
         if let Some(rs) = &self.review {
             let grading = if self.review_grading {
                 " · Grading…"
@@ -541,17 +541,17 @@ impl App {
             let cur = (rs.current + 1).min(rs.planned);
             return (
                 format!("◌ Review {cur}/{}{grading}{generating}", rs.planned),
-                theme::PRIMARY,
+                status_color(StatusKind::Processing),
             );
         }
         if self.import_cancel.is_some() {
             // 顶部状态栏只留简洁语义色（进度条已移到对话栏，问题 1 对齐）
-            return ("◌ 导入中…".into(), theme::PRIMARY);
+            return ("◌ 导入中…".into(), status_color(StatusKind::Processing));
         }
         if self.is_inflight() {
-            return ("◌ Thinking…".into(), theme::PRIMARY);
+            return ("◌ Thinking…".into(), status_color(StatusKind::Processing));
         }
-        ("● Ready".into(), theme::SUCCESS)
+        ("● Ready".into(), status_color(StatusKind::Success))
     }
 
     pub(crate) fn push_entry(&mut self, e: Entry) {
