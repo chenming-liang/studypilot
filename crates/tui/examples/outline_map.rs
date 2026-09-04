@@ -12,7 +12,12 @@ async fn main() -> anyhow::Result<()> {
     let course_name = std::env::args().nth(1).unwrap_or_else(|| "rust".to_owned());
 
     let store = Arc::new(Store::open("data/mynotes.db")?);
-    let cfg = Config::load(std::path::Path::new("config.toml"))?;
+    let cfg_path = agent_providers::Config::runtime_path()?;
+    let mut cfg = Config::load(&cfg_path)?;
+    // 凭证分离：加载 auth.toml 合并进内存（与 main.rs 启动逻辑一致）
+    let auth_path = agent_providers::AuthConfig::auth_path()?;
+    let auth = agent_providers::AuthConfig::load(&auth_path).unwrap_or_default();
+    auth.apply_to(&mut cfg);
     let pc = cfg.default_provider()?.clone();
     let provider = Arc::new(OpenAiClient::new(pc.clone())?);
 

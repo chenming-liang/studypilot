@@ -439,11 +439,11 @@ pub async fn build_review_map(
             last_problem = Some("输出与概念清单不匹配（空）".into());
             continue;
         }
-        // 结构校验（docs §4 铁律 4/6 + 覆盖完整性）
+        // 结构兜底（docs §4 铁律 4/6 的下限部分）：只拦「畸形」不拦「大」——
+        // 章节数/每章概念数上限是建议值（LLM 按 prompt 自行把握），代码不设硬上限；
+        // 命中下限问题仅警告并接受，不拒绝生成（LLM 组织合理即可用）。
         if let Some(problems) = validate_map_structure(&sections, concepts.len()) {
-            tracing::warn!(course = %course_name, attempt, "大纲结构校验不通过: {problems}");
-            last_problem = Some(problems);
-            continue;
+            tracing::warn!(course = %course_name, attempt, "大纲结构提示（已接受）: {problems}");
         }
         return Ok(ReviewMap {
             course: course_name,
@@ -455,33 +455,28 @@ pub async fn build_review_map(
         });
     }
     Err(format!(
-        "大纲生成失败：两次均未通过结构校验（{last}）",
+        "大纲生成失败：输出与概念清单不匹配（{last}）",
         last = last_problem.unwrap_or_default()
     ))
 }
 
-/// 大纲结构校验（纯函数，可单测）：
-/// - 章节数：概念多时 3~8（概念总量 ≥100 可更多，此处只拦下限）——少于 2 章视为组织失败
-/// - 每章概念数 3~15（概念总量很少时允许个别章节少于 3）
-/// - 覆盖完整性：LLM 应覆盖全部概念（unresolved 由 organize 计，这里额外拦「章节过少/悬殊」）
+/// 大纲结构兜底校验（纯函数，可单测）：
+/// - 章节数下限：少于 2 章视为组织失败（异常，不是大而是缺）
+/// - 每章概念数下限：概念总量很少（≤12）时允许小章；否则单章 <3 视为畸形
+/// - 上限（章节 ≤8、每章 ≤15）**不设硬性限制**——那是 prompt 里的建议值，
+///   由 LLM 按概念总量自行把握（docs §4 铁律 4/6：「概念总量大时可相应增多，
+///   不设硬性上限」）；代码只兜底「畸形」，不拦「大」。
 ///
-/// 返回问题列表；None = 通过。
+/// 返回问题列表；None = 通过。命中问题仅提示，调用方仍接受生成结果。
 fn validate_map_structure(sections: &[OutlineSection], total_concepts: usize) -> Option<String> {
     let mut problems: Vec<String> = Vec::new();
     if sections.len() < 2 {
         problems.push(format!("章节过少（{} 章）", sections.len()));
     }
-    if sections.len() > 8 {
-        problems.push(format!("章节过多（{} 章）", sections.len()));
-    }
     let total = total_concepts.max(1);
-    // 章节大小悬殊：>2 章时单章 ≥3（总量很少除外）；单章 >15 需拆
     let small_ok = total <= 12; // 概念很少时允许 1~2 概念的小章
     for s in sections {
         let n = s.nodes.len();
-        if n > 15 {
-            problems.push(format!("「{}」章节概念过多（{} 个，应拆）", s.title, n));
-        }
         if !small_ok && n < 3 {
             problems.push(format!("「{}」章节概念过少（{} 个）", s.title, n));
         }
@@ -835,23 +830,18 @@ mod tests {
         }
     }
 
-    /// 结构校验：章节数下限、每章 3~15、概念少时放宽小章。
+    /// 结构兜底：只拦「畸形」（章节 <2、总量多时出现 1~2 概念小章），不拦「大」。
     #[test]
-    fn validate_map_structure_enforces_balance() {
+    fn validate_map_structure_enforces_floor_only() {
         // 合格：3 章、每章 4 个
         let ok = vec![section("a", 4), section("b", 4), section("c", 4)];
         assert!(validate_map_structure(&ok, 12).is_none());
 
-        // 单章超 15 → 报错
-        let big = vec![section("a", 16), section("b", 4), section("c", 4)];
-        assert!(
-            validate_map_structure(&big, 24)
-                .unwrap()
-                .contains("概念过多"),
-            "大章节应被拦截"
-        );
+        // 大章节不拦——上限是 prompt 建议值，代码不设硬性限制（文档 §4 铁律 6）
+        let big = vec![section("a", 40), section("b", 4)];
+        assert!(validate_map_structure(&big, 44).is_none(), "大章节应被接受");
 
-        // 章节少于 2 → 报错
+        // 章节少于 2 → 畸形，提示
         let lone = vec![section("a", 10)];
         assert!(validate_map_structure(&lone, 10).is_some());
 
@@ -859,7 +849,7 @@ mod tests {
         let small_ok = vec![section("a", 2), section("b", 2)];
         assert!(validate_map_structure(&small_ok, 4).is_none());
 
-        // 概念总量多但有小章 → 报错
+        // 概念总量多但有小章 → 畸形，提示
         let small_bad = vec![section("a", 2), section("b", 20)];
         assert!(
             validate_map_structure(&small_bad, 22)
