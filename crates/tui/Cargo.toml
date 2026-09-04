@@ -3,7 +3,7 @@ name = "tui"
 version.workspace = true
 edition.workspace = true
 
-# 产品二进制名：studyplot（开发仍可 `cargo run -p tui`）
+# 产品二进制名：studypilot（开发仍可 `cargo run -p tui`）
 [[bin]]
 name = "studypilot"
 path = "src/main.rs"

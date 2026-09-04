@@ -860,7 +860,6 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &mut App) {
 
 /// 右上角临时通知：复制成功/失败等一次性反馈，2.5s（错误 4s）自动消失。
 fn draw_toast(f: &mut Frame, app: &App) {
-    use std::time::Instant;
     let Some(toast) = &app.toast else { return };
     let area = f.area();
     let msg_w = display_width(&toast.message) as u16;
@@ -871,10 +870,6 @@ fn draw_toast(f: &mut Frame, app: &App) {
     let pop = Rect::new(x, y, width, height);
     f.render_widget(ratatui::widgets::Clear, pop);
     let color = if toast.error { ERROR } else { SUCCESS };
-    let remaining = toast
-        .expires_at
-        .saturating_duration_since(Instant::now())
-        .as_secs();
     let title = if toast.error {
         " ⚠ 复制失败 "
     } else {
@@ -893,8 +888,6 @@ fn draw_toast(f: &mut Frame, app: &App) {
         ),
         pop,
     );
-    // 剩余秒数提示（可选调试信息，保持简洁不渲染）
-    let _ = remaining;
 }
 
 fn draw_header(f: &mut Frame, area: Rect, app: &App) {
@@ -2268,7 +2261,6 @@ fn draw_note_browser(f: &mut Frame, app: &mut App) {
     let pop = Rect::new(x, y, width, height);
     f.render_widget(ratatui::widgets::Clear, pop);
 
-    let inner_w = width.saturating_sub(4) as usize;
     let mut title = format!(" 浏览笔记 · 范围: {} ", browser.scope_label);
     let mut body: Vec<Line<'static>> = Vec::new();
     let footer: String = match browser.mode {
@@ -2423,7 +2415,6 @@ fn draw_note_browser(f: &mut Frame, app: &mut App) {
             }
         }
     };
-    let _ = inner_w;
     f.render_widget(
         Paragraph::new(body).block(
             Block::new()

@@ -173,7 +173,7 @@ crates/
 
 ## 技术栈
 
-Rust · ratatui · crossterm · rusqlite (FTS5) · jieba-rs · reqwest · tokio · walkdir · zip · quick-xml · pymupdf
+Rust · ratatui · crossterm · rusqlite (FTS5) · jieba-rs · reqwest · tokio · walkdir · zip · regex · pymupdf
 
 ## License
 

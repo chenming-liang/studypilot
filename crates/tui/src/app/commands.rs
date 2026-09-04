@@ -2076,13 +2076,6 @@ mod course_context_tests {
         settle_full(&mut app).await;
         let store = app.store.clone();
         let sessions = store.list_sessions().unwrap();
-        eprintln!(
-            "INFO: sessions={:?}",
-            sessions
-                .iter()
-                .map(|s| (s.id, s.title.clone(), s.course_id))
-                .collect::<Vec<_>>()
-        );
         assert!(
             sessions.iter().any(|s| s.course_id == Some(2)),
             "新会话应归属 pytorch(course_id=2)"

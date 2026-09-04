@@ -282,27 +282,25 @@ impl App {
                         true
                     }
                     KeyCode::Enter => {
-                        let (value, next) = {
+                        let next = {
                             let s = self.setup.as_mut().unwrap();
                             let value = std::mem::take(&mut s.custom_buf);
-                            let next = match s.step {
+                            match s.step {
                                 SetupStep::CustomName => {
-                                    s.custom_name = value.clone();
+                                    s.custom_name = value;
                                     SetupStep::CustomBaseUrl
                                 }
                                 SetupStep::CustomBaseUrl => {
-                                    s.custom_base_url = value.clone();
+                                    s.custom_base_url = value;
                                     SetupStep::CustomModel
                                 }
                                 SetupStep::CustomModel => {
-                                    s.custom_model = value.clone();
+                                    s.custom_model = value;
                                     SetupStep::Credentials
                                 }
                                 _ => unreachable!(),
-                            };
-                            (value, next)
+                            }
                         };
-                        let _ = value;
                         self.setup.as_mut().unwrap().step = next;
                         true
                     }
