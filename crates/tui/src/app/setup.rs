@@ -421,22 +421,21 @@ impl App {
         // Apply 到当前 provider + 持久化 runtime config
         let cfg = self.build_pending_config();
         let name = cfg.name.clone();
-        let mut cfg_saved = cfg.clone();
-        cfg_saved.ensure_models();
         if let Ok(client) = agent_providers::OpenAiClient::new(cfg.clone()) {
             self.provider = Arc::new(client);
         }
-        // 更新 all_providers 中的该 provider
+        // 更新 all_providers 中的该 provider（追加而非覆盖，保留已配置的其它 provider）
         if let Some(p) = self.all_providers.iter_mut().find(|p| p.name == name) {
             *p = cfg.clone();
-        }
-        if !self.all_providers.iter().any(|p| p.name == name) {
+        } else {
             self.all_providers.push(cfg.clone());
         }
         self.provider_cfg = cfg.clone();
-        // 持久化凭证到 auth.toml（config.toml 不再含 key）
+        // 持久化凭证到 auth.toml（合并已有 provider 的 key，不覆盖）
         let key = cfg.api_key.clone().unwrap_or_default();
-        let mut auth = agent_providers::AuthConfig::default();
+        let auth_path = agent_providers::AuthConfig::auth_path()
+            .unwrap_or_else(|_| std::path::PathBuf::from("auth.toml"));
+        let mut auth = agent_providers::AuthConfig::load(&auth_path).unwrap_or_default();
         auth.providers.insert(
             name.clone(),
             agent_providers::ProviderAuth {
@@ -444,20 +443,15 @@ impl App {
                 api_key_env: None,
             },
         );
-        match agent_providers::AuthConfig::auth_path() {
-            Ok(auth_path) => {
-                if let Err(e) = auth.save(&auth_path) {
-                    tracing::warn!("保存凭证失败: {e}");
-                }
-            }
-            Err(e) => tracing::warn!("获取 auth 路径失败: {e}"),
+        if let Err(e) = auth.save(&auth_path) {
+            tracing::warn!("保存凭证失败: {e}");
         }
         // 持久化 Provider/Model 定义（api_key 已由 serde skip_serializing 剥离，不落盘）
         let persist = agent_providers::Config {
             default_provider: name.clone(),
             default_model: format!("{}/{}", name, cfg.model),
             max_cost: self.max_cost,
-            providers: vec![cfg_saved],
+            providers: self.all_providers.clone(),
         };
         let path = self.config_file.clone();
         if let Err(e) = persist.save(&path) {

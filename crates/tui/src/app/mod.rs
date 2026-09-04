@@ -632,9 +632,9 @@ impl App {
 
     // ── Home / Course / Session 顶层导航 ──
 
-    /// Home 视图可选条数：Continue（有可继续 session 时）+ 课程数 + [+ New Course]。
+    /// Home 视图可选条数：AI 接入入口（恒占位 0）+ Continue（有可继续 session 时）+ 课程数 + [+ New Course]。
     pub(crate) fn home_cursor_count(&self) -> usize {
-        let setup = if self.ai_needs_setup() { 1 } else { 0 };
+        let setup = 1; // AI 入口恒在 Home 首项（未配置=Set up AI / 已配置=AI Models）
         if self.courses.is_empty() {
             return setup + 1; // [+ New Course]（Welcome 态）
         }
@@ -724,7 +724,8 @@ impl App {
     }
 
     /// 让 Home 光标跟随权威的当前课程（单一事实源：`app.course` → `home_cursor` 派生）。
-    /// Home 列表布局 = [Continue?] + courses + [+ New Course]；Continue 存在时课程从索引 1 起。
+    /// Home 列表布局 = [AI 入口] + [Continue?] + courses + [+ New Course]；课程从索引 1 起
+    /// （Continue 存在时从 2 起）。
     /// 课程创建/切换/删除/回退到 Home 后都必须调用，否则 Enter 会进旧课程（state 脱节）。
     pub(crate) fn sync_home_cursor_to_course(&mut self) {
         if self.courses.is_empty() {
@@ -732,7 +733,7 @@ impl App {
             return;
         }
         let idx = self.courses.iter().position(|(_, n)| *n == self.course);
-        let offset = if self.continue_session_id().is_some() {
+        let offset = 1 + if self.continue_session_id().is_some() {
             1
         } else {
             0
@@ -788,7 +789,7 @@ impl App {
     }
 
     /// Home 视图 Enter：光标项动作。
-    /// 光标布局 = [Continue?] + courses... + [+ New Course]；无 Continue 时首项即第一门课。
+    /// 光标布局 = [AI 入口] + [Continue?] + courses... + [+ New Course]；无 Continue 时首课程紧跟 AI。
     pub(crate) fn home_activate(&mut self) {
         let last = self.home_cursor_count().saturating_sub(1);
         if self.home_cursor == last {
@@ -796,9 +797,9 @@ impl App {
             self.open_course_creation_wizard();
             return;
         }
-        // AI 未配置时 Home 首项是 [Set up AI]
-        let setup_offset = if self.ai_needs_setup() { 1 } else { 0 };
-        if self.home_cursor == 0 && setup_offset == 1 {
+        // Home 首项恒为 AI 接入入口（未配置=Set up AI 引导；已配置=继续接入/管理模型）
+        let setup_offset = 1;
+        if self.home_cursor == 0 {
             self.start_setup();
             return;
         }
@@ -820,9 +821,9 @@ impl App {
         }
     }
 
-    /// Home 光标当前指向的课程名（None = 指向 Setup/Continue/+ New Course）。
+    /// Home 光标当前指向的课程名（None = 指向 AI 入口/Continue/+ New Course）。
     fn home_cursor_course(&self) -> Option<String> {
-        let setup = if self.ai_needs_setup() { 1 } else { 0 };
+        let setup = 1; // AI 入口恒占位 0
         let offset = setup
             + if self.continue_session_id().is_some() {
                 1
@@ -830,7 +831,7 @@ impl App {
                 0
             };
         if self.home_cursor < offset {
-            return None; // Setup / Continue 行
+            return None; // AI / Continue 行
         }
         let i = self.home_cursor - offset;
         self.courses.get(i).map(|(_, n)| n.clone())

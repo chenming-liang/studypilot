@@ -159,15 +159,27 @@ fn home_lines(app: &App) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = vec![Line::default(), Line::default(), Line::default()];
     // 顶部留白（垂直重心偏上，不用真居中）
 
-    // AI 待配置引导（文档 §二/§九：无有效配置时 Set up AI 为首个可聚焦项）。
-    // 索引语义与 home_cursor_count/home_activate 一致：Setup 恒占位 0，其余内容顺延。
-    let setup_offset = if app.ai_needs_setup() { 1 } else { 0 };
-    if app.ai_needs_setup() {
+    // AI 接入入口（恒在 Home 首项）：未配置 = Set up AI 引导；已配置 = 继续接入/管理模型。
+    // 索引语义与 home_cursor_count/home_activate 一致：AI 恒占位 0，其余内容顺延。
+    let setup_offset = 1;
+    let needs_setup = app.ai_needs_setup();
+    {
         let selected = app.home_cursor == 0;
+        let (title, hint) = if needs_setup {
+            (
+                "Set up AI — choose a provider and model to start",
+                "   Enter to configure · then start learning",
+            )
+        } else {
+            (
+                "AI Models — add or switch provider/model",
+                "   Enter to manage · switch or add a provider",
+            )
+        };
         lines.push(Line::from(vec![
             Span::styled(if selected { "▶ " } else { "  " }, Style::new().fg(ACCENT)),
             Span::styled(
-                "Set up AI — choose a provider and model to start",
+                title,
                 if selected {
                     Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
                 } else {
@@ -175,10 +187,7 @@ fn home_lines(app: &App) -> Vec<Line<'static>> {
                 },
             ),
         ]));
-        lines.push(Line::from(Span::styled(
-            "   Enter to configure · then start learning",
-            Style::new().fg(DIM),
-        )));
+        lines.push(Line::from(Span::styled(hint, Style::new().fg(DIM))));
         lines.push(home_divider());
         lines.push(Line::default());
     }
@@ -2731,9 +2740,8 @@ mod home_lines_tests {
         assert!(text.contains("csapp"));
         // 新建
         assert!(text.contains("+ New Course"));
-        // 不暴露 CLI 命令 / 不用 ▶
+        // 不暴露 CLI 命令；▶ 仅用于 AI 入口选中标记（不是列表选择器箭头）
         assert!(!text.contains("/course -new"), "Home 不暴露 CLI 命令");
-        assert!(!text.contains("▶"), "不用列表选择器箭头");
     }
 
     #[test]
@@ -2869,20 +2877,20 @@ mod home_lines_tests {
     fn home_setup_and_new_course_highlight_are_exclusive() {
         let app = app_needs_setup();
         assert!(app.ai_needs_setup(), "前置：无 key 需要 Setup");
-        // 光标在 Set up AI（0）→ 只有 Setup 高亮，New Course 不亮
+        // 光标在 AI 入口（0）→ 只有 Setup 高亮，New Course 不亮
         let sel0 = selected_lines(&home_lines(&app));
         assert!(
             sel0.iter().any(|t| t.contains("Set up AI")),
-            "光标 0 高亮 Setup"
+            "光标 0 高亮 AI 入口"
         );
         assert!(
             sel0.iter().all(|t| !t.contains("New Course")),
             "光标 0 时 New Course 不得同时高亮，实际: {sel0:?}"
         );
-        // 光标在 New Course（setup_offset=1）→ 只有 New Course 高亮
+        // 光标在 New Course（offset=1）→ 只有 New Course 高亮
         let mut app1 = app_needs_setup();
         app1.home_cursor = 1;
-        assert_eq!(app1.home_cursor_count(), 2, "Setup + New Course 共 2 项");
+        assert_eq!(app1.home_cursor_count(), 2, "AI 入口 + New Course 共 2 项");
         let sel1 = selected_lines(&home_lines(&app1));
         assert!(
             sel1.iter().any(|t| t.contains("New Course")),
@@ -2892,6 +2900,16 @@ mod home_lines_tests {
             sel1.iter().all(|t| !t.contains("Set up AI")),
             "光标 1 时 Set up AI 不得同时高亮，实际: {sel1:?}"
         );
+    }
+
+    /// 已配置时 Home 仍保留 AI 入口（可继续接入/管理模型）。
+    #[test]
+    fn home_ai_entry_persists_after_setup() {
+        let app = app_with_courses(); // api_key: Some("k") → 已配置
+        assert!(!app.ai_needs_setup());
+        let text = flatten(&home_lines(&app)).join("\n");
+        assert!(text.contains("AI Models"), "已配置后 Home 仍应显示 AI 入口");
+        assert!(!text.contains("Set up AI"), "已配置不显示首启引导文案");
     }
 
     /// 人工检查：三态 Home 的实际渲染文本（headless 无法截图，用纯函数输出核对）。

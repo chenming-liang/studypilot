@@ -1548,9 +1548,10 @@ mod onboarding_tests {
 
     #[tokio::test]
     async fn home_activate_enters_course_workspace() {
-        // 无 session：Home 光标 = 课程列表，Enter 第一项 → Course workspace
+        // 无 session：Home 光标 = AI 入口(0) + 课程列表(1..) + New Course，Enter 首课程 → Course workspace
         let mut app = app_with_courses();
-        assert_eq!(app.home_cursor_count(), 3, "2 门课 + New Course");
+        assert_eq!(app.home_cursor_count(), 4, "AI 入口 + 2 门课 + New Course");
+        app.home_cursor = 1; // 第一门课 rust（0 是 AI 入口）
         app.home_activate();
         settle(&mut app).await;
         assert_eq!(app.workspace, crate::app::Workspace::Course);
@@ -1560,8 +1561,13 @@ mod onboarding_tests {
     #[tokio::test]
     async fn home_continue_enters_session_workspace() {
         let mut app = app_with_session();
-        assert_eq!(app.home_cursor_count(), 4, "Continue + 2 门课 + New Course");
-        // 光标在 Continue（0）→ 打开最近 session
+        assert_eq!(
+            app.home_cursor_count(),
+            5,
+            "AI 入口 + Continue + 2 门课 + New Course"
+        );
+        // 光标在 Continue（1，AI 入口之后）→ 打开最近 session
+        app.home_cursor = 1;
         app.home_activate();
         settle(&mut app).await;
         assert_eq!(app.workspace, crate::app::Workspace::Session);
@@ -1571,7 +1577,7 @@ mod onboarding_tests {
     #[tokio::test]
     async fn home_course_switch_selects_csapp() {
         let mut app = app_with_courses();
-        app.home_cursor = 1; // 第二门课
+        app.home_cursor = 2; // AI(0) + rust(1) + csapp(2)
         app.home_activate();
         settle(&mut app).await;
         assert_eq!(app.workspace, crate::app::Workspace::Course);
@@ -1625,8 +1631,8 @@ mod onboarding_tests {
         let app = app_with_courses();
         assert_eq!(
             app.home_cursor_count(),
-            3,
-            "2 门课 + New Course，无 Continue"
+            4,
+            "AI 入口 + 2 门课 + New Course，无 Continue"
         );
         assert_eq!(app.continue_session(), None, "无 session 不得伪造 Continue");
     }
@@ -1713,7 +1719,7 @@ mod course_context_tests {
         assert_eq!(app.course, "pytorch", "创建后当前课程应为 pytorch");
 
         // Home 光标移到 pytorch（第 2 项），Enter 进 Course
-        app.home_cursor = 1;
+        app.home_cursor = 2; // AI(0) + rust(1) + pytorch(2)
         app.home_activate();
         settle_full(&mut app).await;
         assert_eq!(app.workspace, Workspace::Course);
@@ -1788,7 +1794,7 @@ mod course_context_tests {
         assert_eq!(app.course, "pytorch", "创建后当前课程应为 pytorch");
 
         // 进入新课程 Course → New conversation → Session，全程 context 应为 pytorch
-        app.home_cursor = 2; // Continue(0) + rust(1) + pytorch(2)
+        app.home_cursor = 3; // AI(0) + Continue(1) + rust(2) + pytorch(3)
         app.home_activate();
         settle_full(&mut app).await;
         assert_eq!(app.workspace, Workspace::Course);
@@ -2000,8 +2006,8 @@ mod course_context_tests {
             created_at: "2026-09-02 10:00:00".into(),
         }];
 
-        // Home Continue（cursor 0）→ 应切到 rust 并开其 session
-        app.home_cursor = 0;
+        // Home Continue（cursor 1 = AI 入口后）→ 应切到 rust 并开其 session
+        app.home_cursor = 1;
         app.home_activate();
         assert_eq!(app.course, "rust", "Continue 应恢复 session 所属课程");
         assert_eq!(app.workspace, crate::app::Workspace::Session);
