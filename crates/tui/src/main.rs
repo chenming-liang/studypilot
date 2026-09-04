@@ -57,6 +57,15 @@ async fn main() -> anyhow::Result<()> {
             })
             .collect();
     }
+    // 凭证分离：加载 auth.toml 并合并进内存 config（auth 优先；旧 config 内嵌 key 回退保留）。
+    // 同时把 config 里残留的明文 key 迁移到 auth.toml，防止 config 保存时剥离导致丢 key。
+    let auth_path = agent_providers::AuthConfig::auth_path()?;
+    let mut auth = agent_providers::AuthConfig::load(&auth_path).unwrap_or_default();
+    let migrated = auth.migrate_from(&cfg);
+    if migrated {
+        let _ = auth.save(&auth_path);
+    }
+    auth.apply_to(&mut cfg);
     // 无有效 provider 时，用空占位（Setup/Model 面板可配）；不 crash
     let pc = cfg.default_provider().cloned().unwrap_or_default();
 

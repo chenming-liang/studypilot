@@ -1,4 +1,4 @@
-//! config.toml 解析（provider 定义格式见本文件 ProviderConfig 字段）。
+//! config.toml 解析（provider 定义格式见本文件 ProviderConfig 字段）+ auth.toml（凭证分离）。
 
 use std::path::Path;
 
@@ -16,6 +16,100 @@ pub struct Config {
     pub max_cost: f64,
     #[serde(default)]
     pub providers: Vec<ProviderConfig>,
+}
+
+/// 凭证文件（`~/.studypilot/auth.toml`）：只存 API Key，与 config.toml（Provider/Model 定义）分离。
+/// 借鉴 OpenCode 的 auth 分离：config 告诉程序"有哪些 Provider/Model"，
+/// auth 告诉程序"怎么认证"。auth.toml 权限收紧（Unix 0600）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AuthConfig {
+    /// provider 名 → 该 provider 的凭证
+    #[serde(default)]
+    pub providers: std::collections::BTreeMap<String, ProviderAuth>,
+}
+
+/// 单个 provider 的凭证。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProviderAuth {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    /// 环境变量名引用（可放 config，但一并支持放 auth 更清晰）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key_env: Option<String>,
+}
+
+impl AuthConfig {
+    /// 凭证文件路径：与 config.toml 同目录的 auth.toml。
+    pub fn auth_path() -> Result<std::path::PathBuf> {
+        Ok(Config::config_dir()?.join("auth.toml"))
+    }
+
+    pub fn load(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| Error::Config(format!("读取 {}: {e}", path.display())))?;
+        text.parse()
+    }
+
+    pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
+        let toml = toml::to_string(self).map_err(|e| Error::Config(format!("序列化失败: {e}")))?;
+        std::fs::write(path, toml)
+            .map_err(|e| Error::Config(format!("写入 {}: {e}", path.display())))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        }
+        Ok(())
+    }
+
+    /// 把凭证合并进 Config 的内存 provider（auth 优先；config 内旧明文 key 回退保留）。
+    /// 运行时调用后 `provider_cfg.api_key` 即为有效 key，下游零改动。
+    pub fn apply_to(&self, cfg: &mut Config) {
+        for p in &mut cfg.providers {
+            if let Some(auth) = self.providers.get(&p.name) {
+                if let Some(k) = auth.api_key.as_deref().filter(|k| !k.is_empty()) {
+                    p.api_key = Some(k.to_owned());
+                }
+                if let Some(e) = auth.api_key_env.as_deref().filter(|e| !e.is_empty()) {
+                    p.api_key_env = Some(e.to_owned());
+                }
+            }
+        }
+    }
+
+    /// 从 Config 收集需要迁移的明文 key（config 有 key 但 auth 没有 → 补写 auth.toml，
+    /// 防止 config.toml 保存时剥离导致 key 丢失）。返回（迁移后的 auth, 是否有新增）。
+    pub fn migrate_from(&mut self, cfg: &Config) -> bool {
+        let mut changed = false;
+        for p in &cfg.providers {
+            let entry = self.providers.entry(p.name.clone()).or_default();
+            if entry.api_key.is_none()
+                && let Some(k) = p.api_key.as_deref().filter(|k| !k.is_empty())
+            {
+                entry.api_key = Some(k.to_owned());
+                changed = true;
+            }
+            if entry.api_key_env.is_none()
+                && let Some(e) = p.api_key_env.as_deref().filter(|e| !e.is_empty())
+            {
+                entry.api_key_env = Some(e.to_owned());
+                changed = true;
+            }
+        }
+        changed
+    }
+}
+
+impl std::str::FromStr for AuthConfig {
+    type Err = Error;
+
+    fn from_str(text: &str) -> Result<Self> {
+        let a: AuthConfig =
+            toml::from_str(text).map_err(|e| Error::Config(format!("解析凭证失败: {e}")))?;
+        Ok(a)
+    }
 }
 
 /// 一个 Provider 下的模型：只描述模型本身，不绑定 key/endpoint。
@@ -98,8 +192,9 @@ impl Default for Config {
 pub struct ProviderConfig {
     pub name: String,
     pub endpoint: String,
-    /// 明文 key（本地 config 文件允许；该文件已被 .gitignore 忽略）。
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// 明文 key——**只读**（兼容旧 config.toml 内嵌 key 的解析；序列化永不写回，
+    /// 凭证一律进 auth.toml，config.toml 可放心入库/展示）。
+    #[serde(skip_serializing)]
     pub api_key: Option<String>,
     /// 环境变量名引用——优先级低于明文 api_key，避免明文入库的推荐方式。
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -215,15 +310,19 @@ impl Config {
             .map_err(|e| Error::Config(format!("写入 {}: {e}", path.display())))
     }
 
-    /// 解析运行时配置路径：优先 `~/.studypilot/config.toml`（产品形态），
-    /// 不存在则回退 cwd `config.toml`（开发者兼容）。确保目录存在。
-    pub fn runtime_path() -> Result<std::path::PathBuf> {
+    /// 解析运行时配置目录：优先 `~/.studypilot/`（产品形态），回退 cwd（开发者兼容）。确保存在。
+    pub fn config_dir() -> Result<std::path::PathBuf> {
         if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
             let dir = std::path::PathBuf::from(home).join(".studypilot");
             let _ = std::fs::create_dir_all(&dir);
-            return Ok(dir.join("config.toml"));
+            return Ok(dir);
         }
-        Ok(std::path::PathBuf::from("config.toml"))
+        Ok(std::path::PathBuf::from("."))
+    }
+
+    /// 解析运行时配置路径（config.toml 同目录见 `config_dir`/`AuthConfig::auth_path`）。
+    pub fn runtime_path() -> Result<std::path::PathBuf> {
+        Ok(Self::config_dir()?.join("config.toml"))
     }
 
     fn validate(&self) -> Result<()> {
@@ -574,5 +673,138 @@ thinking = true
         // 幂等
         pc.ensure_models();
         assert_eq!(pc.models.len(), 1);
+    }
+
+    // ── 凭证分离（auth.toml）：config.toml 永不落盘 key ──
+
+    /// config.toml 序列化必须剥离 api_key（serde skip_serializing）。
+    #[test]
+    fn config_serialize_never_writes_api_key() {
+        let cfg = SAMPLE.parse::<Config>().unwrap();
+        // SAMPLE 里 deepseek 有 api_key_env、plain 有明文 api_key
+        let ds = cfg.provider("deepseek").unwrap();
+        assert!(ds.api_key_env.is_some(), "前置：env 引用保留");
+        let toml = toml::to_string(&cfg).unwrap();
+        assert!(
+            !toml.contains("api_key = \"sk-plain\""),
+            "明文 key 不得写回 config: {toml}"
+        );
+        assert!(
+            toml.contains("api_key_env"),
+            "api_key_env 只是变量名引用，可保留"
+        );
+    }
+
+    /// auth.toml 解析 / 保存往返 + 权限文件。
+    #[test]
+    fn auth_save_load_roundtrip() {
+        let mut auth = AuthConfig::default();
+        auth.providers.insert(
+            "deepseek".into(),
+            ProviderAuth {
+                api_key: Some("sk-auth".into()),
+                api_key_env: None,
+            },
+        );
+        let ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!("sp-auth-{}-{ns}.toml", std::process::id()));
+        auth.save(&path).unwrap();
+        let loaded = AuthConfig::load(&path).unwrap();
+        assert_eq!(
+            loaded
+                .providers
+                .get("deepseek")
+                .and_then(|p| p.api_key.as_deref()),
+            Some("sk-auth")
+        );
+        // 文件可读内容不含杂项（权限位 Unix 下校验 0600）
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "auth.toml 权限应收紧为 0600");
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// auth 合并进 Config：auth 优先覆盖内存 key，下游 provider_cfg 即有效。
+    #[test]
+    fn auth_apply_to_merges_keys() {
+        let mut cfg = SAMPLE.parse::<Config>().unwrap();
+        // deepseek 用 env，plain 用明文；auth 提供 plain 的新 key
+        let mut auth = AuthConfig::default();
+        auth.providers.insert(
+            "plain".into(),
+            ProviderAuth {
+                api_key: Some("sk-from-auth".into()),
+                api_key_env: None,
+            },
+        );
+        auth.apply_to(&mut cfg);
+        assert_eq!(
+            cfg.provider("plain").unwrap().api_key.as_deref(),
+            Some("sk-from-auth"),
+            "auth 覆盖 config 内嵌 key"
+        );
+        // 不在 auth 里的 provider 不受影响（deepseek 仍走 env）
+        assert!(cfg.provider("deepseek").unwrap().api_key.is_none());
+    }
+
+    /// 迁移：config 内嵌明文 key → 补写 auth（防 config 保存剥离后丢 key）；幂等。
+    #[test]
+    fn auth_migrate_from_legacy_config() {
+        let cfg = SAMPLE.parse::<Config>().unwrap();
+        let mut auth = AuthConfig::default();
+        assert!(auth.migrate_from(&cfg), "首次迁移应产生变更");
+        assert_eq!(
+            auth.providers
+                .get("plain")
+                .and_then(|p| p.api_key.as_deref()),
+            Some("sk-plain")
+        );
+        assert!(!auth.migrate_from(&cfg), "重复迁移幂等（已存在不再改）");
+        // 不覆盖 auth 里已存在的 key（但会补缺失的 api_key_env）
+        let mut auth2 = AuthConfig::default();
+        auth2.providers.insert(
+            "plain".into(),
+            ProviderAuth {
+                api_key: Some("sk-existing".into()),
+                api_key_env: None,
+            },
+        );
+        assert!(
+            auth2.migrate_from(&cfg),
+            "api_key 已存在但 api_key_env 缺失 → 补 env"
+        );
+        assert_eq!(
+            auth2
+                .providers
+                .get("plain")
+                .and_then(|p| p.api_key.as_deref()),
+            Some("sk-existing"),
+            "已有的 api_key 不被覆盖"
+        );
+        assert_eq!(
+            auth2
+                .providers
+                .get("plain")
+                .and_then(|p| p.api_key_env.as_deref()),
+            Some("SHOULD_NOT_BE_READ"),
+            "缺失的 api_key_env 被补上"
+        );
+        assert!(!auth2.migrate_from(&cfg), "补全后幂等");
+    }
+
+    /// 解析：旧 config.toml 内嵌 api_key 仍可读（向后兼容）。
+    #[test]
+    fn legacy_config_api_key_still_parses() {
+        let cfg = SAMPLE.parse::<Config>().unwrap();
+        assert_eq!(
+            cfg.provider("plain").unwrap().api_key.as_deref(),
+            Some("sk-plain")
+        );
     }
 }

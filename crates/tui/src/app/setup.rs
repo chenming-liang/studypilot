@@ -434,7 +434,25 @@ impl App {
             self.all_providers.push(cfg.clone());
         }
         self.provider_cfg = cfg.clone();
-        // 持久化
+        // 持久化凭证到 auth.toml（config.toml 不再含 key）
+        let key = cfg.api_key.clone().unwrap_or_default();
+        let mut auth = agent_providers::AuthConfig::default();
+        auth.providers.insert(
+            name.clone(),
+            agent_providers::ProviderAuth {
+                api_key: if key.is_empty() { None } else { Some(key) },
+                api_key_env: None,
+            },
+        );
+        match agent_providers::AuthConfig::auth_path() {
+            Ok(auth_path) => {
+                if let Err(e) = auth.save(&auth_path) {
+                    tracing::warn!("保存凭证失败: {e}");
+                }
+            }
+            Err(e) => tracing::warn!("获取 auth 路径失败: {e}"),
+        }
+        // 持久化 Provider/Model 定义（api_key 已由 serde skip_serializing 剥离，不落盘）
         let persist = agent_providers::Config {
             default_provider: name.clone(),
             default_model: format!("{}/{}", name, cfg.model),
