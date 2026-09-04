@@ -1455,7 +1455,7 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
                     if sel {
                         Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
                     } else {
-                        Style::new().fg(theme::MUTED)
+                        Style::new().fg(theme::DEFAULT)
                     },
                 ))));
             }
@@ -1495,7 +1495,7 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
                         if sel {
                             Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
                         } else {
-                            Style::new().fg(theme::MUTED)
+                            Style::new().fg(theme::DEFAULT)
                         },
                     ))));
                 }
@@ -2144,7 +2144,7 @@ fn draw_session_browser(f: &mut Frame, app: &App) {
                 let t = m.title.as_deref().unwrap_or("(未命名)");
                 body.push(Line::from(Span::styled(
                     format!("  #{id} {t} · {course}", id = m.id),
-                    Style::new().fg(theme::MUTED),
+                    Style::new().fg(theme::DEFAULT),
                 )));
             }
             let total = browser.results.len();
@@ -2178,7 +2178,7 @@ fn draw_session_browser(f: &mut Frame, app: &App) {
                 } else if is_current {
                     Style::new().fg(ACCENT)
                 } else {
-                    Style::new().fg(theme::MUTED)
+                    Style::new().fg(theme::DEFAULT)
                 };
                 let cur_mark = if is_current { "（当前）" } else { "" };
                 body.push(Line::from(Span::styled(
@@ -2302,7 +2302,7 @@ fn draw_note_browser(f: &mut Frame, app: &mut App) {
                     .unwrap_or_else(|| "all".into());
                 body.push(Line::from(Span::styled(
                     format!("  {} ({})", n.title, course),
-                    Style::new().fg(theme::MUTED),
+                    Style::new().fg(theme::DEFAULT),
                 )));
             }
             " 输入过滤 · Enter 进入选择 · Esc 关闭 ".into()
@@ -2333,7 +2333,7 @@ fn draw_note_browser(f: &mut Frame, app: &mut App) {
                 } else if browser.selected.contains(&n.id) {
                     Style::new().fg(ACCENT)
                 } else {
-                    Style::new().fg(theme::MUTED)
+                    Style::new().fg(theme::DEFAULT)
                 };
                 body.push(Line::from(Span::styled(
                     format!("{mark}{check}{}", n.title),
