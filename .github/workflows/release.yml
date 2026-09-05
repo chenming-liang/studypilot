@@ -47,6 +47,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
+          cp -r scripts dist/scripts
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             cp target/${{ matrix.target }}/release/studypilot.exe dist/studypilot.exe
             (cd dist && 7z a -tzip ../${{ matrix.artifact }}.zip .)
