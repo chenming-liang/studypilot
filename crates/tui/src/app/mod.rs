@@ -591,7 +591,7 @@ impl App {
             };
             let cur = (rs.current + 1).min(rs.planned);
             return (
-                format!("◌ 复习 {cur}/{}{grading}{generating}", rs.planned),
+                format!("◌ Review {cur}/{}{grading}{generating}", rs.planned),
                 status_color(StatusKind::Processing),
             );
         }
@@ -600,9 +600,9 @@ impl App {
             return ("◌ 导入中…".into(), status_color(StatusKind::Processing));
         }
         if self.is_inflight() {
-            return ("◌ 思考中…".into(), status_color(StatusKind::Processing));
+            return ("◌ Thinking…".into(), status_color(StatusKind::Processing));
         }
-        ("● 就绪".into(), status_color(StatusKind::Success))
+        ("● Ready".into(), status_color(StatusKind::Success))
     }
 
     pub(crate) fn push_entry(&mut self, e: Entry) {
