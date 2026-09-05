@@ -932,15 +932,13 @@ mod tests {
     #[test]
     fn multi_model_test_result_requires_all_pass() {
         // 全部 ✓ → 通过
-        let all_ok = "deepseek-reasoner ✓ API reachable · Authentication valid · Model available\ndeepseek-chat ✓ API reachable · Authentication valid · Model available";
+        let all_ok = "deepseek-reasoner ✓ 连接成功 · 服务可用\ndeepseek-chat ✓ 连接成功 · 服务可用";
         assert!(setup_test_all_passed(all_ok), "全部模型通过应整体通过");
         // 任一 ✗ → 失败（保留 pending，允许重试）
-        let one_fail = "deepseek-reasoner ✓ API reachable · Authentication valid · Model available\ndeepseek-chat ✗ 连接失败（HTTP 400）: invalid model";
+        let one_fail = "deepseek-reasoner ✓ 连接成功 · 服务可用\ndeepseek-chat ✗ 连接失败（HTTP 400）: invalid model";
         assert!(!setup_test_all_passed(one_fail), "任一模型失败应整体失败");
         // 单模型兼容：✓ 无 ✗ → 通过
-        assert!(setup_test_all_passed(
-            "✓ API reachable · Authentication valid · Model available\n响应: ping"
-        ));
+        assert!(setup_test_all_passed("✓ 连接成功 · 服务可用\n响应: ping"));
         assert!(!setup_test_all_passed(
             "✗ 连接失败（HTTP 401）: unauthorized"
         ));
@@ -969,9 +967,7 @@ mod tests {
             .unwrap_or(0);
         let cfg_path = tmp.join(format!("config-{ns}.toml"));
         app.config_file = cfg_path.clone();
-        let all_ok = |model: &str| {
-            format!("{model} ✓ API reachable · Authentication valid · Model available")
-        };
+        let all_ok = |model: &str| format!("{model} ✓ 连接成功 · 服务可用");
         // 第一次：3 个模型
         app.start_setup();
         {
@@ -1067,7 +1063,7 @@ mod tests {
         let cfg_path = tmp.join(format!("config-{ns}.toml"));
         app.config_file = cfg_path.clone();
         // 模拟连接测试全部通过（多模型逐测汇总文本）
-        let all_ok = "Qwen3.7-Plus ✓ API reachable · Authentication valid · Model available\nDeepSeek-V4-Flash-0731 ✓ API reachable · Authentication valid · Model available\nGLM-5.3-Flash ✓ API reachable · Authentication valid · Model available";
+        let all_ok = "Qwen3.7-Plus ✓ 连接成功 · 服务可用\nDeepSeek-V4-Flash-0731 ✓ 连接成功 · 服务可用\nGLM-5.3-Flash ✓ 连接成功 · 服务可用";
         app.on_setup_test_done(all_ok.to_owned());
         assert!(app.setup.as_ref().unwrap().test_passed, "全 ✓ 应进入 Done");
         // all_providers 中 paratera 的 models 全量保留
@@ -1226,7 +1222,7 @@ mod tests {
         );
         assert_eq!(app.setup.as_ref().unwrap().step, SetupStep::Test);
         // 成功事件：自动进 Done
-        app.on_setup_test_done("✓ API reachable · Authentication valid".into());
+        app.on_setup_test_done("✓ 连接成功 · 服务可用".into());
         assert!(app.setup.as_ref().unwrap().test_passed);
         assert_eq!(
             app.setup.as_ref().unwrap().step,

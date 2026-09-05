@@ -571,14 +571,14 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &mut App) {
         body.push(Line::default());
         body.push(Line::from(vec![
             Span::styled(
-                format!("Question {}/{}", rs.current + 1, total),
+                format!("题目 {}/{}", rs.current + 1, total),
                 Style::new().fg(theme::USER).add_modifier(Modifier::BOLD),
             ),
             Span::styled("  ·  出题中…", Style::new().fg(theme::MUTED)),
         ]));
         body.push(Line::default());
         body.push(Line::from(Span::styled(
-            "  下一题正在后台生成（你作答时即已开始）…",
+            "  下一题生成中…",
             Style::new().fg(theme::MUTED),
         )));
         body.push(Line::from(Span::styled(
@@ -598,7 +598,7 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &mut App) {
     };
     let tags = vec![
         Span::styled(
-            format!("Question {}/{}", rs.current + 1, total),
+            format!("题目 {}/{}", rs.current + 1, total),
             Style::new().fg(theme::USER).add_modifier(Modifier::BOLD),
         ),
         Span::styled("  ·  ", Style::new().fg(theme::MUTED)),
@@ -672,9 +672,9 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &mut App) {
         // ④b 反馈卡
         if let Some(r) = rs.results.get(rs.current) {
             let mark = if r.correct {
-                "✓ Correct"
+                "✓ 正确"
             } else {
-                "✗ Incorrect"
+                "✗ 错误"
             };
             let color = if r.correct { theme::SUCCESS } else { ERROR };
             // feedback 自带 ✓/✗ 前缀时去掉，避免与 mark 重复
@@ -1646,10 +1646,10 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
                     Style::new().fg(DIM),
                 ))));
             }
-            // 添加成功的明确信号：Test 全 ✓ 才走到 Done（已落盘 config.toml + auth.toml）
+            // 添加成功的明确信号：Test 全 ✓ 才走到 Done（已落盘配置）
             items.push(ListItem::new(Line::default()));
             items.push(ListItem::new(Line::from(Span::styled(
-                "  ✓ 已保存（config.toml + auth.toml）",
+                "  ✓ Saved",
                 Style::new().fg(theme::SUCCESS).add_modifier(Modifier::BOLD),
             ))));
             (
@@ -2055,7 +2055,7 @@ fn draw_warmup(f: &mut Frame, app: &mut App) {
             }
             if let Some(c) = &card.concept {
                 items.push(ListItem::new(Line::from(Span::styled(
-                    format!("  （概念: {c}）"),
+                    format!("  （概念：{c}）"),
                     Style::new().fg(DIM),
                 ))));
             }
@@ -2063,8 +2063,8 @@ fn draw_warmup(f: &mut Frame, app: &mut App) {
             let rated = w.ratings.get(w.current).copied().flatten();
             items.push(ListItem::new(Line::from(Span::styled(
                 match rated {
-                    Some(r) => format!("  已评: {}", r.mark()),
-                    None => "  [1] Got it  [2] Shaky  [3] Don't know".to_string(),
+                    Some(r) => format!("  已评：{}", r.mark()),
+                    None => "  [1] 会了  [2] 一般  [3] 不会".to_string(),
                 },
                 Style::new().fg(if rated.is_some() {
                     theme::SUCCESS
@@ -2291,7 +2291,7 @@ fn draw_note_browser(f: &mut Frame, app: &mut App) {
                     .iter()
                     .find(|(id, _)| Some(*id) == n.course_id)
                     .map(|(_, name)| name.clone())
-                    .unwrap_or_else(|| "all".into());
+                    .unwrap_or_else(|| "Global".into());
                 body.push(Line::from(Span::styled(
                     format!("  {} ({})", n.title, course),
                     Style::new().fg(theme::DEFAULT),
@@ -2426,9 +2426,9 @@ fn draw_note_browser(f: &mut Frame, app: &mut App) {
     );
 }
 
-/// pick_items 与 keys.rs 共用（all 哨兵 -1）。
+/// pick_items 与 keys.rs 共用（Global 哨兵 -1）。
 fn pick_items(app: &App) -> Vec<(i64, String)> {
-    let mut items = vec![(-1i64, "all（全部）".to_owned())];
+    let mut items = vec![(-1i64, "Global（全部课程）".to_owned())];
     items.extend(app.courses.iter().cloned());
     items
 }

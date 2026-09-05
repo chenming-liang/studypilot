@@ -49,7 +49,7 @@ impl ReviewMapPicker {
             }
         }
         Self {
-            title: format!("{} · Learning Map", map.course),
+            title: format!("{} · Review Map", map.course),
             rows,
             selected: 0,
         }
@@ -436,7 +436,7 @@ impl CommandPalette {
             P {
                 label: "Delete Course",
                 command: "/course -delete",
-                desc: "删除课程（笔记回落 all 区）",
+                desc: "删除课程（笔记将移到 Global 区）",
                 action: A::Pick(PickKind::CourseDelete),
                 group: G::Course,
                 scope: S::CurrentCourse,

@@ -580,18 +580,18 @@ impl App {
         use crate::theme::{StatusKind, status_color};
         if let Some(rs) = &self.review {
             let grading = if self.review_grading {
-                " · Grading…"
+                " · 批改中…"
             } else {
                 ""
             };
             let generating = if !self.review_grading && rs.questions.get(rs.current).is_none() {
-                " · Generating…"
+                " · 出题中…"
             } else {
                 ""
             };
             let cur = (rs.current + 1).min(rs.planned);
             return (
-                format!("◌ Review {cur}/{}{grading}{generating}", rs.planned),
+                format!("◌ 复习 {cur}/{}{grading}{generating}", rs.planned),
                 status_color(StatusKind::Processing),
             );
         }
@@ -600,9 +600,9 @@ impl App {
             return ("◌ 导入中…".into(), status_color(StatusKind::Processing));
         }
         if self.is_inflight() {
-            return ("◌ Thinking…".into(), status_color(StatusKind::Processing));
+            return ("◌ 思考中…".into(), status_color(StatusKind::Processing));
         }
-        ("● Ready".into(), status_color(StatusKind::Success))
+        ("● 就绪".into(), status_color(StatusKind::Success))
     }
 
     pub(crate) fn push_entry(&mut self, e: Entry) {
@@ -903,7 +903,7 @@ impl App {
             self.home_delete_armed = true;
             self.home_delete_target = Some(course.clone());
             self.set_toast(
-                format!("按 d 确认删除课程「{course}」（笔记回落 all 区）"),
+                format!("按 d 确认删除课程「{course}」（其笔记将移到 Global 区）"),
                 true,
             );
         }

@@ -476,7 +476,7 @@ impl App {
                     self.review_grading = true;
                     self.input.clear();
                     self.cursor_pos = 0;
-                    self.push_entry(Entry::Info("◌ Grading…".into()));
+                    self.push_entry(Entry::Info("◌ 批改中…".into()));
                     let (provider, provider_cfg) =
                         self.role_client(agent_providers::ModelRole::Reasoning);
                     let store = Arc::clone(&self.store);
@@ -1026,7 +1026,7 @@ impl App {
                 ("切换课程分区".to_owned(), items)
             }
             K::CourseDelete => (
-                "删除课程（其笔记回落 all 区）".to_owned(),
+                "删除课程（其笔记将移到 Global 区）".to_owned(),
                 self.courses
                     .iter()
                     .map(|(id, name)| ListChoice {

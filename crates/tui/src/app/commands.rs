@@ -36,7 +36,7 @@ impl App {
         // R6 预算熔断：发起下一个请求前检查，超限拒绝并提示
         if self.total_cost >= self.max_cost {
             self.push_entry(Entry::Error(format!(
-                "已达预算上限 ¥{:.2}（累计 ¥{:.4}），拒绝发送。可在 config.toml 调高 max_cost",
+                "已达预算上限 ¥{:.2}（累计 ¥{:.4}），拒绝发送。可用 /budget 调高上限",
                 self.max_cost, self.total_cost
             )));
             return;
@@ -129,7 +129,9 @@ impl App {
             "/budget" => self.handle_budget_command(arg.trim()),
             "/notes" => self.handle_notes_command(),
             "/outline" => self.handle_outline_command(arg.trim()),
-            "/search" => self.not_implemented("/search", "M7（检索能力经 agent 工具自动调度）"),
+            "/search" => self.push_entry(Entry::Info(
+                "检索已内置：直接提问即可，AI 会自动检索相关笔记。".into(),
+            )),
             "/refresh-concepts" => self.handle_refresh_concepts(),
             "/review-map" => self.handle_review_map_command(arg.trim()),
             "/review" => self.handle_review_command(arg.trim()),
@@ -187,12 +189,6 @@ impl App {
             .await;
             let _ = tx.send(AppEvent::ConceptsRefreshed(result));
         });
-    }
-
-    pub(crate) fn not_implemented(&mut self, cmd: &str, milestone: &str) {
-        self.push_entry(Entry::Error(format!(
-            "{cmd} 尚未实现（计划于 {milestone}）"
-        )));
     }
 
     // ---- 预算管理 ----
@@ -375,7 +371,7 @@ impl App {
     /// 范围固化为打开时的分区；搜索词走聊天框共享缓冲。
     pub(crate) fn handle_notes_command(&mut self) {
         let scope = self.current_course_id();
-        let label = self.course.clone();
+        let label = self.current_scope_label();
         self.take_input_for_overlay();
         self.note_browser = Some(crate::note_browser::NoteBrowser::new(scope, label));
         self.browser_search();
@@ -550,17 +546,17 @@ impl App {
         let result = agent_providers::with_cancel(client.chat(&msgs, &[]), &cancel).await;
         match result {
             Some(Ok(resp)) if !resp.content.is_empty() => format!(
-                "✓ API reachable · Authentication valid · Model available\n\
+                "✓ 连接成功 · 服务可用\n\
                  响应: {}",
                 resp.content.chars().take(60).collect::<String>()
             ),
-            Some(Ok(_)) => "✓ API reachable · 但模型返回空响应（Invalid response）".to_string(),
+            Some(Ok(_)) => "✓ 连接成功 · 但模型返回空响应".to_string(),
             Some(Err(e)) => match e {
                 agent_core::Error::Api { status, message } => format!(
                     "✗ 连接失败（HTTP {status}）: {message}\n如果鉴权失败，请检查 API key 是否有效"
                 ),
                 agent_core::Error::Transport(m) => {
-                    format!("✗ Endpoint unreachable: {m}\n检查 base URL 与网络连接")
+                    format!("✗ 无法连接服务器: {m}\n检查 Base URL 与网络连接")
                 }
                 other => format!("✗ 连接失败: {other}"),
             },
@@ -738,7 +734,7 @@ impl App {
                 return Err(format!("课程 `{name2}` 不存在"));
             }
             let list = store.list_courses().map_err(|e| e.to_string())?;
-            let msg = format!("已删除课程: {name2}（其笔记已回落 all 区）");
+            let msg = format!("已删除课程: {name2}（其笔记将移到 Global 区）");
             let switch_to = is_current.then(|| "all".to_owned());
             Ok((msg, list, switch_to))
         });
@@ -762,7 +758,7 @@ impl App {
         }
         let Some(course_id) = self.current_course_id() else {
             self.push_entry(Entry::Error(
-                "当前没有可重命名的课程（all 区不可重命名）".into(),
+                "当前没有可重命名的课程（Global 不可重命名）".into(),
             ));
             return;
         };
