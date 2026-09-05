@@ -24,9 +24,8 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: StudyPilot-macos-aarch64
-          - os: macos-13
-            target: x86_64-apple-darwin
-            artifact: StudyPilot-macos-x64
+            extra_artifact: StudyPilot-macos-x64
+            extra_target: x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -36,7 +35,12 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build release
-        run: cargo build --release --bin studypilot --target ${{ matrix.target }}
+        run: |
+          cargo build --release --bin studypilot --target ${{ matrix.target }}
+          if [ -n "${{ matrix.extra_target }}" ]; then
+            rustup target add ${{ matrix.extra_target }}
+            cargo build --release --bin studypilot --target ${{ matrix.extra_target }}
+          fi
 
       - name: Package
         shell: bash
@@ -48,6 +52,11 @@ jobs:
           else
             cp target/${{ matrix.target }}/release/studypilot dist/studypilot
             (cd dist && tar -czf ../${{ matrix.artifact }}.tar.gz .)
+            if [ -n "${{ matrix.extra_target }}" ]; then
+              cp target/${{ matrix.extra_target }}/release/studypilot dist/studypilot
+              (cd dist && tar -czf ../${{ matrix.extra_artifact }}.tar.gz .)
+              rm dist/studypilot
+            fi
           fi
 
       - name: Upload release asset
