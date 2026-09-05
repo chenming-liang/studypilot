@@ -35,6 +35,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build release
+        shell: bash
         run: |
           cargo build --release --bin studypilot --target ${{ matrix.target }}
           if [ -n "${{ matrix.extra_target }}" ]; then
