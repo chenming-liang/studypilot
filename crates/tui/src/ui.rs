@@ -2064,7 +2064,7 @@ fn draw_warmup(f: &mut Frame, app: &mut App) {
             items.push(ListItem::new(Line::from(Span::styled(
                 match rated {
                     Some(r) => format!("  已评：{}", r.mark()),
-                    None => "  [1] 会了  [2] 一般  [3] 不会".to_string(),
+                    None => "  [1] 会了  [2] 模糊  [3] 不会".to_string(),
                 },
                 Style::new().fg(if rated.is_some() {
                     theme::SUCCESS
