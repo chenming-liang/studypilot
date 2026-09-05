@@ -1,10 +1,23 @@
 # StudyPilot 依赖安装脚本（Windows）
-# 安装 PDF 提取所需的 Python 3 + PyMuPDF。
+# 安装 PDF 提取所需的 Python 3 + PyMuPDF，并引导使用 MSVC Rust toolchain。
 # 用法：右键「使用 PowerShell 运行」，或在 PowerShell 中执行本脚本。
 # 首次运行若提示执行策略限制：Set-ExecutionPolicy -Scope Process Bypass
 
 $ErrorActionPreference = "Stop"
 Write-Host "== StudyPilot 依赖安装 (Windows) =="
+
+# ── 0. Rust toolchain：推荐 MSVC（GNU toolchain 在含中文的路径下链接会失败）──
+$hostTriple = rustup show active-toolchain 2>$null
+if ($LASTEXITCODE -eq 0 -and $hostTriple -match "pc-windows-gnu") {
+    Write-Host ""
+    Write-Host "检测到 GNU toolchain（$hostTriple）。"
+    Write-Host "GNU 工具链在含中文的路径下链接会失败，建议切换到 MSVC："
+    Write-Host "  1. 安装 Visual Studio Build Tools（含 C++ 桌面开发）"
+    Write-Host "     winget install Microsoft.VisualStudio.2022.BuildTools"
+    Write-Host "  2. rustup toolchain install stable-x86_64-pc-windows-msvc"
+    Write-Host "  3. rustup default stable-x86_64-pc-windows-msvc"
+    Write-Host ""
+}
 
 # 检查 python / python3 / py
 function Get-Python {

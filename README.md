@@ -91,7 +91,7 @@ cd agent-liangcm25
 cargo build --release
 ```
 
-构建需要 **Rust**（stable 工具链）。
+构建需要 **Rust**（stable 工具链）。Windows 用户建议使用 **MSVC toolchain**（`stable-x86_64-pc-windows-msvc`，需 Visual Studio Build Tools）——GNU toolchain 在含中文的路径下可能链接失败。
 
 若导入的资料包含 PDF，需先安装 PDF 提取所需依赖（构建后导入 PDF 时需要）。运行一次安装脚本即可：
 
