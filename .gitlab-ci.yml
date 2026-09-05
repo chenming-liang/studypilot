@@ -1,0 +1,25 @@
+# 清华 Git（GitLab CI）自动构建 Linux Release。
+# 触发：push v* 标签 → 构建并产出压缩包。
+# 说明：
+#   - 课程共享 runner 通常为 Linux，这里只构建 Linux 包；
+#     Windows/macOS 预编译包由 GitHub Actions 产出（见 .github/workflows/release.yml）。
+#   - Release 附件需在 GitLab 项目设置中允许 CI 使用 Release API
+#     （Settings → CI/CD → Token Access，勾选 api），或由维护者手动上传 artifact。
+
+stages:
+  - build
+
+build-linux:
+  stage: build
+  image: rust:1
+  script:
+    - cargo build --release --bin studypilot
+    - mkdir -p dist
+    - cp target/release/studypilot dist/studypilot
+    - tar -C dist -czf StudyPilot-linux-x64.tar.gz .
+  artifacts:
+    paths:
+      - StudyPilot-linux-x64.tar.gz
+    expire_in: 1 week
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v.*$/'

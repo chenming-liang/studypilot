@@ -83,6 +83,17 @@ StudyPilot 把任务分为几类角色（fast / balanced / reasoning），每类
 
 ## Installation
 
+### 使用预编译版本
+
+如果不想本地编译，可直接下载预编译包：
+
+- **GitHub Releases**：Windows / Linux / macOS 三平台（自动构建）
+- **清华 Git Releases**：Linux（自动构建）
+
+下载解压后直接运行，无需安装 Rust。
+
+若导入的资料包含 PDF，需先安装 PDF 提取依赖（运行一次即可）：Windows 运行 `scripts/install-deps.ps1`，Linux / macOS 运行 `bash scripts/install-deps.sh`。
+
 ### 从源码构建
 
 ```bash
@@ -92,11 +103,6 @@ cargo build --release
 ```
 
 构建需要 **Rust**（stable 工具链）。Windows 用户建议使用 **MSVC toolchain**（`stable-x86_64-pc-windows-msvc`，需 Visual Studio Build Tools）——GNU toolchain 在含中文的路径下可能链接失败。
-
-若导入的资料包含 PDF，需先安装 PDF 提取所需依赖（构建后导入 PDF 时需要）。运行一次安装脚本即可：
-
-- **Windows**：`scripts/install-deps.ps1`
-- **Linux / macOS**：`bash scripts/install-deps.sh`
 
 ```bash
 # 构建产物
