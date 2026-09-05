@@ -34,7 +34,7 @@ StudyPilot 是一个运行在终端里的 AI 学习 Agent，面向"把课程资�
 
 基于你导入的笔记回答，而不是通用知识库。提问后，回答中的关键事实会标注来源编号（如 `[1]`），对应到具体的笔记片段，方便你回看原文；笔记没有覆盖的内容会标明「（笔记外补充）」，区分"笔记讲的"和"模型自己补的"。
 
-### Learning Map
+### Review Map（知识地图）
 
 导入的资料会自动抽取为知识点，并按主题组织成「章节 → 概念」的结构，形成一张可浏览的知识地图。每个知识点标记掌握状态：已掌握（✓）、需巩固（△）、未复习（○）。地图可导出为 Markdown 文件（`Outline → Export`），作为复习提纲带走。
 
@@ -44,15 +44,15 @@ StudyPilot 是一个运行在终端里的 AI 学习 Agent，面向"把课程资�
 
 1. **Flashcard Warm-up**：先出几张 recall 卡片快速自检。你自评（会了 / 模糊 / 不会）后，评为"模糊/不会"的概念会进入正式复习的重点范围
 2. **Formal Review**：逐题生成选择题 / 简答题。选择题即时判分；简答题由模型批改打分，并指出缺失的要点
-3. **学习历史**：每次作答记入学习历史，复习后给出小结（已掌握 / 需巩固 / 下一步建议）。答错的概念在后续复习中优先出现
+3. **掌握度追踪**：每次作答记入学习历史，复习后给出小结（已掌握 / 需巩固 / 下一步建议）。答错的概念在后续复习中优先出现
 
 ### Model Roles（角色与模型配置）
 
-StudyPilot 把任务分为几类角色（fast / balanced / reasoning），每类角色**由你配置**对应模型：例如把导入、出题等高频任务配给便宜快速的模型，把批改、复杂推理配给更强的模型。系统按任务的角色使用你配置的模型，而不是为每次调用自行挑选模型。这样在保证质量的同时控制成本。
+StudyPilot 把任务分为几类角色（fast / balanced / reasoning），每类角色**由你配置**对应模型：例如把导入、大纲、闪卡等高频任务配给便宜快速的模型，把批改、复杂推理配给更强的模型。系统按任务的角色使用你配置的模型，而不是为每次调用自行挑选模型。这样在保证质量的同时控制成本。
 
 ### 本地优先
 
-笔记、会话、学习历史全部保存在本地数据库，不依赖云端存储。删除一门课程即从本地移除。重复导入同一份资料不会产生重复内容（按内容去重）。数据留存在本机，这与"调用你配置的 LLM 服务"是两个独立概念——你的资料不会上传到任何服务商。
+笔记、会话、学习历史全部保存在本地数据库，不依赖云端存储。重复导入同一份资料不会产生重复内容（按内容去重）。数据留存在本机，这与"调用你配置的 LLM 服务"是两个独立概念——你的资料不会上传到任何服务商。
 
 ---
 
@@ -115,7 +115,7 @@ cargo build --release
 
 1. **配置 AI**：首次启动自动进入 AI Setup。选择 Provider → 选择 Model → 填入 API Key → 点 Test 测试连接，通过后进入主界面。之后随时可用 `Ctrl+K → Model` 重新配置。
 
-2. **导入资料**：`Ctrl+K` → Import → 选择你的资料文件夹（支持 Markdown / PDF / PPTX）。导入时每个文件会显示处理进度；完成后在聊天区看到每个文件抽取出的概念数。
+2. **导入资料**：`Ctrl+K` → Import Materials → 选择你的资料文件夹（支持 Markdown / PDF / PPTX）。导入时每个文件会显示处理进度；完成后在聊天区看到每个文件抽取出的概念数。
 
 3. **提问**：直接在底部输入问题，例如"什么是所有权？"。回答会基于你的笔记展开，关键事实后带 `[1]` 等编号——它们在回答下方对应具体笔记片段；笔记没覆盖的内容会标「（笔记外补充）」。
 
@@ -129,9 +129,9 @@ cargo build --release
 
 所有功能都可以通过 **Command Palette** 完成——按 `Ctrl+K` 打开，按分组浏览，无需记忆命令：
 
-- **会话**：New Conversation · Recent Sessions · Rename Session · Export / Load Conversation
-- **学习**：Import Materials · Review · Review Map · Outline
-- **课程**：Switch Course · New Course · Rename / Delete Course
+- **学习**：New Conversation · Review · Review Map · Outline（含 Export）· Materials
+- **课程**：Switch Course · New Course · Rename Course · Delete Course · Import Materials
+- **会话**：Recent Sessions · Rename Session · Export / Load Conversation
 - **设置**：Model（切换模型 / 配置角色）· Budget（费用上限）
 
 几个常用操作：
