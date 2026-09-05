@@ -85,20 +85,15 @@ StudyPilot 把任务分为几类角色（fast / balanced / reasoning），每类
 
 ### 使用预编译版本
 
-如果不想本地编译，可直接下载预编译包：
-
-- **GitHub Releases**：Windows / Linux / macOS 三平台（自动构建）
-- **清华 Git Releases**：Linux（自动构建）
-
-下载解压后直接运行，无需安装 Rust。
+如果不想本地编译，可直接下载预编译包（[GitHub Releases](https://github.com/chenming-liang/studypilot/releases)）：提供 Windows / Linux / macOS 三平台，下载解压后直接运行，无需安装 Rust。
 
 若导入的资料包含 PDF，需先安装 PDF 提取依赖（运行一次即可）：Windows 运行 `scripts/install-deps.ps1`，Linux / macOS 运行 `bash scripts/install-deps.sh`。
 
 ### 从源码构建
 
 ```bash
-git clone https://git.tsinghua.edu.cn/rust-course/2026/agent/agent-liangcm25.git
-cd agent-liangcm25
+git clone https://github.com/chenming-liang/studypilot.git
+cd studypilot
 cargo build --release
 ```
 
