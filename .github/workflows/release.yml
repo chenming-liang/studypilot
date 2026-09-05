@@ -44,10 +44,10 @@ jobs:
           mkdir -p dist
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             cp target/${{ matrix.target }}/release/studypilot.exe dist/studypilot.exe
-            (cd dist && zip -r ../${{ matrix.artifact }}.zip .)
+            (cd dist && 7z a -tzip ../${{ matrix.artifact }}.zip .)
           else
             cp target/${{ matrix.target }}/release/studypilot dist/studypilot
-            tar -C dist -czf ${{ matrix.artifact }}.tar.gz .
+            (cd dist && tar -czf ../${{ matrix.artifact }}.tar.gz .)
           fi
 
       - name: Upload release asset
