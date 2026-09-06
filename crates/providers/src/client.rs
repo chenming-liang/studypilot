@@ -74,6 +74,12 @@ impl OpenAiClient {
         self.cfg.endpoint.contains("localhost") || self.cfg.endpoint.contains("127.0.0.1")
     }
 
+    /// 是否支持 thinking 开关参数（DeepSeek V4 OpenAI 兼容格式 `{"type":"enabled|disabled"}`），
+    /// 仅据此在请求体传 thinking —— 其余 OpenAI-compatible provider 不硬塞，保持默认行为。
+    fn is_thinking_capable(&self) -> bool {
+        self.cfg.endpoint.contains("deepseek.com")
+    }
+
     async fn chat_request(
         &self,
         msgs: &[Message],
@@ -97,6 +103,13 @@ impl OpenAiClient {
             "model": self.cfg.model,
             "messages": msgs,
         });
+        // thinking 由 Model Role 决定（fast/balanced 关、reasoning 开）。
+        // 仅为支持 thinking 参数的 provider 传参（DeepSeek V4 的 OpenAI 兼容格式），
+        // 其他 OpenAI-compatible provider 不硬塞，保持其默认行为。
+        if self.is_thinking_capable() {
+            body["thinking"] =
+                json!({"type": if self.cfg.thinking { "enabled" } else { "disabled" }});
+        }
         if !tools.is_empty() {
             body["tools"] = Value::Array(tools.to_vec());
         }

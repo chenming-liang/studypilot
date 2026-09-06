@@ -411,6 +411,13 @@ impl ModelRole {
             Self::Reasoning => "Reasoning",
         }
     }
+    /// 该角色是否在请求中启用 thinking（由任务性质决定，不交给用户开关）。
+    /// - Fast：大量结构化低难度（导入/抽取/大纲/闪卡）→ 关，追求速度
+    /// - Balanced：默认学习（问答/出题/小结）→ 关（默认不思考，保证响应快）
+    /// - Reasoning：高难度推理（批改/错因/深层分析/跨材料综合）→ 开
+    pub fn thinking_enabled(self) -> bool {
+        matches!(self, Self::Reasoning)
+    }
 }
 
 /// 解析 `provider/model` canonical 字符串为 (provider, model)。
@@ -449,7 +456,11 @@ impl Config {
             ))
         })?;
         let p = self.provider(pname)?;
-        Ok(p.with_model(mname))
+        let mut cfg = p.with_model(mname);
+        // Role 决定本次请求是否启用 thinking（fast/balanced 关、reasoning 开），
+        // 覆写模型预设的静态 thinking 元数据（模型能力 ≠ 本次请求开关）。
+        cfg.thinking = role.thinking_enabled();
+        Ok(cfg)
     }
 
     /// 解析 `default_model` 为 (provider, model) 对（旧式迁移时 provider = default_provider）。
@@ -594,6 +605,20 @@ model = "my-model"
         let got = cfg.resolve_model(ModelRole::Fast).unwrap();
         assert_eq!(got.name, "plain");
         assert_eq!(got.model, "gpt-4o-mini");
+        // ② role 决定 thinking：fast 关
+        assert!(!got.thinking, "fast 角色应关闭 thinking");
+    }
+
+    #[test]
+    fn resolve_role_thinking_follows_role() {
+        // role 决定 thinking，而非模型元数据：reasoning 开、fast/balanced 关
+        let cfg = SAMPLE.parse::<Config>().unwrap();
+        let reasoning = cfg.resolve_model(ModelRole::Reasoning).unwrap();
+        assert!(reasoning.thinking, "reasoning 角色应开启 thinking");
+        let fast = cfg.resolve_model(ModelRole::Fast).unwrap();
+        assert!(!fast.thinking, "fast 角色应关闭 thinking");
+        let balanced = cfg.resolve_model(ModelRole::Balanced).unwrap();
+        assert!(!balanced.thinking, "balanced 角色应关闭 thinking");
     }
 
     #[test]
