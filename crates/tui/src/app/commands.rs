@@ -1079,6 +1079,14 @@ pub(crate) mod course_delete_tests {
             fallback.model, "deepseek-v4-flash",
             "未配置 role 用当前模型"
         );
+        // 未配置 role 也按 role 决定 thinking：reasoning 开（覆写模型元数据）
+        assert!(fallback.thinking, "未配置 role 时 reasoning 应开思考");
+        // 未配置 fast role → fast 也按 role 关思考（回归：fast 误开 thinking）
+        let fast_fallback = app.resolve_role_cfg(ModelRole::Fast);
+        assert!(
+            !fast_fallback.thinking,
+            "未配置 fast role 时应关闭思考（修复 fallback 沿用模型预设）"
+        );
         // 配置 fast role → 命中 roles 表
         app.roles
             .insert("fast".into(), "deepseek/deepseek-v4-pro".into());
@@ -1261,14 +1269,15 @@ pub(crate) mod course_delete_tests {
             thinking: true,
         });
         app.provider_cfg.model = "deepseek-v4-flash".into();
-        // 未配置 role → 复用当前 client
+        // 未配置 role → 用当前模型，但仍按 role 新建 client（thinking 按 role 生效）
         let (client, cfg) = app.role_client(ModelRole::Reasoning);
         assert_eq!(cfg.model, "deepseek-v4-flash");
         assert!(
-            Arc::ptr_eq(&client, &app.provider),
-            "未命中 role 复用现有 client"
+            !Arc::ptr_eq(&client, &app.provider),
+            "始终按 role 新建 client，不复用（保证 client 内部 thinking 正确）"
         );
-        // 配置 fast → 新建独立 client，不破坏当前模型
+        assert!(cfg.thinking, "reasoning 角色应开思考");
+        // 配置 fast → 新建独立 client，thinking 关闭，不破坏当前模型
         app.roles
             .insert("fast".into(), "deepseek/deepseek-v4-pro".into());
         let (fast_client, fast_cfg) = app.role_client(ModelRole::Fast);
@@ -1277,10 +1286,7 @@ pub(crate) mod course_delete_tests {
             !Arc::ptr_eq(&fast_client, &app.provider),
             "角色命中时新建 client"
         );
-        assert_eq!(
-            app.provider_cfg.model, "deepseek-v4-flash",
-            "当前模型不被角色覆盖"
-        );
+        assert!(!fast_cfg.thinking, "fast 角色应关闭思考");
     }
 
     /// 模型 picker 全量分组：多 provider × 多 model 展开成扁平行，当前模型定位。

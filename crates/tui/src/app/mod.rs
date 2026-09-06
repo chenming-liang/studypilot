@@ -531,15 +531,20 @@ impl App {
     /// Model Role → 该任务应使用的 ProviderConfig（文档 §Model Role）。
     /// 优先 `[roles]` 表的 `provider/model`；未配置该 Role → 回退当前模型（provider_cfg）。
     pub(crate) fn resolve_role_cfg(&self, role: agent_providers::ModelRole) -> ProviderConfig {
+        let thinking = role.thinking_enabled();
         let Some(canonical) = self.roles.get(role.key()) else {
-            return self.provider_cfg.clone();
+            let mut cfg = self.provider_cfg.clone();
+            cfg.thinking = thinking;
+            return cfg;
         };
         let Some((pname, mname)) = canonical.split_once('/') else {
             tracing::warn!(
                 role = role.key(),
                 "role 指向的 `{canonical}` 应为 provider/model"
             );
-            return self.provider_cfg.clone();
+            let mut cfg = self.provider_cfg.clone();
+            cfg.thinking = thinking;
+            return cfg;
         };
         match self
             .all_providers
@@ -554,26 +559,31 @@ impl App {
             }
             None => {
                 tracing::warn!(role = role.key(), "role 指向的 provider `{pname}` 未配置");
-                self.provider_cfg.clone()
+                let mut cfg = self.provider_cfg.clone();
+                cfg.thinking = thinking;
+                cfg
             }
         }
     }
 
-    /// Model Role → (client, cfg)（文档 §Model Role）：任务入口用角色模型跑，
-    /// 角色未配置 → 回退当前模型与现有 client（零额外请求）。
+    /// Model Role → (client, cfg)（文档 §Model Role）：任务入口用角色模型跑。
+    /// 无论模型是否与当前一致，都**按 role 新建 client**——因为 client 内部冻结的
+    /// cfg.thinking 决定请求是否开思考（fast/balanced 关、reasoning 开），
+    /// 复用旧 client 会让 thinking 沿用其构造时的模型预设值，导致 fast 误开思考。
+    /// 因此不复用 `self.provider`，总是新建一个 thinking 正确的 client。
     pub(crate) fn role_client(
         &self,
         role: agent_providers::ModelRole,
     ) -> (Arc<OpenAiClient>, ProviderConfig) {
-        let cfg = self.resolve_role_cfg(role);
-        if cfg.name == self.provider_cfg.name && cfg.model == self.provider_cfg.model {
-            return (self.provider.clone(), self.provider_cfg.clone());
-        }
+        let mut cfg = self.resolve_role_cfg(role);
+        cfg.thinking = role.thinking_enabled();
         match OpenAiClient::new(cfg.clone()) {
             Ok(client) => (Arc::new(client), cfg),
             Err(e) => {
                 tracing::warn!(role = role.key(), "角色模型初始化失败，回退当前模型: {e}");
-                (self.provider.clone(), self.provider_cfg.clone())
+                let mut cfg = self.provider_cfg.clone();
+                cfg.thinking = role.thinking_enabled();
+                (self.provider.clone(), cfg)
             }
         }
     }
