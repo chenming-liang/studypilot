@@ -671,7 +671,7 @@ mod tests {
             s.cursor = 0;
         }
         let models = app.setup.as_ref().unwrap().model_options();
-        assert!(models.contains(&"deepseek-reasoner".to_string()));
+        assert!(models.contains(&"deepseek-v4-flash".to_string()));
     }
 
     #[test]
@@ -1145,10 +1145,10 @@ mod tests {
         let cfg = app.build_pending_config();
         let ids: Vec<&str> = cfg.models.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(ids.len(), 2, "保存的 models 应为 2 个独立项");
-        assert!(ids.contains(&"deepseek-reasoner"), "reasoner 保留");
-        assert!(ids.contains(&"deepseek-chat"), "chat 保留");
+        assert!(ids.contains(&"deepseek-v4-flash"), "v4-flash 保留");
+        assert!(ids.contains(&"deepseek-v4-pro"), "v4-pro 保留");
         // 活动模型 = 第一个选中（Test 用其连接）
-        assert_eq!(cfg.model, "deepseek-reasoner");
+        assert_eq!(cfg.model, "deepseek-v4-flash");
     }
 
     /// Esc 逐级回退 Custom 输入步。
