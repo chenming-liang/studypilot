@@ -87,7 +87,15 @@ StudyPilot 把任务分为几类角色（fast / balanced / reasoning），每类
 
 如果不想本地编译，可直接下载预编译包（[GitHub Releases](https://github.com/chenming-liang/studypilot/releases)）：提供 Windows / Linux / macOS 三平台，下载解压后直接运行，无需安装 Rust。
 
-> 首次使用前：若导入的资料包含 PDF，需先安装 PDF 提取依赖（Python 3 + PyMuPDF）。在**解压目录**（程序与 `scripts/` 同级）运行一次：Windows 执行 `scripts\install-deps.ps1`，Linux / macOS 执行 `bash scripts/install-deps.sh`。请**在解压目录内运行程序**，以便找到 `scripts/pdf_extract.py`。
+> 首次使用前：若导入的资料包含 PDF，需先安装 PDF 提取依赖（Python 3 + PyMuPDF）。在**解压目录**（程序与 `scripts/` 同级）运行一次，请**在解压目录内运行程序**，以便找到 `scripts/pdf_extract.py`。
+>
+> - **Windows**（在解压目录打开 PowerShell 运行）：
+>   ```
+>   Set-ExecutionPolicy -Scope Process Bypass
+>   scripts\install-deps.ps1
+>   ```
+>   `-Scope Process Bypass` 只对当前窗口临时放行运行本地脚本，不动系统执行策略。
+> - **Linux / macOS**：`bash scripts/install-deps.sh`
 
 ### 从源码构建
 
