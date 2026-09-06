@@ -1221,10 +1221,10 @@ impl Store {
 /// - 移除全部空白（含全角空格；`& str` ≡ `&str`）
 /// - ASCII 转小写（`String` ≡ `string`）
 /// - 全角 ASCII 转半角（`＆str` ≡ `&str`）
-/// - 剥离常见结构后缀（`Vec容器` → `Vec`、`所有权模型` → `所有权`），仅当剥后非空
+/// - 不做后缀/语义特化：概念名原样保留，避免误合并不同概念
 ///
-/// 语义级近义（「字符串类型」vs「String」）不在本函数范围——那是抽取 prompt 的
-/// 命名稳定规则负责的源头压制，这里只做确定的格式级归并。
+/// 语义级近义（「字符串类型」vs「String」、`Vec<T>` vs `Vec`）不在本函数范围——
+/// 那是抽取 prompt 的命名稳定规则负责的源头压制，这里只做确定的格式级归并。
 pub fn normalize_concept_key(name: &str) -> String {
     let mut s = String::with_capacity(name.len());
     for c in name.chars() {
@@ -1239,19 +1239,7 @@ pub fn normalize_concept_key(name: &str) -> String {
         }
         s.push(c.to_ascii_lowercase());
     }
-    let s = s.trim();
-    // 剥离常见结构后缀（保守清单：只剥确定是修饰性结构词的）
-    const SUFFIXES: [&str; 5] = ["容器", "模型", "机制", "类型", "宏"];
-    let mut stripped = s.to_string();
-    for suf in SUFFIXES {
-        if let Some(base) = stripped.strip_suffix(suf)
-            && !base.is_empty()
-        {
-            stripped = base.to_string();
-            break;
-        }
-    }
-    stripped
+    s.trim().to_string()
 }
 
 #[cfg(test)]
@@ -1299,12 +1287,9 @@ mod concept_merge_tests {
         assert_eq!(normalize_concept_key("& str"), "&str", "内部空白压缩");
         assert_eq!(normalize_concept_key("＆str"), "&str", "全角转半角");
         assert_eq!(normalize_concept_key("String "), "string", "trim + 小写");
-        assert_eq!(
-            normalize_concept_key("所有权模型"),
-            "所有权",
-            "剥离结构后缀"
-        );
-        assert_eq!(normalize_concept_key("Vec容器"), "vec", "剥离容器后缀");
+        // 不做后缀/语义特化：概念名原样保留，仅格式归一化（全半角/空白/大小写）
+        assert_eq!(normalize_concept_key("所有权模型"), "所有权模型");
+        assert_eq!(normalize_concept_key("Vec容器"), "vec容器");
         assert_eq!(normalize_concept_key("所有权"), "所有权", "无后缀不动");
         assert_eq!(normalize_concept_key("  String\t "), "string");
         // 语义级近义不在本函数范围（由抽取 prompt 源头压制）
