@@ -28,7 +28,7 @@ impl App {
         // 预算熔断（R6）
         if self.total_cost >= self.max_cost {
             self.push_entry(Entry::Error(format!(
-                "已达预算上限 ¥{:.2}（累计 ¥{:.4}），拒绝出题。可用 /budget 调高上限",
+                "已达预算上限 ${:.2}（累计 ${:.4}），拒绝出题。可用 /budget 调高上限",
                 self.max_cost, self.total_cost
             )));
             return;
@@ -625,7 +625,7 @@ impl App {
                 self.finish_review_state(rs);
             }
             self.push_entry(Entry::Error(format!(
-                "已达预算上限 ¥{:.2}（累计 ¥{:.4}），出题中止。可用 /budget 调高上限",
+                "已达预算上限 ${:.2}（累计 ${:.4}），出题中止。可用 /budget 调高上限",
                 self.max_cost, self.total_cost
             )));
             return;

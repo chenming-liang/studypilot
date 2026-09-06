@@ -36,7 +36,7 @@ impl App {
         // R6 预算熔断：发起下一个请求前检查，超限拒绝并提示
         if self.total_cost >= self.max_cost {
             self.push_entry(Entry::Error(format!(
-                "已达预算上限 ¥{:.2}（累计 ¥{:.4}），拒绝发送。可用 /budget 调高上限",
+                "已达预算上限 ${:.2}（累计 ${:.4}），拒绝发送。可用 /budget 调高上限",
                 self.max_cost, self.total_cost
             )));
             return;
@@ -155,7 +155,7 @@ impl App {
         // 预算熔断（R6）：逐篇 LLM 重抽是 refresh 的开销源
         if self.total_cost >= self.max_cost {
             self.push_entry(Entry::Error(format!(
-                "已达预算上限 ¥{:.2}（累计 ¥{:.4}），拒绝刷新。可用 /budget 调高上限",
+                "已达预算上限 ${:.2}（累计 ${:.4}），拒绝刷新。可用 /budget 调高上限",
                 self.max_cost, self.total_cost
             )));
             return;
@@ -220,7 +220,7 @@ impl App {
         if arg.is_empty() {
             let remaining = (self.max_cost - self.total_cost).max(0.0);
             self.push_entry(Entry::Info(format!(
-                "预算: 累计 ¥{:.4} / 上限 ¥{:.2} / 剩余 ¥{:.4}",
+                "预算: 累计 ${:.4} / 上限 ${:.2} / 剩余 ${:.4}",
                 self.total_cost, self.max_cost, remaining
             )));
             return;
@@ -249,7 +249,7 @@ impl App {
                 let _ =
                     std::fs::write(dir.join("budget.json"), format!(r#"{{"max_cost": {val}}}"#));
                 self.push_entry(Entry::Info(format!(
-                    "预算上限已设为 ¥{val:.2}（已保存，重启保留）"
+                    "预算上限已设为 ${val:.2}（已保存，重启保留）"
                 )));
             }
             _ => {
@@ -288,7 +288,7 @@ impl App {
         // 预算熔断（R6）：出题前检查
         if self.total_cost >= self.max_cost {
             self.push_entry(Entry::Error(format!(
-                "已达预算上限 ¥{:.2}（累计 ¥{:.4}），拒绝出题。可用 /budget 调高上限",
+                "已达预算上限 ${:.2}（累计 ${:.4}），拒绝出题。可用 /budget 调高上限",
                 self.max_cost, self.total_cost
             )));
             return;
@@ -330,7 +330,7 @@ impl App {
         // 预算熔断（R6）：出题前检查
         if self.total_cost >= self.max_cost {
             self.push_entry(Entry::Error(format!(
-                "已达预算上限 ¥{:.2}（累计 ¥{:.4}），拒绝出题。可用 /budget 调高上限",
+                "已达预算上限 ${:.2}（累计 ${:.4}），拒绝出题。可用 /budget 调高上限",
                 self.max_cost, self.total_cost
             )));
             return;

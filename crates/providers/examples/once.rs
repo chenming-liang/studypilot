@@ -34,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
     println!("--- 回复 ---");
     println!("{}", resp.content);
     println!(
-        "--- tokens: prompt={} completion={} | cost: ¥{:.6} ---",
+        "--- tokens: prompt={} completion={} | cost: ${:.6} ---",
         resp.usage.prompt_tokens,
         resp.usage.completion_tokens,
         estimate_cost(&pc, &resp.usage)

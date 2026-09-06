@@ -62,22 +62,22 @@ StudyPilot 把任务分为几类角色（fast / balanced / reasoning），每类
 
 | Provider | Models |
 |---|---|
-| DeepSeek | `deepseek-chat` · `deepseek-reasoner` |
-| Qwen (通义千问) | `qwen3-max` · `qwen3-plus` · `qwen3-turbo` · `qwen-max` · `qwen-long` |
-| GLM (智谱) | `glm-4-plus` · `glm-4-air` · `glm-4-flash` · `glm-4-long` |
-| Kimi (Moonshot) | `kimi-latest` · `kimi-k2` · `moonshot-v1-128k` · `moonshot-v1-32k` · `moonshot-v1-8k` |
-| MiniMax | `MiniMax-Text-01` · `MiniMax-M1` · `abab6.5s-chat` |
-| Doubao (火山方舟) | `doubao-seed-1-6-flash` · `doubao-1.5-pro-32k` · `doubao-1.5-pro-256k` · `doubao-1.5-lite-32k` |
-| Hunyuan (腾讯混元) | `hunyuan-turbos` · `hunyuan-pro` · `hunyuan-standard` · `hunyuan-lite` |
-| ERNIE (百度千帆) | `ernie-4.0-8k` · `ernie-3.5-8k` · `ernie-speed-8k` · `ernie-lite-8k` |
-| OpenAI | `gpt-4o` · `gpt-4o-mini` · `gpt-4.1` · `gpt-4.1-mini` · `o3` · `o4-mini` |
-| Anthropic (Claude) | `claude-sonnet-4` · `claude-opus-4` · `claude-haiku-4` · `claude-3-7-sonnet` |
-| Gemini (Google) | `gemini-2.5-pro` · `gemini-2.5-flash` · `gemini-2.5-flash-lite` · `gemini-2.0-flash` |
-| Grok (xAI) | `grok-3` · `grok-3-mini` · `grok-2` |
-| OpenRouter | `anthropic/claude-3.7-sonnet` · `openai/gpt-4o` · `deepseek/deepseek-chat` · `google/gemini-2.5-flash` |
-| Ollama (本地) | `llama3.2` · `qwen3:8b` · `deepseek-r1:7b` · `phi4` |
+| DeepSeek | `deepseek-v4-flash` · `deepseek-v4-pro` · `deepseek-v4-flash-vision-exp` |
+| Qwen (通义千问) | `qwen3.8-max` · `qwen3.7-max` · `qwen3.8-flash` · `qwen3.7-flash` |
+| GLM (智谱) | `glm-5.3` · `glm-5.3-flash` · `glm-5.2` |
+| Kimi (Moonshot) | `kimi-k3` · `kimi-k2.7-code` · `kimi-k2.6` |
+| MiniMax | `MiniMax-M3` · `MiniMax-M2.7` · `MiniMax-M2.7-highspeed` · `MiniMax-M2.5` |
+| Doubao (火山方舟) | `doubao-seed-2.1-pro` · `doubao-seed-2.1-turbo` |
+| Hunyuan (腾讯混元) | `Hy4-preview` · `Hy3` |
+| ERNIE (百度千帆) | `ernie-5.1` · `ernie-5.0` |
+| OpenAI | `gpt-6-astra` · `gpt-5.6-sol` · `gpt-5.6-terra` · `gpt-5.6-luna` |
+| Anthropic (Claude) | `claude-fable-5.1` · `claude-opus-5` · `claude-sonnet-5` · `claude-haiku-4.5` |
+| Gemini (Google) | `gemini-3.8-flash` · `gemini-3.7-flash` · `gemini-3.6-flash` |
+| Grok (xAI) | `grok-4.6` · `grok-4.5` · `grok-4.3` |
 
-此外支持任意 **Custom OpenAI-compatible** 服务（自定义 Base URL 与模型名）。
+此外支持任意 **Custom OpenAI-compatible** 服务（自定义 Base URL 与模型名），可接入 OpenRouter、本地 Ollama 等动态模型目录。
+
+> 模型为各厂商当前主流选项，随厂商更新演进；未列出模型可自行通过 Custom Provider 或编辑 `config.toml` 接入。内置模型带 **USD / 1M tokens** 的估算单价（固定换算 1 USD = 6.71 CNY），仅用于成本估算、不追求账单级精确。
 
 ---
 
@@ -152,7 +152,7 @@ cargo build --release
 - **Endpoint**：每个 Provider 预设了默认端点；Custom Provider 可自定义 Base URL
 - **Model**：可通过命令面板切换并持久化为默认模型
 - **Custom OpenAI-compatible Provider**：在 Setup 中选择 Custom，填写 Provider 名称、Base URL、Model、API Key
-- **Model Roles**：在 `config.toml` 的 `[roles]` 中为 fast / balanced / reasoning 三种任务角色指定模型（如 `fast = "deepseek/deepseek-chat"`）
+- **Model Roles**：在 `config.toml` 的 `[roles]` 中为 fast / balanced / reasoning 三种任务角色指定模型（如 `fast = "deepseek/deepseek-v4-flash"`）
 - **Budget**：在命令面板查看累计花费、设置累计上限，超出后停止调用；可重置累计金额
 
 ---

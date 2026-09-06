@@ -209,12 +209,12 @@ pub struct ProviderConfig {
     /// 该 provider 下的全部模型（多个；pricing/元数据在此）。空 = 旧式单 model（自动迁移）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<ModelConfig>,
-    /// 元 / 百万 token（可选：未知模型可运行，Cost tracking unavailable）
+    /// $ / 百万 token（可选：未知模型可运行，Cost tracking unavailable）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub price_prompt: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub price_completion: Option<f64>,
-    /// 元 / 百万 token（上下文缓存命中部分）；未配置 = 与 price_prompt 同价（保守）
+    /// $ / 百万 token（上下文缓存命中部分）；未配置 = 与 price_prompt 同价（保守）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub price_prompt_cached: Option<f64>,
     #[serde(default)]

@@ -230,7 +230,7 @@ async fn main() -> anyhow::Result<()> {
              - 幻觉判定: {halluc} 题\n\
              - 检索 miss（top3 外）仍答对（≥6 分）: {no_retrieval_hit} 题——\
              说明部分问题模型可凭自身知识兜底，检索价值需按题分析\n\
-             - 总成本: ¥{total_cost:.4}\n\n\
+             - 总成本: ${total_cost:.4}\n\n\
              ### 每题明细\n\n",
             scored.len(),
             rows.len()
@@ -240,7 +240,7 @@ async fn main() -> anyhow::Result<()> {
             .filter(|r| r.score.is_some() || r.judge_reason.is_some())
         {
             md.push_str(&format!(
-                "#### #{} {}（检索 {}，{:.1} 分，¥{:.4}）\n\n",
+                "#### #{} {}（检索 {}，{:.1} 分，${:.4}）\n\n",
                 r.id,
                 r.q,
                 match r.hit {

@@ -4,7 +4,7 @@ use agent_core::Usage;
 
 use crate::config::ProviderConfig;
 
-/// 按配置单价（元/百万 token）把一次调用的 usage 折算为费用（元）。
+/// 按配置单价（$/百万 token）把一次调用的 usage 折算为费用（美元）。
 pub fn estimate_cost(cfg: &ProviderConfig, usage: &Usage) -> f64 {
     // 未知 pricing（Option=None）→ Cost tracking unavailable，不计费
     let (Some(price_prompt), Some(price_completion)) = (cfg.price_prompt, cfg.price_completion)
@@ -26,15 +26,15 @@ mod tests {
     use super::*;
 
     fn pc() -> ProviderConfig {
-        // 与 config.toml 中 deepseek 单价一致
+        // 示意单价（$/百万 token）：测试 estimate_cost 折算逻辑，不依赖具体模型
         toml::from_str(
             r#"
 name = "deepseek"
 endpoint = "https://api.deepseek.com/v1"
-model = "deepseek-reasoner"
+model = "deepseek-v4-pro"
 price_prompt = 4.0
 price_completion = 16.0
-context_length = 65536
+context_length = 1000000
 thinking = true
 "#,
         )

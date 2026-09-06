@@ -880,7 +880,7 @@ impl App {
                     .filter(|v| *v > 0.0)
                 {
                     self.max_cost = v;
-                    self.push_entry(Entry::Info(format!("预算上限已设为 ¥{v:.2}")));
+                    self.push_entry(Entry::Info(format!("预算上限已设为 ${v:.2}")));
                 } else {
                     self.push_entry(Entry::Error("用法: /budget <金额>（金额须为正数）".into()));
                 }

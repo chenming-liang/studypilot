@@ -510,10 +510,10 @@ impl CommandPalette {
             P {
                 label: "Budget → Set",
                 command: "/budget",
-                desc: "设置花费上限（元）",
+                desc: "设置花费上限（美元）",
                 action: A::Prompt {
                     title: "设置预算上限",
-                    prompt: "金额（元）",
+                    prompt: "金额（美元）",
                     kind: crate::wizard::WizardKind::BudgetLimit,
                 },
                 group: G::Settings,
@@ -716,7 +716,7 @@ mod picker_filter_tests {
             today_reviewed: vec![],
         };
         let p = ReviewMapPicker::from_map(&map);
-        assert_eq!(p.title, "rust · Learning Map");
+        assert_eq!(p.title, "rust · Review Map");
         // 行 = section1 头 + 3 概念 + section2 头 + 1 概念
         assert_eq!(p.len(), 6);
         match &p.rows[0] {

@@ -498,7 +498,7 @@ impl Store {
         Ok(())
     }
 
-    /// 全部历史调用的累计成本（元）。
+    /// 全部历史调用的累计成本（美元）。
     pub fn total_recorded_cost(&self) -> Result<f64> {
         let conn = self.conn.lock().unwrap();
         conn.query_row("SELECT COALESCE(SUM(cost), 0.0) FROM usage_log", [], |r| {
