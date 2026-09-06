@@ -94,7 +94,10 @@ StudyPilot 把任务分为几类角色（fast / balanced / reasoning），每类
 >   Set-ExecutionPolicy -Scope Process Bypass
 >   scripts\install-deps.ps1
 >   ```
-> - **Linux / macOS**：`bash scripts/install-deps.sh`
+> - **Linux / macOS**（在解压目录打开终端）：
+>   ```
+>   bash scripts/install-deps.sh
+>   ```
 
 ### 从源码构建
 
