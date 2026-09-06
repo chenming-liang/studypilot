@@ -159,6 +159,25 @@ cargo build --release
 
 ## Architecture
 
+```
+                 ┌─────────────┐
+                 │     User    │
+                 └──────┬──────┘
+                        ↓
+                 ┌─────────────┐
+                 │  StudyPilot │
+                 │     TUI     │
+                 └──────┬──────┘
+                        ↓
+          ┌─────────────┴─────────────┐
+          ↓                           ↓
+    Learning Agent               Review Engine
+          ↓                           ↓
+        RAG                      Learning Map
+          ↓                           ↓
+     Materials                Concept / Mastery
+```
+
 StudyPilot 由两部分协作：**学习助手**负责基于资料的问答（检索笔记 → 生成带引用的回答），**复习引擎**负责复习闭环（组织知识地图 → 出题 → 批改 → 更新掌握度）。两者都建立在本地数据库之上（存储笔记、会话与学习历史）。
 
 ---
