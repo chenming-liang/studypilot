@@ -574,12 +574,12 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &mut App) {
                 format!("题目 {}/{}", rs.current + 1, total),
                 Style::new().fg(theme::USER).add_modifier(Modifier::BOLD),
             ),
-            Span::styled("  ·  出题中…", Style::new().fg(theme::MUTED)),
+            Span::styled("  ·  出题中…", Style::new().fg(theme::STATUS_PROCESSING)),
         ]));
         body.push(Line::default());
         body.push(Line::from(Span::styled(
             "  下一题生成中…",
-            Style::new().fg(theme::MUTED),
+            Style::new().fg(theme::STATUS_PROCESSING),
         )));
         body.push(Line::from(Span::styled(
             "  Esc 退出复习",
@@ -683,10 +683,24 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &mut App) {
                 .strip_prefix("✓ ")
                 .or_else(|| r.feedback.strip_prefix("✗ "))
                 .unwrap_or(&r.feedback);
-            body.push(Line::from(Span::styled(
-                format!("  {mark}  {detail}"),
-                Style::new().fg(color).add_modifier(Modifier::BOLD),
-            )));
+            // 批改评语同样走 markdown 管线（可能含代码块/格式，与题面解释一致）
+            let mut detail_lines =
+                markdown::render_markdown(detail, inner_w.saturating_sub(6).max(1));
+            while detail_lines.last().is_some_and(|l| l.spans.is_empty()) {
+                detail_lines.pop();
+            }
+            for (i, l) in detail_lines.into_iter().enumerate() {
+                let mut spans = vec![Span::styled(
+                    if i == 0 {
+                        format!("  {mark}  ")
+                    } else {
+                        "         ".to_string()
+                    },
+                    Style::new().fg(color).add_modifier(Modifier::BOLD),
+                )];
+                spans.extend(l.spans);
+                body.push(Line::from(spans));
+            }
             if let Some(s) = r.score {
                 body.push(Line::from(Span::styled(
                     format!("  得分 {s}/100"),
@@ -736,7 +750,7 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &mut App) {
                         // 回答生成中：占位思考行（问题 5：问句先显示）
                         body.push(Line::from(Span::styled(
                             format!("  {} 正在生成回答…", spinner_char(app.tick)),
-                            Style::new().fg(DIM),
+                            Style::new().fg(theme::STATUS_PROCESSING),
                         )));
                     }
                     Some(Ok(a)) => {
@@ -1589,7 +1603,7 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
             if s.testing {
                 items.push(ListItem::new(Line::from(Span::styled(
                     "  ⟳ Connecting…",
-                    Style::new().fg(theme::PRIMARY),
+                    Style::new().fg(theme::STATUS_PROCESSING),
                 ))));
             } else if let Some(r) = &s.test_result {
                 let ok = r.starts_with('✓');
@@ -2037,7 +2051,7 @@ fn draw_warmup(f: &mut Frame, app: &mut App) {
     if w.cards.is_empty() {
         items.push(ListItem::new(Line::from(Span::styled(
             "  生成中…",
-            Style::new().fg(theme::PRIMARY),
+            Style::new().fg(theme::STATUS_PROCESSING),
         ))));
     } else {
         items.push(ListItem::new(Line::from(Span::styled(

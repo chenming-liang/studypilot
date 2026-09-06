@@ -510,7 +510,10 @@ impl App {
                     agent_core::first_json_block(&json).and_then(|b| serde_json::from_str(b).ok())
                 });
             let Some(a) = advice else {
-                tracing::warn!("复习小结 JSON 解析失败");
+                tracing::warn!(
+                    "复习小结 JSON 解析失败，原始输出: {}",
+                    String::from_utf8_lossy(json.trim().as_bytes())
+                );
                 let _ = tx.send(AppEvent::ReviewAdvice(
                     "⚠ 小结生成失败（已跳过）：输出解析失败".into(),
                 ));
