@@ -13,3 +13,4 @@ data/
 *.db-wal
 *.db-shm
 _personal/
+AGENTS.md
