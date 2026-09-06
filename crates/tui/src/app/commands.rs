@@ -137,7 +137,7 @@ impl App {
             "/review" => self.handle_review_command(arg.trim()),
             _ => {
                 self.push_entry(Entry::Error(format!(
-                    "未知命令 `{cmd}`，输入 /help 查看可用命令"
+                    "未知命令 `{cmd}`，按 Ctrl+K 打开命令面板"
                 )));
             }
         }
@@ -1084,7 +1084,8 @@ pub(crate) mod course_delete_tests {
             .insert("fast".into(), "deepseek/deepseek-v4-pro".into());
         let fast = app.resolve_role_cfg(ModelRole::Fast);
         assert_eq!(fast.model, "deepseek-v4-pro", "命中 [roles].fast");
-        assert!(fast.thinking, "角色模型带元数据");
+        // Role 决定 thinking：fast 关（即使模型元数据 thinking=true）
+        assert!(!fast.thinking, "fast 角色应关闭 thinking");
         assert_eq!(
             fast.api_key.as_deref(),
             Some("sk-deepseek"),

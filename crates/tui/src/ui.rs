@@ -1026,7 +1026,10 @@ fn draw_chat(f: &mut Frame, area: Rect, app: &mut App) {
         if app.is_inflight() {
             let spinner = spinner_char(app.tick);
             lines.push(Line::from(vec![
-                Span::styled(format!("{spinner} "), Style::new().fg(theme::MUTED)),
+                Span::styled(
+                    format!("{spinner} "),
+                    Style::new().fg(theme::STATUS_PROCESSING),
+                ),
                 Span::styled("思考中…", Style::new().fg(DIM)),
             ]));
             text_lines.push(format!("{spinner} 思考中…"));

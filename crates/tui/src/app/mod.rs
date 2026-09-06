@@ -547,7 +547,11 @@ impl App {
             .find(|p| p.name == pname)
             .map(|p| p.with_model(mname))
         {
-            Some(cfg) => cfg,
+            Some(mut cfg) => {
+                // Role 决定本次请求是否启用 thinking（fast/balanced 关、reasoning 开）
+                cfg.thinking = role.thinking_enabled();
+                cfg
+            }
             None => {
                 tracing::warn!(role = role.key(), "role 指向的 provider `{pname}` 未配置");
                 self.provider_cfg.clone()
@@ -1006,7 +1010,7 @@ pub async fn run(mut terminal: DefaultTerminal, mut app: App) -> anyhow::Result<
     });
 
     app.push_entry(Entry::Info(format!(
-        "StudyPilot 已就绪 │ 课程: {} │ 模型: {} │ Ctrl+K 命令面板 · /help 能力总览",
+        "StudyPilot 已就绪 │ 课程: {} │ 模型: {} │ Ctrl+K 命令面板",
         app.course, app.provider_cfg.model
     )));
     app.request_sessions_refresh();
