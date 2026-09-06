@@ -1,9 +1,15 @@
-# StudyPilot 依赖安装脚本（Windows）
+﻿# StudyPilot 依赖安装脚本（Windows）
 # 安装 PDF 提取所需的 Python 3 + PyMuPDF，并引导使用 MSVC Rust toolchain。
 # 用法：右键「使用 PowerShell 运行」，或在 PowerShell 中执行本脚本。
 # 首次运行若提示执行策略限制：Set-ExecutionPolicy -Scope Process Bypass
 
 $ErrorActionPreference = "Stop"
+# 统一控制台输出编码为 UTF-8，避免中文提示乱码（Windows PowerShell 默认本地代码页）
+try {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+} catch {
+    Write-Host "无法设置控制台编码（忽略）"
+}
 Write-Host "== StudyPilot 依赖安装 (Windows) =="
 
 # ── 0. Rust toolchain：推荐 MSVC（GNU toolchain 在含中文的路径下链接会失败）──
