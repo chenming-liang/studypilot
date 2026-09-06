@@ -910,7 +910,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         }
     };
     let right = format!(
-        "{} │ ¥{:.2}/{:.0} │ {} ",
+        "{} │ ${:.2}/{:.0} │ {} ",
         app.provider_cfg.model, app.total_cost, app.max_cost, status_text,
     );
     let left_w = display_width(&left);
@@ -925,7 +925,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
             Style::new().fg(theme::MUTED),
         ),
         Span::styled(
-            format!("¥{:.2}/{:.0} │ ", app.total_cost, app.max_cost),
+            format!("${:.2}/{:.0} │ ", app.total_cost, app.max_cost),
             Style::new().fg(if app.total_cost > app.max_cost * 0.8 {
                 ERROR
             } else {
@@ -1513,7 +1513,7 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
             for seg in setup_input_lines(&s.custom_buf, width) {
                 items.push(ListItem::new(Line::from(Span::styled(
                     seg,
-                    Style::new().fg(theme::MUTED),
+                    Style::new().fg(theme::DEFAULT),
                 ))));
             }
             let hint = if s.step == SetupStep::CustomModel {
@@ -1558,7 +1558,7 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
             };
             items.push(ListItem::new(Line::from(Span::styled(
                 format!("  Provider: {provider}"),
-                Style::new().fg(theme::MUTED),
+                Style::new().fg(theme::DEFAULT),
             ))));
             // 模型逐行显示：custom 逗号拆分；preset 显示全部 selected_models（多选可见）
             let models: Vec<String> = if s.provider.as_deref() == Some("custom") {
@@ -1579,7 +1579,7 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
             for m in models {
                 items.push(ListItem::new(Line::from(Span::styled(
                     format!("  Model: {m}"),
-                    Style::new().fg(theme::MUTED),
+                    Style::new().fg(theme::DEFAULT),
                 ))));
             }
             items.push(ListItem::new(Line::default()));
@@ -1637,13 +1637,13 @@ fn draw_setup(f: &mut Frame, app: &mut App) {
             };
             items.push(ListItem::new(Line::from(Span::styled(
                 format!("  Provider: {provider}"),
-                Style::new().fg(DIM),
+                Style::new().fg(theme::DEFAULT),
             ))));
             // Model 可能多模型 join（长）：按宽度 wrap 折行，不溢出
             for seg in setup_input_lines(&format!("Model: {model}"), width) {
                 items.push(ListItem::new(Line::from(Span::styled(
                     seg,
-                    Style::new().fg(DIM),
+                    Style::new().fg(theme::DEFAULT),
                 ))));
             }
             // 添加成功的明确信号：Test 全 ✓ 才走到 Done（已落盘配置）
