@@ -111,6 +111,35 @@ pub async fn import_directory(
         }
     }
 
+    // 导入收尾：若指定了课程，做一次格式级概念归并（`& str` vs `&str` 这类纯格式差异，
+    // 无学科特化）。归并能清理跨篇格式级重复的 LLM 命名分歧；
+    // 未指定课程（LLM 判断）时概念分散，不做单一课程归并。D2：store 同步调用走 spawn_blocking。
+    if let Some(course_name) = &config.course {
+        let store_clone = Arc::clone(&store);
+        let cname = course_name.clone();
+        let merged: Result<usize, String> = tokio::task::spawn_blocking(move || {
+            let cid = store_clone
+                .find_course(&cname)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("课程 `{cname}` 不存在，跳过归并"))?;
+            store_clone
+                .merge_duplicate_concepts(cid)
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()));
+
+        match merged {
+            Ok(n) if n > 0 => {
+                tracing::info!(course = %course_name, merged = n, "导入收尾归并概念");
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::debug!(course = %course_name, "概念归并失败（不影响导入）: {e}");
+            }
+        }
+    }
+
     let _ = tx.send(ImportEvent::Finished { ok, skipped, fail });
 }
 
