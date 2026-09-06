@@ -77,7 +77,7 @@ StudyPilot 把任务分为几类角色（fast / balanced / reasoning），每类
 
 此外支持任意 **Custom OpenAI-compatible** 服务（自定义 Base URL 与模型名），可接入 OpenRouter、本地 Ollama 等动态模型目录。
 
-> 模型为各厂商当前主流选项，随厂商更新演进；未列出模型可自行通过 Custom Provider 或编辑 `config.toml` 接入。内置模型带 **USD / 1M tokens** 的估算单价（固定换算 1 USD = 6.71 CNY），仅用于成本估算、不追求账单级精确。
+> 模型为各厂商当前主流选项，随厂商更新演进；未列出模型可通过自定义方式接入。
 
 ---
 
@@ -148,7 +148,7 @@ cargo build --release
 
 配置项包括：
 
-- **API Key**：在 AI Setup 中填写，或写入 `auth.toml`；也支持通过环境变量引用（`api_key_env`）
+- **API Key**：在 AI Setup 中填写，或写入 `auth.toml`；也支持通过环境变量引用
 - **Endpoint**：每个 Provider 预设了默认端点；Custom Provider 可自定义 Base URL
 - **Model**：可通过命令面板切换并持久化为默认模型
 - **Custom OpenAI-compatible Provider**：在 Setup 中选择 Custom，填写 Provider 名称、Base URL、Model、API Key
@@ -159,26 +159,7 @@ cargo build --release
 
 ## Architecture
 
-```
-                 ┌─────────────┐
-                 │     User    │
-                 └──────┬──────┘
-                        ↓
-                 ┌─────────────┐
-                 │  StudyPilot │
-                 │     TUI     │
-                 └──────┬──────┘
-                        ↓
-          ┌─────────────┴─────────────┐
-          ↓                           ↓
-    Learning Agent               Review Engine
-          ↓                           ↓
-        RAG                      Learning Map
-          ↓                           ↓
-     Materials                Concept / Mastery
-```
-
-StudyPilot 由两部分协作：**Learning Agent** 负责基于资料的问答（检索笔记 → 生成带引用的回答），**Review Engine** 负责复习闭环（组织复习地图 → 出题 → 批改 → 更新掌握度）。两者都建立在本地 SQLite 数据库之上（存储笔记、会话与学习历史）。
+StudyPilot 由两部分协作：**学习助手**负责基于资料的问答（检索笔记 → 生成带引用的回答），**复习引擎**负责复习闭环（组织知识地图 → 出题 → 批改 → 更新掌握度）。两者都建立在本地数据库之上（存储笔记、会话与学习历史）。
 
 ---
 
