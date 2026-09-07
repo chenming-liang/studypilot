@@ -326,7 +326,10 @@ impl App {
         let Some((start, end)) = self.text_selection.take() else {
             return;
         };
-        // 双端钳制，防越界切片
+        // 双端钳制，防越界切片；chat_lines 为空（切换会话/课程清空）时直接返回
+        if self.chat_lines.is_empty() {
+            return;
+        }
         let last = self.chat_lines.len().saturating_sub(1);
         let start = start.min(last);
         let end = end.min(last);
@@ -726,7 +729,22 @@ impl App {
     }
 
     /// 打开命令面板（context-aware，文档 §5）：按当前 workspace 与是否有课程过滤条目。
+    /// 关闭所有覆盖层（modal 互斥：打开新的前清掉其它，防止多个覆盖层叠加渲染重叠）。
+    /// warmup/review_map_picker 属复习流程状态（不在此清，避免打断）；
+    /// 这里清的是与"对话中弹出面板"类型同级的覆盖层：palette/wizard/setup/
+    /// list_picker/note_browser/session_browser/model_picker。
+    pub(crate) fn close_overlays(&mut self) {
+        self.palette = None;
+        self.wizard = None;
+        self.setup = None;
+        self.list_picker = None;
+        self.note_browser = None;
+        self.session_browser = None;
+        self.model_picker = None;
+    }
+
     pub(crate) fn open_palette(&mut self) {
+        self.close_overlays();
         self.take_input_for_overlay();
         let mut palette = CommandPalette::new();
         palette.apply_context(self.workspace, !self.courses.is_empty());
@@ -743,12 +761,12 @@ impl App {
         }
         let Some(course_id) = self.current_course_id() else {
             self.push_entry(Entry::Error(
-                "复习需要具体课程：先 /course <课程名> 进入一门课，或用 /review --course <名>"
-                    .into(),
+                "复习需要具体课程：先 Ctrl+K → Switch Course 进入一门课".into(),
             ));
             return;
         };
         let course_name = self.course.clone();
+        self.close_overlays();
         self.take_input_for_overlay();
         self.wizard = Some(Wizard::new_review(Some(course_id), course_name));
         self.enter_wizard_step();

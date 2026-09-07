@@ -1048,6 +1048,19 @@ fn draw_chat(f: &mut Frame, area: Rect, app: &mut App) {
             ]));
             text_lines.push(format!("{spinner} 思考中…"));
         }
+        // 导入进行中：当前文件 · 阶段 · 已等 X 秒（动态刷新）
+        if let Some(st) = &app.import_status {
+            let secs = st.since.elapsed().as_secs();
+            lines.push(Line::from(Span::styled(
+                format!("  ↳ {} · {} · 已等 {secs}s", st.name, st.phase.label()),
+                Style::new().fg(theme::STATUS_PROCESSING),
+            )));
+            text_lines.push(format!(
+                "  ↳ {} · {} · 已等 {secs}s",
+                st.name,
+                st.phase.label()
+            ));
+        }
     }
 
     let max_offset = lines.len().saturating_sub(viewport);

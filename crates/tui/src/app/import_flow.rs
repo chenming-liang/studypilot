@@ -7,6 +7,16 @@ use tokio_util::sync::CancellationToken;
 
 use super::{App, AppEvent, Entry};
 
+/// 导入当前操作信息（供聊天行显示"当前文件 · 阶段 · 已等 X 秒"）。
+/// `since` 在文件开始时设定，阶段切换（解析/抽取/入库）只更新 phase、不重置计时，
+/// 从而显示"该文件已处理总时长"。
+#[derive(Clone, Debug)]
+pub(crate) struct ImportStatus {
+    pub(crate) name: String,
+    pub(crate) phase: importer::FilePhase,
+    pub(crate) since: std::time::Instant,
+}
+
 impl App {
     /// canonical：打开导入向导（palette / Course 页 / Home 共用）。
     /// 课程预填当前分区；向导完成后经 `finish_wizard` 调 `run_import`。
@@ -130,32 +140,52 @@ impl App {
             }
             FileStart { name, index, total } => {
                 self.push_entry(Entry::Info(format!("[{index}/{total}] 导入: {name}")));
+                self.import_status = Some(ImportStatus {
+                    name,
+                    phase: importer::FilePhase::Parsing,
+                    since: std::time::Instant::now(),
+                });
             }
-            FileProgress { name, phase } => {
+            FileProgress {
+                name,
+                phase,
+                segment: _,
+                segment_total: _,
+            } => {
                 // 对话栏逐阶段报告（问题 1 对齐）：解析 → 抽取概念 → 入库
                 self.push_entry(Entry::Info(format!("    ↳ {name} · {}", phase.label())));
+                // 更新当前阶段（计时不重置：显示该文件已处理时长）
+                if let Some(st) = &mut self.import_status {
+                    st.phase = phase;
+                }
             }
             FileDone { name, concepts } => {
                 self.push_entry(Entry::Info(format!("  ✓ {name} → {} 个概念", concepts)));
+                self.import_status = None;
             }
-            FileSkipped { name, at } => match at {
-                Some(detail) => {
-                    self.push_entry(Entry::Info(format!("  ⊘ {name}（{detail}）")));
+            FileSkipped { name, at } => {
+                self.import_status = None;
+                match at {
+                    Some(detail) => {
+                        self.push_entry(Entry::Info(format!("  ⊘ {name}（{detail}）")));
+                    }
+                    None => {
+                        self.push_entry(Entry::Info(format!("  ⊘ {name}（已存在，跳过）")));
+                    }
                 }
-                None => {
-                    self.push_entry(Entry::Info(format!("  ⊘ {name}（已存在，跳过）")));
-                }
-            },
+            }
             ChunkFail { name, err } => {
                 self.push_entry(Entry::Error(format!(
                     "  ⚠ {name}: 切片入库失败，该笔记暂不可检索: {err}"
                 )));
             }
             FileFail { name, err } => {
+                self.import_status = None;
                 self.push_entry(Entry::Error(format!("  ✗ {name}: {err}")));
             }
             Finished { ok, skipped, fail } => {
                 self.import_cancel = None;
+                self.import_status = None;
                 self.request_sessions_refresh();
                 // 流水线可能在 DB 里新建课程（归类/收编），内存列表必须对齐
                 self.request_courses_refresh();
