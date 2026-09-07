@@ -19,6 +19,36 @@ mod wizard;
 
 use std::sync::{Arc, Mutex};
 
+/// 数据目录：与配置同目录 `~/.studypilot/data/`（产品形态，任意 cwd 下数据一致）。
+fn data_dir() -> anyhow::Result<std::path::PathBuf> {
+    Ok(agent_providers::Config::data_dir()?)
+}
+
+/// 一次性迁移旧 cwd `data/` 数据到新 `~/.studypilot/data/`（仅当新位置无数据、旧位置有）。
+/// 防止用户升级后"数据丢失"（旧版把数据放 cwd，换目录启动就找不到）。
+fn migrate_legacy_data(data: &std::path::Path) -> anyhow::Result<()> {
+    for file in ["mynotes.db", "budget.json", "last_course.json", "tui.log"] {
+        let src = std::path::Path::new("data").join(file);
+        let dst = data.join(file);
+        if !dst.exists() && src.exists() {
+            if file == "mynotes.db" {
+                // db 可能带 -wal/-shm 伴生文件，一并迁移（若存在）
+                for suffix in ["", "-wal", "-shm"] {
+                    let s = std::path::Path::new("data").join(format!("{file}{suffix}"));
+                    let d = data.join(format!("{file}{suffix}"));
+                    if s.exists() {
+                        std::fs::copy(&s, &d)?;
+                    }
+                }
+            } else {
+                std::fs::copy(&src, &dst)?;
+            }
+            tracing::info!(file = file, "已迁移旧 cwd data 数据到 ~/.studypilot/data");
+        }
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_logging()?;
@@ -70,10 +100,13 @@ async fn main() -> anyhow::Result<()> {
     let pc = cfg.default_provider().cloned().unwrap_or_default();
 
     // D2：DB 操作走 spawn_blocking；这里启动时同步读一次课程列表+统计与累计成本
-    let store = Arc::new(storage::Store::open("data/mynotes.db")?);
+    // 数据与配置同目录（~/.studypilot/data/），任意 cwd 下数据一致；一次性迁移旧 cwd data
+    let data = data_dir()?;
+    migrate_legacy_data(&data)?;
+    let store = Arc::new(storage::Store::open(data.join("mynotes.db"))?);
     // 预算上限：config.toml 的 max_cost 为默认，data/budget.json（/budget 设置）覆盖
     let mut max_cost = cfg.max_cost;
-    if let Ok(raw) = std::fs::read_to_string("data/budget.json")
+    if let Ok(raw) = std::fs::read_to_string(data.join("budget.json"))
         && let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw)
         && let Some(m) = v.get("max_cost").and_then(serde_json::Value::as_f64)
         && m > 0.0
@@ -133,13 +166,14 @@ fn restore_terminal() {
     ratatui::restore();
 }
 
-/// TUI 里禁止 println!：日志写文件（data/tui.log，RUST_LOG 控制）。
+/// TUI 里禁止 println!：日志写文件（~/.studypilot/data/tui.log，RUST_LOG 控制）。
 fn init_logging() -> anyhow::Result<()> {
-    std::fs::create_dir_all("data")?;
+    let data = data_dir()?;
+    migrate_legacy_data(&data)?;
     let log = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open("data/tui.log")?;
+        .open(data.join("tui.log"))?;
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt()
@@ -161,7 +195,7 @@ fn install_panic_hook() {
             crossterm::cursor::SetCursorStyle::DefaultUserShape
         );
         ratatui::restore();
-        eprintln!("发生内部错误已退出，详情见 data/tui.log");
+        eprintln!("发生内部错误已退出，详情见 ~/.studypilot/data/tui.log");
         hook(info);
     }));
 }

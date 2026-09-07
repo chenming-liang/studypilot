@@ -36,7 +36,7 @@ impl App {
         // R6 预算熔断：发起下一个请求前检查，超限拒绝并提示
         if self.total_cost >= self.max_cost {
             self.push_entry(Entry::Error(format!(
-                "已达预算上限 ${:.2}（累计 ${:.4}），拒绝发送。可用 /budget 调高上限",
+                "已达预算上限 ${:.2}（累计 ${:.4}），拒绝发送。可用 Ctrl+K → Budget 调高上限",
                 self.max_cost, self.total_cost
             )));
             return;
@@ -155,14 +155,14 @@ impl App {
         // 预算熔断（R6）：逐篇 LLM 重抽是 refresh 的开销源
         if self.total_cost >= self.max_cost {
             self.push_entry(Entry::Error(format!(
-                "已达预算上限 ${:.2}（累计 ${:.4}），拒绝刷新。可用 /budget 调高上限",
+                "已达预算上限 ${:.2}（累计 ${:.4}），拒绝刷新。可用 Ctrl+K → Budget 调高上限",
                 self.max_cost, self.total_cost
             )));
             return;
         }
         let Some(course_id) = self.current_course_id() else {
             self.push_entry(Entry::Error(
-                "概念刷新需要课程分区：先 /course <名> 切换".into(),
+                "概念刷新需要课程分区：先用 Ctrl+K → Switch Course 切换".into(),
             ));
             return;
         };
@@ -244,8 +244,9 @@ impl App {
         match arg.parse::<f64>() {
             Ok(val) if val > 0.0 => {
                 self.max_cost = val;
-                let dir = std::path::Path::new("data");
-                let _ = std::fs::create_dir_all(dir);
+                let dir = agent_providers::Config::data_dir()
+                    .unwrap_or_else(|_| std::path::PathBuf::from("data"));
+                let _ = std::fs::create_dir_all(&dir);
                 let _ =
                     std::fs::write(dir.join("budget.json"), format!(r#"{{"max_cost": {val}}}"#));
                 self.push_entry(Entry::Info(format!(
@@ -288,7 +289,7 @@ impl App {
         // 预算熔断（R6）：出题前检查
         if self.total_cost >= self.max_cost {
             self.push_entry(Entry::Error(format!(
-                "已达预算上限 ${:.2}（累计 ${:.4}），拒绝出题。可用 /budget 调高上限",
+                "已达预算上限 ${:.2}（累计 ${:.4}），拒绝出题。可用 Ctrl+K → Budget 调高上限",
                 self.max_cost, self.total_cost
             )));
             return;
@@ -330,7 +331,7 @@ impl App {
         // 预算熔断（R6）：出题前检查
         if self.total_cost >= self.max_cost {
             self.push_entry(Entry::Error(format!(
-                "已达预算上限 ${:.2}（累计 ${:.4}），拒绝出题。可用 /budget 调高上限",
+                "已达预算上限 ${:.2}（累计 ${:.4}），拒绝出题。可用 Ctrl+K → Budget 调高上限",
                 self.max_cost, self.total_cost
             )));
             return;
@@ -463,7 +464,7 @@ impl App {
                 Some((cid, _)) => Some(*cid),
                 None => {
                     self.push_entry(Entry::Error(format!(
-                        "课程 `{target}` 不存在。可用: /course -new {target} 新建"
+                        "课程 `{target}` 不存在。可在 Ctrl+K → New Course 新建"
                     )));
                     return;
                 }
@@ -1725,7 +1726,9 @@ mod onboarding_tests {
     async fn empty_course_review_shows_guidance() {
         let mut app = app_with_courses();
         // 引擎在空课程时上报的原始文案
-        app.on_review_ready(Err("该课程还没有笔记，先 /import 导入资料".into()));
+        app.on_review_ready(Err(
+            "该课程还没有笔记，先用 Ctrl+K → Import Materials 导入资料".into(),
+        ));
         assert_eq!(
             count_md_containing(&app, "# Nothing to review yet"),
             1,
@@ -1741,7 +1744,7 @@ mod onboarding_tests {
     async fn empty_course_outline_shows_guidance() {
         let mut app = app_with_courses();
         app.on_outline_ready(Err(
-            "复习地图生成失败: 该课程还没有概念：先 /import 导入资料".into(),
+            "复习地图生成失败: 该课程还没有概念：先用 Ctrl+K → Import Materials 导入资料".into(),
         ));
         assert_eq!(
             count_md_containing(&app, "# Nothing to outline yet"),
@@ -1837,8 +1840,8 @@ mod onboarding_tests {
             md.contains("Your course is ready"),
             "应显示 Get started 引导: {md}"
         );
-        assert!(md.contains("`/review` to practice"));
-        assert!(md.contains("`/outline` to view your knowledge map"));
+        assert!(md.contains("Ctrl+K → Review to practice"));
+        assert!(md.contains("Ctrl+K → Outline to view your knowledge map"));
 
         // 空材料态
         let empty = cards::course_summary("Rust", 0, 0, 0, None);
@@ -1851,7 +1854,7 @@ mod onboarding_tests {
     fn summary_with_session_shows_continue() {
         let md = cards::course_summary("Rust", 5, 65, 3, Some("Ownership & Borrowing"));
         assert!(md.contains("**Continue:** Ownership & Borrowing"));
-        assert!(md.contains("`/review` · `/review-map` · `/outline` · `/import`"));
+        assert!(md.contains("Ctrl+K → Review · Review Map · Outline · Import"));
         assert!(
             !md.contains("Your course is ready"),
             "有历史时不显示空态引导"
@@ -1860,14 +1863,14 @@ mod onboarding_tests {
 
     #[test]
     fn welcome_and_empty_cards_are_concise() {
-        // 视觉一致性：三张卡都是 Markdown，且命令全部走 inline code
+        // 视觉一致性：三张卡都是 Markdown 标题开头、非空；引导统一走 Ctrl+K 命令面板（不暴露 / 命令）
         for md in [
             cards::welcome_guide(),
             cards::empty_review(),
             cards::empty_outline(),
         ] {
             assert!(md.starts_with("# "), "卡片应以标题开头");
-            assert!(md.contains("`/"), "命令必须 inline code");
+            assert!(!md.contains("`/"), "引导卡不应暴露 `/` 命令");
         }
     }
 

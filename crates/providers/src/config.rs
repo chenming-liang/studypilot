@@ -326,6 +326,14 @@ impl Config {
         Ok(std::path::PathBuf::from("."))
     }
 
+    /// 数据目录：与配置同目录 `~/.studypilot/data/`。任意 cwd 下数据一致，
+    /// 修复"换目录启动丢失数据"问题（旧版数据在 cwd 的 `data/`）。确保存在。
+    pub fn data_dir() -> Result<std::path::PathBuf> {
+        let dir = Self::config_dir()?.join("data");
+        let _ = std::fs::create_dir_all(&dir);
+        Ok(dir)
+    }
+
     /// 解析运行时配置路径（config.toml 同目录见 `config_dir`/`AuthConfig::auth_path`）。
     pub fn runtime_path() -> Result<std::path::PathBuf> {
         Ok(Self::config_dir()?.join("config.toml"))

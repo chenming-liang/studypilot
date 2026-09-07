@@ -112,7 +112,7 @@ impl App {
         // 预算熔断（R6）：大纲重组是 outline 的 LLM 开销源
         if self.total_cost >= self.max_cost {
             self.push_entry(Entry::Error(format!(
-                "已达预算上限 ${:.2}（累计 ${:.4}），拒绝生成。可用 /budget 调高上限",
+                "已达预算上限 ${:.2}（累计 ${:.4}），拒绝生成。可用 Ctrl+K → Budget 调高上限",
                 self.max_cost, self.total_cost
             )));
             return;
@@ -163,7 +163,9 @@ impl App {
         };
         let picker = crate::palette::ReviewMapPicker::from_map(map);
         if picker.is_empty() {
-            self.push_entry(Entry::Info("复习地图为空：先 /import 导入资料".into()));
+            self.push_entry(Entry::Info(
+                "复习地图为空：先用 Ctrl+K → Import Materials 导入资料".into(),
+            ));
             return;
         }
         self.review_map_picker = Some(picker);
@@ -220,8 +222,10 @@ impl App {
                 self.review_map = Some(payload.map.clone());
                 if payload.export {
                     let md = payload.map.markdown();
-                    let dir = std::path::Path::new("data/exports");
-                    let _ = std::fs::create_dir_all(dir);
+                    let dir = agent_providers::Config::data_dir()
+                        .map(|d| d.join("exports"))
+                        .unwrap_or_else(|_| std::path::Path::new("data/exports").to_path_buf());
+                    let _ = std::fs::create_dir_all(&dir);
                     let path = dir.join(format!("{}-outline.md", payload.map.course));
                     match std::fs::write(&path, &md) {
                         Ok(()) => self.push_entry(Entry::Info(format!(
@@ -243,7 +247,7 @@ impl App {
                     let source = if payload.regenerated {
                         "· 已按最新概念重新组织章节"
                     } else {
-                        "· 缓存命中（概念未变化）· 输入 /review-map 选择知识点开始复习"
+                        "· 缓存命中（概念未变化）· 用 Ctrl+K → Review Map 选择知识点开始复习"
                     };
                     self.push_entry(Entry::Info(source.into()));
                 }

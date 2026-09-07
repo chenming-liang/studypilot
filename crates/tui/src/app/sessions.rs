@@ -128,7 +128,7 @@ impl App {
     pub(crate) fn start_new_session(&mut self) {
         if self.current_course_id().is_none() {
             self.push_entry(Entry::Error(
-                "开新会话需要具体课程：先 /course <课程名> 进入一门课".into(),
+                "开新会话需要具体课程：先 Ctrl+K → Switch Course 进入一门课".into(),
             ));
             return;
         }
@@ -138,7 +138,7 @@ impl App {
         self.session_cost = 0.0;
         self.scroll_up = 0;
         self.push_entry(Entry::Info(
-            "已开启新会话（历史仍在侧栏，可用 /open <id> 恢复）".into(),
+            "已开启新会话（历史仍保留在 Ctrl+K → Recent Sessions）".into(),
         ));
         self.request_sessions_refresh();
     }
@@ -225,8 +225,10 @@ impl App {
             "messages": self.history,
         });
 
-        let dir = std::path::Path::new("data/exports");
-        if let Err(e) = std::fs::create_dir_all(dir) {
+        let dir = agent_providers::Config::data_dir()
+            .map(|d| d.join("exports"))
+            .unwrap_or_else(|_| std::path::Path::new("data/exports").to_path_buf());
+        if let Err(e) = std::fs::create_dir_all(&dir) {
             self.push_entry(Entry::Error(format!("创建导出目录失败: {e}")));
             return;
         }

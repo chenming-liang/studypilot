@@ -876,8 +876,12 @@ pub struct CachedOutline {
 }
 
 /// 读取持久缓存。None = 无缓存。
+/// 缓存存放在数据目录 `~/.studypilot/data/outline/`（与 DB 同目录，任意 cwd 一致）。
 pub fn load_outline_cache(course_id: i64) -> Result<Option<CachedOutline>, String> {
-    let path = std::path::Path::new("data/outline").join(format!("{course_id}.json"));
+    let path = agent_providers::Config::data_dir()
+        .map_err(|e| e.to_string())?
+        .join("outline")
+        .join(format!("{course_id}.json"));
     let raw = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -890,8 +894,10 @@ pub fn load_outline_cache(course_id: i64) -> Result<Option<CachedOutline>, Strin
 
 /// 写持久缓存（覆盖式）。
 pub fn save_outline_cache(course_id: i64, signature: u64, map: &ReviewMap) -> Result<(), String> {
-    let dir = std::path::Path::new("data/outline");
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let dir = agent_providers::Config::data_dir()
+        .map_err(|e| e.to_string())?
+        .join("outline");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(format!("{course_id}.json"));
     let cached = CachedOutline {
         signature,

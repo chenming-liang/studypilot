@@ -46,7 +46,7 @@ pub(crate) fn last_course_path_override(path: Option<String>) {
     LAST_COURSE_OVERRIDE.with(|c| *c.borrow_mut() = path);
 }
 
-/// 解析持久化路径：测试覆盖优先，否则默认 data/last_course.json。
+/// 解析持久化路径：测试覆盖优先，否则 `~/.studypilot/data/last_course.json`。
 pub(crate) fn resolve_last_course_path() -> std::path::PathBuf {
     #[cfg(test)]
     {
@@ -55,7 +55,9 @@ pub(crate) fn resolve_last_course_path() -> std::path::PathBuf {
             return std::path::PathBuf::from(p);
         }
     }
-    std::path::PathBuf::from(LAST_COURSE_PATH)
+    agent_providers::Config::data_dir()
+        .map(|d| d.join("last_course.json"))
+        .unwrap_or_else(|_| std::path::PathBuf::from(LAST_COURSE_PATH))
 }
 
 /// 顶层信息架构：Home（Launchpad）→ Course（课程上下文）→ Session（聊天工作区）。
@@ -165,8 +167,11 @@ pub struct App {
     inflight: Option<CancellationToken>,
     /// 导入任务取消令牌
     import_cancel: Option<CancellationToken>,
+    /// 导入当前操作信息（当前文件 + 阶段 + 起始时刻），供聊天行显示"已等 X 秒"。
+    pub(crate) import_status: Option<crate::app::import_flow::ImportStatus>,
     /// 复习逐题生成的取消令牌（出题中等待态 Esc 退出时取消）
-    review_gen: Option<CancellationToken>,
+    /// 在途逐题生成任务（并行预取多题；退出复习时逐个 cancel）
+    review_gen: Vec<CancellationToken>,
     /// 复习模式状态；Some 时按键路由给复习逻辑
     pub review: Option<review::ReviewState>,
     /// 最近一次生成的复习地图（选择器重开数据源）
@@ -463,9 +468,10 @@ impl App {
             total_cost: 0.0,
             session_cost: 0.0,
             inflight: None,
-            review_gen: None,
+            review_gen: Vec::new(),
             review_map: None,
             import_cancel: None,
+            import_status: None,
             review: None,
             review_grading: false,
             followup_pending: None,
