@@ -41,7 +41,9 @@ struct Row {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let mut db = PathBuf::from("data/mynotes.db");
+    let mut db = agent_providers::Config::data_dir()
+        .map(|d| d.join("mynotes.db"))
+        .unwrap_or_else(|_| PathBuf::from("data/mynotes.db"));
     let mut questions_path = PathBuf::from("eval/questions.jsonl");
     let mut out_path = PathBuf::from("eval/report-baseline.md");
     let mut topk = 5usize;
@@ -78,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
 
     // --llm 模式：config.toml 取 default provider（真调 API，花钱）
     let llm: Option<(Arc<OpenAiClient>, agent_providers::ProviderConfig)> = if with_llm {
-        let cfg = Config::load(std::path::Path::new("config.toml"))?;
+        let cfg = Config::load(&agent_providers::Config::runtime_path()?)?;
         let pc = cfg.default_provider()?.clone();
         println!(
             "⚠ LLM 模式：真调 API（{} / {}），每题 2 次调用（回答 + judge）",

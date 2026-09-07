@@ -15,8 +15,9 @@ use storage::Store;
 async fn main() -> anyhow::Result<()> {
     let course_name = std::env::args().nth(1).unwrap_or_else(|| "rust".to_owned());
 
-    let store = Arc::new(Store::open("data/mynotes.db")?);
-    let cfg = Config::load(std::path::Path::new("config.toml"))?;
+    let data = Config::data_dir()?;
+    let store = Arc::new(Store::open(data.join("mynotes.db"))?);
+    let cfg = Config::load(&Config::runtime_path()?)?;
     let pc = cfg.default_provider()?.clone();
     let provider = Arc::new(OpenAiClient::new(pc.clone())?);
 

@@ -11,7 +11,8 @@ use tokio_util::sync::CancellationToken;
 async fn main() -> anyhow::Result<()> {
     let course_name = std::env::args().nth(1).unwrap_or_else(|| "rust".to_owned());
 
-    let store = Arc::new(Store::open("data/mynotes.db")?);
+    let data = agent_providers::Config::data_dir()?;
+    let store = Arc::new(Store::open(data.join("mynotes.db"))?);
     let cfg_path = agent_providers::Config::runtime_path()?;
     let mut cfg = Config::load(&cfg_path)?;
     // 凭证分离：加载 auth.toml 合并进内存（与 main.rs 启动逻辑一致）
