@@ -72,8 +72,8 @@ pub enum AppEvent {
     OutlineReady(Result<crate::outline_render::OutlinePayload, String>),
     /// /review 出题完成（首题；后续题走 ReviewQuestionReady）
     ReviewReady(Result<review::ReviewState, String>),
-    /// 复习逐题生成的后续题目回流（用户作答当前题时后台预取）
-    ReviewQuestionReady(Result<(review::ReviewQuestion, Option<String>), String>),
+    /// 复习逐题生成的后续题目回流（用户作答当前题时后台预取；index 标识第几题，用于按位插入）
+    ReviewQuestionReady(Result<(usize, review::ReviewQuestion, Option<String>), String>),
     /// /refresh-concepts 完成：(汇总消息)——逐篇重抽概念 + 清理废弃概念
     ConceptsRefreshed(Result<String, String>),
     /// /review-map 完成：状态重读后的复习地图（渲染 + 弹选择器）

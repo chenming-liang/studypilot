@@ -28,7 +28,7 @@ impl App {
         // 预算熔断（R6）
         if self.total_cost >= self.max_cost {
             self.push_entry(Entry::Error(format!(
-                "已达预算上限 ${:.2}（累计 ${:.4}），拒绝出题。可用 /budget 调高上限",
+                "已达预算上限 ${:.2}（累计 ${:.4}），拒绝出题。可用 Ctrl+K → Budget 调高上限",
                 self.max_cost, self.total_cost
             )));
             return;
@@ -578,7 +578,7 @@ impl App {
 
     pub(crate) fn exit_review(&mut self, msg: &str) {
         // 取消在途的逐题生成（迟到事件由 on_review_question_ready 的 None 守卫丢弃）
-        if let Some(t) = self.review_gen.take() {
+        for t in self.review_gen.drain(..) {
             t.cancel();
         }
         // 中途退出：若有进度，同样出部分摘要卡（finish_review_state 不依赖 self.review）
@@ -628,16 +628,22 @@ impl App {
                 self.finish_review_state(rs);
             }
             self.push_entry(Entry::Error(format!(
-                "已达预算上限 ${:.2}（累计 ${:.4}），出题中止。可用 /budget 调高上限",
+                "已达预算上限 ${:.2}（累计 ${:.4}），出题中止。可用 Ctrl+K → Budget 调高上限",
                 self.max_cost, self.total_cost
             )));
             return;
         }
-        let (index, planned, quiz_id, ctx, qtype, asked) = {
+        // 持续流水线：同一时刻只 1 个在途（避免单概念并行撞 + 让后续题能看到前题换角度）。
+        // 每次题目到达（在途清零）调用本方法时补发下一个；已答/已生成 ≥ planned 则停。
+        // 不依赖答题速度——到达即补发，队列始终趋近"当前题 + 1 在途"。
+        use crate::review::QType;
+        if !self.review_gen.is_empty() {
+            return; // 已有在途（防止重复补发）
+        }
+        let (planned, quiz_id, ctx, asked) = {
             let Some(rs) = &self.review else { return };
-            use crate::review::QType;
-            if rs.next_pending || rs.questions.len() >= rs.planned {
-                return;
+            if rs.questions.len() >= rs.planned {
+                return; // 已出满
             }
             // evidence history：已答的题带学生判分；未答的当前题只带题面
             let answered = rs.results.len();
@@ -683,20 +689,16 @@ impl App {
                     aspect: cur.aspect.clone(),
                 });
             }
-            (
-                rs.questions.len(),
-                rs.planned,
-                rs.quiz_id,
-                std::sync::Arc::clone(&rs.ctx),
-                review::pick_qtype(rs.planned, rs.questions.len()),
-                same_round,
-            )
+            (rs.planned, rs.quiz_id, Arc::clone(&rs.ctx), same_round)
+        };
+
+        // 生成下一题：index = 当前已生成题数（在途=1，顺序生成，到达即按序）
+        let index = {
+            let Some(rs) = &self.review else { return };
+            rs.questions.len()
         };
         let cancel = tokio_util::sync::CancellationToken::new();
-        if let Some(rs) = &mut self.review {
-            rs.next_pending = true;
-        }
-        self.review_gen = Some(cancel.clone());
+        self.review_gen.push(cancel.clone());
         let store = Arc::clone(&self.store);
         let (provider, provider_cfg) = self.role_client(agent_providers::ModelRole::Balanced);
         let tx = self.tx.clone();
@@ -708,7 +710,7 @@ impl App {
             quiz_id,
             index,
             planned,
-            qtype,
+            review::pick_qtype(planned, index),
             asked,
             cancel,
             tx,
@@ -718,31 +720,37 @@ impl App {
     /// 逐题生成回流：追加题目（当前等待态自动显示）；失败重试已耗尽则优雅收束。
     pub(crate) fn on_review_question_ready(
         &mut self,
-        result: Result<(review::ReviewQuestion, Option<String>), String>,
+        result: Result<(usize, review::ReviewQuestion, Option<String>), String>,
     ) {
-        self.review_gen = None;
         self.request_cost_sync();
         let Some(rs) = &mut self.review else {
-            return; // 已退出复习：迟到事件丢弃
+            // 已退出复习：迟到事件丢弃（清在途 token）
+            self.review_gen.clear();
+            return;
         };
         match result {
-            Ok((q, concept_name)) => {
-                let mut q = q;
+            Ok((_index, question, concept_name)) => {
+                let mut q = question;
                 q.concept_name = concept_name;
-                rs.questions.push(q);
-                rs.next_pending = false;
-                // 若当前正指向等待槽位，workspace 会自动渲染新题
-                self.maybe_spawn_next_question(); // 继续预取
+                // 并行生成按 seq 归位插入（到达顺序可能乱，seq 保证题号/进度正确）
+                let pos = rs
+                    .questions
+                    .iter()
+                    .position(|x| x.seq > q.seq)
+                    .unwrap_or(rs.questions.len());
+                rs.questions.insert(pos, q);
+                // 移除一个在途 token（该任务已完成）；retain 防 index/到达重复
+                if !self.review_gen.is_empty() {
+                    self.review_gen.remove(0);
+                }
+                self.maybe_spawn_next_question(); // 继续补齐预取缓冲
             }
             Err(e) => {
                 // 生成重试耗尽：已答的出部分摘要，不硬断
-                self.review_gen = None;
-                let rs = self.review.take();
-                if let Some(rs) = rs
-                    && !rs.results.is_empty()
-                {
-                    self.finish_review_state(rs);
+                if !self.review_gen.is_empty() {
+                    self.review_gen.remove(0);
                 }
+                self.maybe_spawn_next_question();
                 self.push_entry(Entry::Error(format!("出题失败: {e}")));
             }
         }

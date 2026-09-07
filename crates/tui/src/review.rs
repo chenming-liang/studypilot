@@ -86,8 +86,6 @@ pub struct ReviewState {
     pub followups: Vec<FollowupTurn>,
     /// 计划总题数（逐题生成：questions 逐个到位，到位数 ≤ planned）
     pub planned: usize,
-    /// 下一题是否正在后台生成
-    pub next_pending: bool,
     /// 出题上下文（素材/范围/概念，逐题生成共用；Arc 保证 Clone 廉价）
     pub ctx: std::sync::Arc<QuizContext>,
 }
@@ -197,7 +195,10 @@ pub struct FollowupTurn {
 /// 一道题目（含 DB id）。
 #[derive(Debug, Clone)]
 pub struct ReviewQuestion {
+    /// 题库 db id
     pub db_id: i64,
+    /// 该题在本次复习计划中的序号（0-based；并行预取到达可能乱序，用于按位归位）
+    pub seq: usize,
     pub q_type: QType,
     pub question: String,
     pub options: Vec<String>,
@@ -350,7 +351,7 @@ pub async fn start_review(
 
     if chunks.is_empty() {
         let _ = tx.send(AppEvent::ReviewReady(Err(
-            "该课程还没有笔记，先 /import 导入资料".into(),
+            "该课程还没有笔记，先用 Ctrl+K → Import Materials 导入资料".into(),
         )));
         return;
     }
@@ -443,7 +444,6 @@ pub async fn start_review(
         selected_option: None,
         followups: Vec::new(),
         planned: n,
-        next_pending: false,
         ctx,
     })));
 }
@@ -497,7 +497,7 @@ pub async fn generate_warmup_cards(
     .map_err(|e| e.to_string())?;
 
     if material.is_empty() {
-        return Err("该课程还没有笔记，先 /import 导入资料".into());
+        return Err("该课程还没有笔记，先用 Ctrl+K → Import Materials 导入资料".into());
     }
     let concept_list: Vec<String> = concepts
         .iter()
@@ -968,6 +968,7 @@ async fn generate_one(
     Some((
         ReviewQuestion {
             db_id,
+            seq: index,
             q_type: qtype,
             question: q.question,
             options: q.options,
@@ -1033,7 +1034,7 @@ pub async fn generate_review_question(
         )
         .await
         {
-            let _ = tx.send(AppEvent::ReviewQuestionReady(Ok((q, concept_name))));
+            let _ = tx.send(AppEvent::ReviewQuestionReady(Ok((index, q, concept_name))));
             return;
         }
         if attempt == 0 && !cancel.is_cancelled() {
@@ -1102,7 +1103,7 @@ async fn live_regression_same_concept() {
         )
         .await;
         match rx.recv().await {
-            Some(AppEvent::ReviewQuestionReady(Ok((q, _)))) => {
+            Some(AppEvent::ReviewQuestionReady(Ok((_idx, q, _)))) => {
                 println!(
                     "Q{} [{:?}] aspect={:?}: {}",
                     i + 1,
