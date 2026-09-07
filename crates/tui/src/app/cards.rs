@@ -23,15 +23,15 @@ pub(crate) fn welcome_guide() -> String {
         "",
         "Get started:",
         "",
-        "**1. Create a course** — `/course -new <course name>`",
+        "**1. Create a course** — Ctrl+K → New Course",
         "",
-        "**2. Import your materials** — `/import --dir <path>`",
+        "**2. Import your materials** — Ctrl+K → Import Materials",
         "",
         "**3. Ask questions** about your materials",
         "",
-        "**4. Review what you've learned** — `/review` · `/review-map`",
+        "**4. Review what you've learned** — Ctrl+K → Review / Review Map",
         "",
-        "Tip: Type `/help` anytime to see all commands.",
+        "Tip: Press Ctrl+K anytime to open the command palette.",
     ]
     .join("\n")
 }
@@ -58,7 +58,7 @@ pub(crate) fn course_summary(
         lines.push(String::new());
         lines.push("No materials yet.".into());
         lines.push(String::new());
-        lines.push("`/import --dir <path>` to add your first material.".into());
+        lines.push("Press Ctrl+K → Import Materials to add your first material.".into());
     } else {
         // 统计只是上下文，不放大成 KPI
         lines.push(format!(
@@ -69,15 +69,15 @@ pub(crate) fn course_summary(
             // 已有学习历史 → 突出"继续"
             lines.push(format!("**Continue:** {title}"));
             lines.push(String::new());
-            lines.push("`/review` · `/review-map` · `/outline` · `/import`".into());
+            lines.push("Ctrl+K → Review · Review Map · Outline · Import".into());
         } else {
             // 有材料但尚无 session → 空态引导
             lines.push("Your course is ready.".into());
             lines.push(String::new());
             lines.push("**Ask** about your materials".into());
-            lines.push("`/review` to practice".into());
-            lines.push("`/outline` to view your knowledge map".into());
-            lines.push("`/import` to add more materials".into());
+            lines.push("Ctrl+K → Review to practice".into());
+            lines.push("Ctrl+K → Outline to view your knowledge map".into());
+            lines.push("Ctrl+K → Import to add more materials".into());
         }
     }
     lines.join("\n")
@@ -92,7 +92,7 @@ pub(crate) fn empty_review() -> String {
         "",
         "Import learning materials first:",
         "",
-        "`/import --dir <path>`",
+        "Ctrl+K → Import Materials",
         "",
         "After importing, StudyPilot can build your knowledge map and generate reviews.",
     ]
@@ -108,7 +108,7 @@ pub(crate) fn empty_outline() -> String {
         "",
         "Import some learning materials first:",
         "",
-        "`/import --dir <path>`",
+        "Ctrl+K → Import Materials",
         "",
         "After importing, StudyPilot can build your knowledge map.",
     ]
@@ -141,9 +141,9 @@ mod tests {
         for needle in [
             "StudyPilot",
             "Create a course",
-            "<course name>",
-            "<path>",
-            "/help",
+            "Import your materials",
+            "Ask questions",
+            "Ctrl+K",
         ] {
             assert!(w.contains(needle), "welcome 渲染丢内容: {needle}\n{w}");
         }
@@ -161,14 +161,18 @@ mod tests {
             "△ 3 need reinforcement",
             "Continue",
             "Ownership & Borrowing",
-            "/review-map",
+            "Ctrl+K → Review",
         ] {
             assert!(c.contains(needle), "summary 渲染丢内容: {needle}\n{c}");
         }
 
         // 有材料但无 session：Get started 引导态（渲染后 inline code 剥掉反引号）
         let ready = plain(&course_summary("Rust", 5, 65, 0, None));
-        for needle in ["Your course is ready", "/review to practice", "/import"] {
+        for needle in [
+            "Your course is ready",
+            "Ctrl+K → Review to practice",
+            "Ctrl+K → Import",
+        ] {
             assert!(
                 ready.contains(needle),
                 "ready 渲染丢内容: {needle}\n{ready}"
@@ -177,7 +181,10 @@ mod tests {
 
         for md in [empty_review(), empty_outline()] {
             let p = plain(&md);
-            assert!(p.contains("<path>"), "empty 渲染丢内容:\n{p}");
+            assert!(
+                p.contains("Ctrl+K → Import Materials"),
+                "empty 渲染丢内容:\n{p}"
+            );
         }
     }
 

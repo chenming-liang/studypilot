@@ -14,3 +14,4 @@ data/
 *.db-shm
 _personal/
 AGENTS.md
+resources/
