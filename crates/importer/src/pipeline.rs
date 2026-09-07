@@ -168,6 +168,8 @@ async fn process_one(
             .unwrap_or("?")
             .to_owned(),
         phase: FilePhase::Parsing,
+        segment: 0,
+        segment_total: 0,
     });
     let raw = tokio::task::spawn_blocking(move || parser::parse_file(&path_owned))
         .await
@@ -180,13 +182,16 @@ async fn process_one(
 
     // ② LLM 概念抽取（异步）；D2：Store 调用经 spawn_blocking
     let mut import_cost = 0.0f64;
+    let file_name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("?")
+        .to_owned();
     let _ = tx.send(ImportEvent::FileProgress {
-        name: path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("?")
-            .to_owned(),
+        name: file_name.clone(),
         phase: FilePhase::Extracting,
+        segment: 0,
+        segment_total: 0,
     });
     let extracted = extract::extract(
         provider,
@@ -197,12 +202,20 @@ async fn process_one(
         &raw,
         config.course.as_deref(),
         cancel,
+        None,
     )
     .await;
 
     // 抽取期间被取消：当前文件不再入库（避免"取消后仍落一篇无概念笔记"）
     if cancel.is_cancelled() {
         return Ok(ProcessOutcome::Skipped);
+    }
+    // 概念抽取彻底失败（LLM 报错/余额不足/解析失败）：不入库，明确提示，
+    // 避免"插入一篇 0 概念空壳笔记"让用户误以为正常。充值/修复后重新导入即可。
+    if extracted.is_none() {
+        return Err(
+            "概念抽取失败（LLM 调用或解析出错，可能是余额不足）。笔记未入库，请检查后重试。".into(),
+        );
     }
 
     // ③ 入库（spawn_blocking，D2）
@@ -213,6 +226,8 @@ async fn process_one(
             .unwrap_or("?")
             .to_owned(),
         phase: FilePhase::Inserting,
+        segment: 0,
+        segment_total: 0,
     });
     let store = Arc::clone(store);
     let path_owned = path.to_owned();

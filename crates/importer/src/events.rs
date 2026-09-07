@@ -32,10 +32,13 @@ pub enum ImportEvent {
         index: usize,
         total: usize,
     },
-    /// 当前文件的阶段进度（解析/概念抽取/入库）——UI 据此显示单文件进度条
+    /// 当前文件的阶段进度（解析/概念抽取/入库）——UI 据此显示单文件进度条。
+    /// `segment`/`segment_total`：概念抽取分段进度（0/0 = 未分段/单段，不显示 "x/y"）。
     FileProgress {
         name: String,
         phase: FilePhase,
+        segment: usize,
+        segment_total: usize,
     },
     FileDone {
         name: String,

@@ -11,7 +11,7 @@ pub use search::SearchHit;
 pub use segment::{match_query, match_query_or, segment};
 pub use store::{
     ChunkHit, ConceptMastery, InsertOutcome, NewChunk, NewNote, Note, NoteSummary, QuestionRecord,
-    SessionMeta, Store, content_hash,
+    SessionMeta, Store, content_hash, normalize_concept_key,
 };
 
 /// 当前 schema 版本（user_version）。追加迁移时 +1 并在 migrate() 补分支。
