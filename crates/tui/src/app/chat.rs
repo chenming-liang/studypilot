@@ -65,6 +65,7 @@ impl App {
         });
 
         self.inflight = Some(token);
+        self.set_wait();
     }
 
     /// 当前课程分区对应的 course_id（all = None = 不过滤）。
@@ -173,15 +174,18 @@ impl App {
                     }
                 }
                 self.inflight = None;
+                self.clear_wait();
                 self.record_usage(usage);
             }
             AgentEvent::Failed(e) => {
                 self.push_entry(Entry::Error(format!("请求失败: {e}")));
                 self.inflight = None;
+                self.clear_wait();
             }
             AgentEvent::Interrupted => {
                 self.push_entry(Entry::Info("[已中断当前请求]".into()));
                 self.inflight = None;
+                self.clear_wait();
             }
         }
     }

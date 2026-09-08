@@ -170,6 +170,8 @@ impl App {
         self.inflight = Some(cancel.clone());
         let store = Arc::clone(&self.store);
         let (provider, provider_cfg) = self.role_client(agent_providers::ModelRole::Fast);
+        // 概念打磨：用 Reasoning 模型整理 Fast 抽取的候选概念
+        let refine_provider = self.role_client(agent_providers::ModelRole::Fast);
         let max_cost = self.max_cost;
         let tx = self.tx.clone();
         // Agent Trace：START（完成行由 ConceptsRefreshed 汇总回投）
@@ -185,6 +187,7 @@ impl App {
                 course_id,
                 max_cost,
                 &cancel,
+                Some(refine_provider),
             )
             .await;
             let _ = tx.send(AppEvent::ConceptsRefreshed(result));
@@ -336,7 +339,7 @@ impl App {
             )));
             return;
         }
-        // 正式 Review 出题（含逐题生成）→ Balanced 角色模型
+        // 正式 Review 出题（含逐题生成）→ Balanced 角色模型（关 thinking，快；明显错题由代码校验拦截）
         let (provider, provider_cfg) = self.role_client(agent_providers::ModelRole::Balanced);
         let store = Arc::clone(&self.store);
         let tx = self.tx.clone();

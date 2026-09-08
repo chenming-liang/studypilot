@@ -169,6 +169,8 @@ pub struct App {
     import_cancel: Option<CancellationToken>,
     /// 导入当前操作信息（当前文件 + 阶段 + 起始时刻），供聊天行显示"已等 X 秒"。
     pub(crate) import_status: Option<crate::app::import_flow::ImportStatus>,
+    /// 当前 LLM 等待开始时刻（思考中/生成回答/出题中/批改中/小结等统一计时）。
+    pub(crate) wait_since: Option<std::time::Instant>,
     /// 复习逐题生成的取消令牌（出题中等待态 Esc 退出时取消）
     /// 在途逐题生成任务（并行预取多题；退出复习时逐个 cancel）
     review_gen: Vec<CancellationToken>,
@@ -468,6 +470,7 @@ impl App {
             total_cost: 0.0,
             session_cost: 0.0,
             inflight: None,
+            wait_since: None,
             review_gen: Vec::new(),
             review_map: None,
             import_cancel: None,
@@ -508,6 +511,21 @@ impl App {
 
     pub(crate) fn is_inflight(&self) -> bool {
         self.inflight.is_some()
+    }
+
+    /// 开始 LLM 等待计时（思考中/生成回答/出题中/批改中/小结/闪卡等统一）。
+    pub(crate) fn set_wait(&mut self) {
+        self.wait_since = Some(std::time::Instant::now());
+    }
+
+    /// 结束 LLM 等待计时。
+    pub(crate) fn clear_wait(&mut self) {
+        self.wait_since = None;
+    }
+
+    /// 当前等待已持续秒数（未等待 = 0）。
+    pub(crate) fn wait_secs(&self) -> u64 {
+        self.wait_since.map(|t| t.elapsed().as_secs()).unwrap_or(0)
     }
 
     /// 简答题批改进行中（供 UI 渲染"批改中…"提示）。
@@ -610,8 +628,12 @@ impl App {
                 ""
             };
             let cur = (rs.current + 1).min(rs.planned);
+            let secs = self.wait_secs();
             return (
-                format!("◌ Review {cur}/{}{grading}{generating}", rs.planned),
+                format!(
+                    "◌ Review {cur}/{}{grading}{generating} · 已等 {secs}s",
+                    rs.planned
+                ),
                 status_color(StatusKind::Processing),
             );
         }
@@ -620,7 +642,11 @@ impl App {
             return ("◌ 导入中…".into(), status_color(StatusKind::Processing));
         }
         if self.is_inflight() {
-            return ("◌ Thinking…".into(), status_color(StatusKind::Processing));
+            let secs = self.wait_secs();
+            return (
+                format!("◌ Thinking… · 已等 {secs}s"),
+                status_color(StatusKind::Processing),
+            );
         }
         ("● Ready".into(), status_color(StatusKind::Success))
     }

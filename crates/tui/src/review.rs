@@ -608,6 +608,11 @@ pub async fn generate_warmup_cards(
             })
         })
         .collect();
+    // 明显坏卡过滤（question/answer 空或相同）：结构性问题丢弃，不展示给用户
+    let cards: Vec<Flashcard> = cards
+        .into_iter()
+        .filter(|c| !validate_flashcard(c))
+        .collect();
     // 硬上限：LLM 自主决定数量但不得超过 WARMUP_CARD_MAX（不能无限生成）
     let cards: Vec<Flashcard> = cards.into_iter().take(WARMUP_CARD_MAX).collect();
     if cards.is_empty() {
@@ -802,6 +807,62 @@ fn parse_one_question(content: &str) -> Option<QuizQuestion> {
     Some(q)
 }
 
+/// 明显错题拦截（纯代码规则，客观可靠，不依赖 LLM 语义判断）。
+/// 只拦结构性的错误题（乱码/缺选项/答案无效/重复选项/空采分点），
+/// 不判断"是否编造笔记外概念"——那是出题 prompt 的职责。
+/// 返回 Some(reason) = 该题是明显错题（触发重试）；None = 可用。
+fn validate_question(q: &QuizQuestion, qtype: &QType) -> Option<String> {
+    // 题面：不能为空、不能过短（疑似截断/乱码）
+    let question = q.question.trim();
+    if question.chars().count() < 8 {
+        return Some(format!("题面过短（{} 字符）", question.chars().count()));
+    }
+    match qtype {
+        QType::Choice => {
+            // 单选必须恰好 4 个选项
+            if q.options.len() != 4 {
+                return Some(format!("选项数应为 4（实际 {}）", q.options.len()));
+            }
+            // 选项不能有重复文本
+            for i in 0..q.options.len() {
+                for j in (i + 1)..q.options.len() {
+                    if q.options[i].trim() == q.options[j].trim() {
+                        return Some(format!("选项重复: {}", q.options[i].trim()));
+                    }
+                }
+            }
+            // 答案必须解析出来且在 0..4 内
+            match q.answer.as_deref().and_then(answer_to_index) {
+                Some(idx) if (0..4).contains(&idx) => {}
+                _ => return Some("答案缺失或不在选项范围内".into()),
+            }
+        }
+        QType::ShortAnswer => {
+            // 简答题必须有采分点，否则无法判分
+            if q.key_points.is_empty() {
+                return Some("简答题缺失采分点".into());
+            }
+        }
+    }
+    None
+}
+
+/// 明显坏卡拦截（纯代码规则）。只拦结构性问题：question/answer 为空或过短（疑似截断/乱码）、
+/// question 与 answer 完全相同（无意义卡）。不判断"是否编造笔记外概念"——那是闪卡 prompt 的职责。
+/// 返回 true = 该卡是明显坏卡（应丢弃）。
+fn validate_flashcard(c: &Flashcard) -> bool {
+    let q = c.question.trim();
+    let a = c.answer.trim();
+    if q.chars().count() < 4 || a.is_empty() {
+        return true;
+    }
+    // 极端情况：问句根本答不出来（答案等于问句，或答案过长疑似复制）
+    if q.eq_ignore_ascii_case(a) {
+        return true;
+    }
+    false
+}
+
 /// 单题落库：concept 名匹配 + 插入 questions，返回 (db id, concept db id)。
 async fn insert_question_db(
     store: &Arc<Store>,
@@ -953,6 +1014,21 @@ async fn generate_one(
             return None;
         }
     };
+    // 明显错题拦截（纯代码规则：选项数/重复/答案有效/采分点）——不合格则重试
+    if let Some(reason) = validate_question(&q, &qtype) {
+        tracing::warn!(index, reason, "出题被明显错题校验拦截，重试");
+        return None;
+    }
+    // 选择题：打乱选项顺序 + 重算正确项下标（治 LLM 系统性把答案固定放 A）
+    let mut q = q;
+    if qtype == QType::Choice
+        && let Some(idx) = q.answer.as_deref().and_then(answer_to_index).as_mut()
+        && q.options.len() == 4
+    {
+        shuffle_choice(&mut q.options, idx);
+        // 正确项下标已变 → 同步把 answer 更新为新位置字母（构造 ReviewQuestion 用它）
+        q.answer = Some(((b'A' + *idx as u8) as char).to_string());
+    }
     // 近重复防线（最后的 guard，不是多样性主导机制）：
     // 只拦【接近字面重复】的题（bigram Jaccard ≥0.8）——概念相同/包含/模板相似都不拒，
     // 多样性由 prompt 里的 evidence history 与考察角度驱动（LLM 负责）
@@ -1146,6 +1222,114 @@ async fn live_regression_same_concept() {
     println!("══ 回归通过：3 题成功、互不重复、evidence 生效 ══");
 }
 
+/// 端到端出题质量验证：读真实数学分析库概念，balanced(关 thinking) 出题看质量。
+/// 运行：cargo test -p tui live_math_quiz -- --ignored --nocapture
+#[tokio::test]
+#[ignore = "真调 LLM，花钱"]
+async fn live_math_quiz() {
+    let data = agent_providers::Config::data_dir().unwrap();
+    let store = Arc::new(storage::Store::open(data.join("mynotes.db")).unwrap());
+    let mut cfg =
+        agent_providers::Config::load(agent_providers::Config::runtime_path().unwrap()).unwrap();
+    agent_providers::AuthConfig::load(agent_providers::AuthConfig::auth_path().unwrap())
+        .unwrap_or_default()
+        .apply_to(&mut cfg);
+    let pc = cfg
+        .resolve_model(agent_providers::ModelRole::Balanced)
+        .unwrap();
+    let provider = Arc::new(OpenAiClient::new(pc.clone()).unwrap());
+    println!("出题模型: {} (thinking={})", pc.model, pc.thinking);
+
+    let course_id = store
+        .list_courses()
+        .unwrap()
+        .into_iter()
+        .find(|(_, n)| n == "数学分析")
+        .map(|(id, _)| id)
+        .expect("数学分析课程");
+    let concepts = store.list_concept_names_by_course(course_id).unwrap();
+    let picked = concepts.iter().take(6).cloned().collect::<Vec<_>>();
+    let concept_list = picked
+        .iter()
+        .map(|n| format!("{n}(0/0)"))
+        .collect::<Vec<_>>()
+        .join("、");
+    let material = store
+        .list_notes(Some(course_id), usize::MAX)
+        .unwrap()
+        .first()
+        .and_then(|n| store.get_note(n.id).ok().flatten())
+        .map(|n| n.content.chars().take(4000).collect::<String>())
+        .unwrap_or_default();
+    let ctx = Arc::new(QuizContext {
+        course_id: Some(course_id),
+        course_name: "数学分析".into(),
+        directive: format!(
+            "本次复习覆盖概念：{}。请只在这些概念范围内出题，题目必须基于笔记内容，避免编造笔记外的概念。",
+            picked.join("、")
+        ),
+        material,
+        concept_list,
+    });
+    let quiz_id = store.create_quiz(Some(course_id), "live-math").unwrap();
+
+    let mut same_round: Vec<QuestionContext> = Vec::new();
+    let mut generated: Vec<ReviewQuestion> = Vec::new();
+    for i in 0..2usize {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        generate_review_question(
+            Arc::clone(&store),
+            Arc::clone(&provider),
+            pc.clone(),
+            Arc::clone(&ctx),
+            quiz_id,
+            i,
+            2,
+            if i % 2 == 0 {
+                QType::Choice
+            } else {
+                QType::ShortAnswer
+            },
+            same_round.clone(),
+            CancellationToken::new(),
+            tx,
+        )
+        .await;
+        match rx.recv().await {
+            Some(AppEvent::ReviewQuestionReady(Ok((_, q, concept)))) => {
+                println!(
+                    "\n── 第 {} 题 ({:?}）概念: {:?} ──",
+                    i + 1,
+                    q.q_type,
+                    concept
+                );
+                println!("题干: {}", q.question.replace('\n', " "));
+                if !q.options.is_empty() {
+                    for (j, o) in q.options.iter().enumerate() {
+                        println!("  {} {o}", (b'A' + j as u8) as char);
+                    }
+                    println!("答案: {:?}", q.answer);
+                }
+                same_round.push(QuestionContext {
+                    qtype: if q.q_type == QType::Choice {
+                        "choice"
+                    } else {
+                        "short_answer"
+                    },
+                    concept: q.concept_name.clone(),
+                    text: q.question.clone(),
+                    grading: None,
+                    aspect: q.aspect.clone(),
+                });
+                generated.push(q);
+            }
+            Some(AppEvent::ReviewQuestionReady(Err(e))) => panic!("出题失败: {e}"),
+            other => panic!("非预期: {other:?}"),
+        }
+    }
+    println!("\n══ 数学分析出题完成: {} 题 ══", generated.len());
+}
+
 /// 简答题批改：用户答案 + 笔记原文 + key_points → LLM → score/missing。
 pub async fn grade_short_answer(
     provider: Arc<OpenAiClient>,
@@ -1281,6 +1465,28 @@ fn answer_to_index(s: &str) -> Option<i64> {
         return (c as u8).checked_sub(b'A').map(|i| i as i64);
     }
     t.parse::<i64>().ok()
+}
+
+/// 打乱选择题选项顺序（Fisher-Yates），并同步重算正确答案下标。
+/// 治 LLM 系统性把正确答案放第一个选项（A）的问题——隐藏原始顺序，避免用户
+/// 靠"答案常在 A"做题。仅选择题调用（简答题无选项）。
+fn shuffle_choice(options: &mut [String], answer_idx: &mut i64) {
+    if options.len() < 2 || *answer_idx < 0 || *answer_idx as usize >= options.len() {
+        return;
+    }
+    // 先记住正确答案的内容，打乱后再按内容重新定位下标
+    let correct = options[*answer_idx as usize].clone();
+    let mut rng = Prng::from_clock();
+    let n = options.len();
+    for i in (1..n).rev() {
+        let j = (rng.next() as usize) % (i + 1);
+        options.swap(i, j);
+    }
+    *answer_idx = options
+        .iter()
+        .position(|o| *o == correct)
+        .map(|i| i as i64)
+        .unwrap_or(*answer_idx);
 }
 
 /// 极简 xorshift64 PRNG（无外部依赖，随机范围抽概念够用）。
@@ -1455,6 +1661,154 @@ mod quiz_parse_tests {
         assert_eq!(answer_to_index("zz"), None);
         // 超出 A-D 的字母 → 越界下标（判分时按"答案非法跳过"兜底）
         assert_eq!(answer_to_index("E"), Some(4));
+    }
+
+    #[test]
+    fn shuffle_choice_moves_answer_correctly() {
+        // 正确答案内容不变，下标紧随后选项移动；且 shuffle 后原正确项内容仍存在
+        let mut opts = vec![
+            "正确项".to_string(),
+            "干扰1".into(),
+            "干扰2".into(),
+            "干扰3".into(),
+        ];
+        let mut idx = 0i64; // 正确项在 A（0）
+        shuffle_choice(&mut opts, &mut idx);
+        // 正确项内容仍在选项里
+        assert!(opts.contains(&"正确项".to_string()));
+        // 下标指向正确项（内容匹配）
+        assert_eq!(opts[idx as usize], "正确项");
+        // 4 个选项
+        assert_eq!(opts.len(), 4);
+    }
+
+    #[test]
+    fn shuffle_choice_preserves_unchanged_when_invalid() {
+        let mut opts = vec!["a".to_string(), "b".to_string()];
+        let mut idx = 5i64; // 越界下标 → 不 shuffle
+        shuffle_choice(&mut opts, &mut idx);
+        assert_eq!(opts, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(idx, 5);
+    }
+
+    #[test]
+    fn validate_question_flags_obvious_bad_choice() {
+        // 选项数不对 → 拦
+        let mut q = QuizQuestion {
+            q_type: "choice".into(),
+            question: "下列正确的是？".into(),
+            options: vec!["A".into(), "B".into(), "C".into()],
+            answer: Some("A".into()),
+            key_points: vec![],
+            explanation: None,
+            concept_id: None,
+            concept: None,
+            aspect: None,
+        };
+        assert!(
+            validate_question(&q, &QType::Choice).is_some(),
+            "选项数 ≠4 应拦截"
+        );
+        // 选项重复 → 拦
+        q.options = vec!["x".into(), "x".into(), "y".into(), "z".into()];
+        assert!(
+            validate_question(&q, &QType::Choice).is_some(),
+            "重复选项应拦截"
+        );
+        // 答案不在 0..4 → 拦
+        q.options = vec!["a".into(), "b".into(), "c".into(), "d".into()];
+        q.answer = Some("E".into());
+        assert!(
+            validate_question(&q, &QType::Choice).is_some(),
+            "答案越界应拦截"
+        );
+        // 题面过短 → 拦
+        q.answer = Some("A".into());
+        q.question = "短".into();
+        assert!(
+            validate_question(&q, &QType::Choice).is_some(),
+            "题面过短应拦截"
+        );
+        // 正常 4 选项单选 → 放行
+        let ok = QuizQuestion {
+            q_type: "choice".into(),
+            question: "以下哪个是 Rust 的字符串切片类型？".into(),
+            options: vec!["&str".into(), "String".into(), "Vec".into(), "Box".into()],
+            answer: Some("A".into()),
+            key_points: vec![],
+            explanation: None,
+            concept_id: None,
+            concept: None,
+            aspect: None,
+        };
+        assert!(
+            validate_question(&ok, &QType::Choice).is_none(),
+            "合法单选应放行"
+        );
+    }
+
+    #[test]
+    fn validate_question_flags_obvious_bad_short_answer() {
+        // 缺采分点 → 拦
+        let q = QuizQuestion {
+            q_type: "short_answer".into(),
+            question: "解释所有权这个核心概念。".into(),
+            options: vec![],
+            answer: None,
+            key_points: vec![],
+            explanation: None,
+            concept_id: None,
+            concept: None,
+            aspect: None,
+        };
+        assert!(
+            validate_question(&q, &QType::ShortAnswer).is_some(),
+            "缺采分点应拦截"
+        );
+        // 有采分点 → 放行
+        let ok = QuizQuestion {
+            q_type: "short_answer".into(),
+            question: "解释所有权这个核心概念。".into(),
+            options: vec![],
+            answer: None,
+            key_points: vec!["所有权是内存的所有者".into()],
+            explanation: None,
+            concept_id: None,
+            concept: None,
+            aspect: None,
+        };
+        assert!(
+            validate_question(&ok, &QType::ShortAnswer).is_none(),
+            "有采分点应放行"
+        );
+    }
+
+    #[test]
+    fn validate_flashcard_flags_obvious_bad() {
+        // 空 answer → 拦
+        assert!(validate_flashcard(&Flashcard {
+            question: "什么是所有权？".into(),
+            answer: "".into(),
+            concept: Some("所有权".into()),
+        }));
+        // question/answer 完全相同 → 拦
+        assert!(validate_flashcard(&Flashcard {
+            question: "所有权".into(),
+            answer: "所有权".into(),
+            concept: None,
+        }));
+        // question 过短 → 拦
+        assert!(validate_flashcard(&Flashcard {
+            question: "嗯".into(),
+            answer: "A".into(),
+            concept: None,
+        }));
+        // 正常卡 → 放行
+        assert!(!validate_flashcard(&Flashcard {
+            question: "什么是所有权？".into(),
+            answer: "内存的所有者".into(),
+            concept: Some("所有权".into()),
+        }));
     }
 
     #[test]

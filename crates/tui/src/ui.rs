@@ -807,7 +807,7 @@ fn draw_review_workspace(f: &mut Frame, area: Rect, app: &mut App) {
                 }
                 let mut spans = vec![
                     Span::styled(
-                        format!("  {mark}"),
+                        format!("  {}", if first { mark } else { "  " }),
                         Style::new().fg(if is_cursor { theme::USER } else { theme::MUTED }),
                     ),
                     Span::styled(
@@ -1039,14 +1039,15 @@ fn draw_chat(f: &mut Frame, area: Rect, app: &mut App) {
         // inflight 时追加 spinner 行
         if app.is_inflight() {
             let spinner = spinner_char(app.tick);
+            let secs = app.wait_secs();
             lines.push(Line::from(vec![
                 Span::styled(
                     format!("{spinner} "),
                     Style::new().fg(theme::STATUS_PROCESSING),
                 ),
-                Span::styled("思考中…", Style::new().fg(DIM)),
+                Span::styled(format!("思考中… · 已等 {secs}s"), Style::new().fg(DIM)),
             ]));
-            text_lines.push(format!("{spinner} 思考中…"));
+            text_lines.push(format!("{spinner} 思考中… · 已等 {secs}s"));
         }
         // 导入进行中：当前文件 · 阶段 · 已等 X 秒（动态刷新）
         if let Some(st) = &app.import_status {

@@ -34,10 +34,11 @@ impl App {
             return;
         }
         let store = Arc::clone(&self.store);
-        let (provider, provider_cfg) = self.role_client(agent_providers::ModelRole::Fast);
+        let (provider, provider_cfg) = self.role_client(agent_providers::ModelRole::Balanced);
         let tx = self.tx.clone();
         let cancel = CancellationToken::new();
         self.inflight = Some(cancel.clone());
+        self.set_wait();
         // 先建空暖场状态（卡片到达后填充）：覆盖层即时出现（"生成中…"），
         // scope/course/n 先记录，供 finish_warmup 传给正式 Review。
         self.warmup = Some(review::WarmupState {
@@ -71,6 +72,7 @@ impl App {
     /// Warm-up 卡片回流：填充暖场状态（覆盖层渲染第一张）。
     pub(crate) fn on_warmup_ready(&mut self, result: Result<Vec<review::Flashcard>, String>) {
         self.inflight = None;
+        self.clear_wait();
         self.request_cost_sync();
         match result {
             Ok(cards) => {
@@ -581,6 +583,7 @@ impl App {
         for t in self.review_gen.drain(..) {
             t.cancel();
         }
+        self.clear_wait();
         // 中途退出：若有进度，同样出部分摘要卡（finish_review_state 不依赖 self.review）
         if let Some(rs) = self.review.take()
             && !rs.results.is_empty()
@@ -600,6 +603,8 @@ impl App {
             Ok(rs) => {
                 let planned = rs.planned;
                 self.review = Some(rs);
+                // 复习期间（出题/批改/小结）统一计时：显示"已进行 X 秒"
+                self.set_wait();
                 self.scroll_up = 0; // 进 workspace 跟随底部
                 self.push_entry(Entry::Info(format!(
                     "· Review started · {planned} questions（逐题生成，答当前题时后台预取下一题）"
@@ -699,6 +704,7 @@ impl App {
         };
         let cancel = tokio_util::sync::CancellationToken::new();
         self.review_gen.push(cancel.clone());
+        self.set_wait();
         let store = Arc::clone(&self.store);
         let (provider, provider_cfg) = self.role_client(agent_providers::ModelRole::Balanced);
         let tx = self.tx.clone();

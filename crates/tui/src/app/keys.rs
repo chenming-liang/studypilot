@@ -1259,6 +1259,8 @@ impl App {
                 ));
                 true
             }
+            // 生成中（cards 空）：忽略跳过/评分键，等卡片到位（避免空卡 finish_warmup 竞态）
+            _ if w.cards.is_empty() => true,
             KeyCode::Char(' ') => {
                 if w.current < w.cards.len() {
                     w.revealed = true;
