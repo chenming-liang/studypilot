@@ -7,6 +7,8 @@ pub enum FilePhase {
     Parsing,
     /// LLM 概念抽取
     Extracting,
+    /// LLM 概念打磨（Refinement：去重/修命名/调粒度）
+    Refining,
     /// 入库
     Inserting,
 }
@@ -16,6 +18,7 @@ impl FilePhase {
         match self {
             Self::Parsing => "解析",
             Self::Extracting => "抽取概念",
+            Self::Refining => "打磨概念",
             Self::Inserting => "入库",
         }
     }

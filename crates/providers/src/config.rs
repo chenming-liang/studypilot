@@ -420,9 +420,9 @@ impl ModelRole {
         }
     }
     /// 该角色是否在请求中启用 thinking（由任务性质决定，不交给用户开关）。
-    /// - Fast：大量结构化低难度（导入/抽取/大纲/闪卡）→ 关，追求速度
-    /// - Balanced：默认学习（问答/出题/小结）→ 关（默认不思考，保证响应快）
-    /// - Reasoning：高难度推理（批改/错因/深层分析/跨材料综合）→ 开
+    /// - Fast：大量结构化低难度（导入/抽取/打磨/大纲/复习地图）→ 关，追求速度
+    /// - Balanced：默认学习（普通问答/闪卡/正式出题/复习追问/小结建议）→ 关，追求响应快
+    /// - Reasoning：高难度推理（简答批改/复杂诊断/复杂错误分析/跨概念综合）→ 开，保证质量
     pub fn thinking_enabled(self) -> bool {
         matches!(self, Self::Reasoning)
     }
@@ -619,7 +619,7 @@ model = "my-model"
 
     #[test]
     fn resolve_role_thinking_follows_role() {
-        // role 决定 thinking，而非模型元数据：reasoning 开、fast/balanced 关
+        // role 决定 thinking，而非模型元数据：fast/balanced 关、reasoning 开
         let cfg = SAMPLE.parse::<Config>().unwrap();
         let reasoning = cfg.resolve_model(ModelRole::Reasoning).unwrap();
         assert!(reasoning.thinking, "reasoning 角色应开启 thinking");

@@ -46,6 +46,7 @@ async fn main() -> anyhow::Result<()> {
         course_id,
         max_cost,
         &cancel,
+        None,
     )
     .await
     .map_err(|e| anyhow::anyhow!(e))?;

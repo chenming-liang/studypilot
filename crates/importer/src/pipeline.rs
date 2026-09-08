@@ -30,6 +30,7 @@ pub async fn import_directory(
     config: ImportConfig,
     tx: UnboundedSender<ImportEvent>,
     cancel: CancellationToken,
+    refine_provider: Option<(Arc<OpenAiClient>, ProviderConfig)>,
 ) {
     let files = collect_files(&config.dir);
     let total = files.len();
@@ -76,6 +77,7 @@ pub async fn import_directory(
             &config,
             &cancel,
             &tx,
+            refine_provider.as_ref().map(|(p, c)| (p.as_ref(), c)),
         )
         .await
         {
@@ -150,6 +152,7 @@ enum ProcessOutcome {
     SkippedWith(String),
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_one(
     store: &Arc<Store>,
     provider: &Arc<OpenAiClient>,
@@ -158,6 +161,7 @@ async fn process_one(
     config: &ImportConfig,
     cancel: &CancellationToken,
     tx: &UnboundedSender<ImportEvent>,
+    refine_provider: Option<(&OpenAiClient, &ProviderConfig)>,
 ) -> Result<ProcessOutcome, String> {
     // ① 解析格式（pdf/pptx 走 spawn_blocking）
     let path_owned = path.to_owned();
@@ -216,6 +220,38 @@ async fn process_one(
         return Err(
             "概念抽取失败（LLM 调用或解析出错，可能是余额不足）。笔记未入库，请检查后重试。".into(),
         );
+    }
+
+    // 概念打磨（Refinement）：Fast 抽取后，用 Reasoning 模型整理候选概念，提高质量。
+    // 打磨失败（None）→ 保留 Fast 的原始候选（不因打磨失败丢内容）。
+    let mut extracted = extracted;
+    if let Some((rprovider, rcfg)) = refine_provider {
+        let _ = tx.send(ImportEvent::FileProgress {
+            name: file_name.clone(),
+            phase: FilePhase::Refining,
+            segment: 0,
+            segment_total: 0,
+        });
+        if let Some(ext) = extracted.as_mut() {
+            let concepts = ext.concepts.clone();
+            if let Some(refined) = extract::refine_concepts(
+                rprovider,
+                rcfg,
+                store,
+                &mut import_cost,
+                config.max_cost,
+                &concepts,
+                ext.title.as_deref().unwrap_or(""),
+                cancel,
+            )
+            .await
+            {
+                // refine 结果为空（LLM 全删/异常）时不覆盖——保留 Fast 的原始候选，避免 0 概念入库
+                if !refined.is_empty() {
+                    ext.concepts = refined;
+                }
+            }
+        }
     }
 
     // ③ 入库（spawn_blocking，D2）
