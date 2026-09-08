@@ -2075,13 +2075,13 @@ fn draw_warmup(f: &mut Frame, app: &mut App) {
         items.push(ListItem::new(Line::default()));
         let card = &w.cards[w.current];
         // question：markdown 渲染（支持 ``` 代码块高亮，问题 15），折行由 markdown 管线处理
-        for l in crate::markdown::render_markdown(&card.question, (width - 4).max(10) as usize) {
+        for l in crate::markdown::render_markdown(&card.question, (width - 2).max(10) as usize) {
             items.push(ListItem::new(l));
         }
         items.push(ListItem::new(Line::default()));
         if w.revealed {
             // answer：markdown 渲染（支持 ``` 代码块高亮，问题 15）
-            for l in crate::markdown::render_markdown(&card.answer, (width - 4).max(10) as usize) {
+            for l in crate::markdown::render_markdown(&card.answer, (width - 2).max(10) as usize) {
                 items.push(ListItem::new(l));
             }
             if let Some(c) = &card.concept {
@@ -2114,7 +2114,7 @@ fn draw_warmup(f: &mut Frame, app: &mut App) {
         List::new(items).block(
             Block::new().borders(Borders::ALL).title_bottom(
                 Span::styled(
-                    " Space reveal · 1/2/3 rate · Enter next · s skip · Esc exit ",
+                    " 1/2/3 rate · Enter next · s skip · Esc exit ",
                     Style::new().fg(DIM),
                 )
                 .into_centered_line(),

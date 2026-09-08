@@ -1293,16 +1293,14 @@ impl App {
             }
             KeyCode::Enter | KeyCode::Right => {
                 let advance = w.current + 1 < w.cards.len();
-                let done = !advance && w.all_rated();
                 if advance {
                     w.current += 1;
                     w.revealed = false;
                     true
-                } else if done {
+                } else {
+                    // 最后一张卡：Enter 直接进入正式复习（已评的卡作 focus，未评的不计）
                     self.finish_warmup();
                     true
-                } else {
-                    false
                 }
             }
             _ => false,
