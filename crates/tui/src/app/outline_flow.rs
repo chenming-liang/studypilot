@@ -119,12 +119,13 @@ impl App {
         }
 
         let store = Arc::clone(&self.store);
-        let (provider, provider_cfg) = self.role_client(agent_providers::ModelRole::Fast);
+        let (provider, provider_cfg) = self.role_client(agent_providers::ModelRole::Balanced);
         let tx = self.tx.clone();
         let course_name = name.clone();
         // 生成期间挂 inflight：header 显示进行中，Ctrl+C 可中断
         let cancel = CancellationToken::new();
         self.inflight = Some(cancel.clone());
+        self.set_wait();
         if force_regen {
             self.push_entry(Entry::Info("强制重新组织章节…".into()));
         }
@@ -192,10 +193,11 @@ impl App {
         };
 
         let store = Arc::clone(&self.store);
-        let (provider, provider_cfg) = self.role_client(agent_providers::ModelRole::Fast);
+        let (provider, provider_cfg) = self.role_client(agent_providers::ModelRole::Balanced);
         let tx = self.tx.clone();
         let cancel = CancellationToken::new();
         self.inflight = Some(cancel.clone());
+        self.set_wait();
 
         tokio::spawn(async move {
             let result = ensure_review_map(
@@ -215,6 +217,7 @@ impl App {
     }
 
     pub(crate) fn on_outline_ready(&mut self, result: Result<OutlinePayload, String>) {
+        self.clear_wait();
         self.inflight = None;
         self.request_cost_sync();
         match result {
