@@ -169,9 +169,9 @@ impl App {
         let cancel = CancellationToken::new();
         self.inflight = Some(cancel.clone());
         let store = Arc::clone(&self.store);
-        let (provider, provider_cfg) = self.role_client(agent_providers::ModelRole::Fast);
+        let (provider, provider_cfg) = self.role_client(agent_providers::ModelRole::Reasoning);
         // 概念打磨：用 Reasoning 模型整理 Fast 抽取的候选概念
-        let refine_provider = self.role_client(agent_providers::ModelRole::Fast);
+        let refine_provider = self.role_client(agent_providers::ModelRole::Reasoning);
         let max_cost = self.max_cost;
         let tx = self.tx.clone();
         // Agent Trace：START（完成行由 ConceptsRefreshed 汇总回投）
