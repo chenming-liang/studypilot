@@ -1441,8 +1441,9 @@ fn draw_input(f: &mut Frame, area: Rect, app: &App) {
     }
     f.render_widget(Paragraph::new(lines), area);
 
-    // 光标定位到折行后的正确可视行/列（首行带前缀，占 prefix_w 列）
-    if show_input {
+    // 光标定位到折行后的正确可视行/列（首行带前缀，占 prefix_w 列）。
+    // 思考/生成等待中（inflight 或追问生成中）不置光标 → 隐藏，避免光标在输入区一直闪烁。
+    if show_input && !app.is_inflight() && app.followup_pending.is_none() {
         let x = area.x + if cursor_line == 0 { prefix_w as u16 } else { 0 } + cursor_col as u16;
         let y = area.y + 1 + cursor_line as u16;
         if x < area.right() && y < area.bottom() {
@@ -2681,11 +2682,9 @@ fn draw_model_picker(
 
     let n_visible = picker.filtered.len();
     let title: String = if let Some(role) = &picker.role {
-        format!(" 角色 `{role}` 用哪个模型？(输入过滤 · Enter 绑定 · Esc 返回) ")
+        format!(" 角色 `{role}` 用哪个模型？(Enter 绑定 · Esc 返回) ")
     } else {
-        format!(
-            " AI Models (输入过滤 · ↑↓ 移动 · Enter 切换 / 配置角色 · Esc 取消)  {n_visible} 项 "
-        )
+        format!(" AI Models (↑↓ 移动 · Enter 选择 · Esc 取消)  {n_visible} 项 ")
     };
     let mut state = ratatui::widgets::ListState::default().with_selected(Some(picker.selected));
     f.render_stateful_widget(
